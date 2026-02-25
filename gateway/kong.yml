@@ -1,0 +1,207 @@
+# =============================================================================
+# WanderPlan AI - Kong API Gateway Configuration
+# Declarative configuration for Kong DB-less mode
+# =============================================================================
+
+_format_version: "3.0"
+
+# ---------------------------------------------------------------------------
+# Services: Each agent microservice gets a Kong service entry
+# ---------------------------------------------------------------------------
+
+services:
+
+  # --- Orchestrator (main entry point) ---
+  - name: orchestrator
+    url: http://orchestrator:8000
+    routes:
+      - name: orchestrator-api
+        paths:
+          - /api/trips
+          - /api/trips/
+        strip_path: false
+        methods: [GET, POST, PUT, DELETE, OPTIONS]
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 60
+          policy: redis
+          redis_host: redis
+          redis_port: 6379
+      - name: jwt
+        config:
+          claims_to_verify: [exp]
+      - name: cors
+        config:
+          origins: ["*"]
+          methods: [GET, POST, PUT, DELETE, OPTIONS]
+          headers: [Authorization, Content-Type]
+          max_age: 3600
+
+  # --- WebSocket endpoint (separate for upgrade handling) ---
+  - name: orchestrator-ws
+    url: http://orchestrator:8000
+    routes:
+      - name: orchestrator-ws-route
+        paths:
+          - /ws/trips
+        protocols: [http, https]
+        strip_path: false
+
+  # --- Individual agent health/info endpoints (internal) ---
+  - name: bucket-list-agent
+    url: http://bucket-list:8001
+    routes:
+      - name: bucket-list-route
+        paths: [/internal/agents/bucket-list]
+        strip_path: true
+
+  - name: timing-agent
+    url: http://timing:8002
+    routes:
+      - name: timing-route
+        paths: [/internal/agents/timing]
+        strip_path: true
+
+  - name: interest-profiler-agent
+    url: http://interest-profiler:8003
+    routes:
+      - name: interest-profiler-route
+        paths: [/internal/agents/interest-profiler]
+        strip_path: true
+
+  - name: health-accessibility-agent
+    url: http://health-accessibility:8004
+    routes:
+      - name: health-accessibility-route
+        paths: [/internal/agents/health-accessibility]
+        strip_path: true
+
+  - name: poi-discovery-agent
+    url: http://poi-discovery:8005
+    routes:
+      - name: poi-discovery-route
+        paths: [/internal/agents/poi-discovery]
+        strip_path: true
+
+  - name: duration-optimizer-agent
+    url: http://duration-optimizer:8006
+    routes:
+      - name: duration-optimizer-route
+        paths: [/internal/agents/duration-optimizer]
+        strip_path: true
+
+  - name: availability-agent
+    url: http://availability:8007
+    routes:
+      - name: availability-route
+        paths: [/internal/agents/availability]
+        strip_path: true
+
+  - name: budget-agent
+    url: http://budget:8008
+    routes:
+      - name: budget-route
+        paths: [/internal/agents/budget]
+        strip_path: true
+
+  - name: flight-agent
+    url: http://flight:8009
+    routes:
+      - name: flight-route
+        paths: [/internal/agents/flight]
+        strip_path: true
+
+  - name: accommodation-agent
+    url: http://accommodation:8010
+    routes:
+      - name: accommodation-route
+        paths: [/internal/agents/accommodation]
+        strip_path: true
+
+  - name: dining-agent
+    url: http://dining:8011
+    routes:
+      - name: dining-route
+        paths: [/internal/agents/dining]
+        strip_path: true
+
+  - name: itinerary-agent
+    url: http://itinerary:8012
+    routes:
+      - name: itinerary-route
+        paths: [/internal/agents/itinerary]
+        strip_path: true
+
+  - name: calendar-agent
+    url: http://calendar:8013
+    routes:
+      - name: calendar-route
+        paths: [/internal/agents/calendar]
+        strip_path: true
+
+  - name: group-coordinator-agent
+    url: http://group-coordinator:8014
+    routes:
+      - name: group-coordinator-route
+        paths: [/internal/agents/group-coordinator]
+        strip_path: true
+
+# ---------------------------------------------------------------------------
+# Global plugins
+# ---------------------------------------------------------------------------
+
+plugins:
+  # Request/response logging
+  - name: file-log
+    config:
+      path: /tmp/kong-access.log
+      reopen: true
+
+  # Request size limiting
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 10  # MB
+
+  # IP restriction for internal agent endpoints
+  - name: ip-restriction
+    service: bucket-list-agent
+    config:
+      allow:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+
+# ---------------------------------------------------------------------------
+# Consumers (JWT auth)
+# ---------------------------------------------------------------------------
+
+consumers:
+  - username: wanderplan-frontend
+    jwt_secrets:
+      - key: wanderplan-frontend-key
+        algorithm: HS256
+
+  - username: wanderplan-mobile
+    jwt_secrets:
+      - key: wanderplan-mobile-key
+        algorithm: HS256
+
+# ---------------------------------------------------------------------------
+# Upstreams (load balancing for agent scaling)
+# ---------------------------------------------------------------------------
+
+upstreams:
+  - name: orchestrator-upstream
+    targets:
+      - target: orchestrator:8000
+        weight: 100
+    healthchecks:
+      active:
+        http_path: /health
+        healthy:
+          interval: 10
+          successes: 3
+        unhealthy:
+          interval: 5
+          http_failures: 3

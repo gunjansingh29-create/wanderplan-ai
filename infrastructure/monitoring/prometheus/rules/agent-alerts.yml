@@ -1,0 +1,233 @@
+# =============================================================================
+# Prometheus Alert Rules — Agent SLA & Infrastructure Monitoring
+# Replaces AWS CloudWatch Alarms + PagerDuty integration
+# =============================================================================
+
+groups:
+
+  # =========================================================================
+  # AGENT HEALTH & PERFORMANCE SLAs
+  # =========================================================================
+  - name: agent_sla_alerts
+    interval: 15s
+    rules:
+
+      # --- Agent Down (any of the 15 agents unreachable) ---
+      - alert: AgentDown
+        expr: up{job=~"orchestrator|specialist-agents"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Agent {{ $labels.instance }} is DOWN"
+          description: "Agent {{ $labels.instance }} has been unreachable for >1 minute."
+          runbook: "https://wiki.wanderplan.local/runbooks/agent-down"
+
+      # --- Orchestrator Down (highest priority) ---
+      - alert: OrchestratorDown
+        expr: up{job="orchestrator"} == 0
+        for: 30s
+        labels:
+          severity: page
+          team: platform
+        annotations:
+          summary: "CRITICAL: Orchestrator agent is DOWN"
+          description: "The orchestrator is unreachable. All trip planning is halted."
+
+      # --- High Agent Latency (p95 > 5s) ---
+      - alert: AgentHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=~"orchestrator|specialist-agents"}[5m])) > 5
+        for: 3m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Agent {{ $labels.instance }} p95 latency >5s"
+          description: "p95 response time is {{ $value | humanizeDuration }}."
+
+      # --- Agent Error Rate > 5% ---
+      - alert: AgentHighErrorRate
+        expr: |
+          (
+            rate(http_requests_total{status=~"5..",job=~"orchestrator|specialist-agents"}[5m])
+            /
+            rate(http_requests_total{job=~"orchestrator|specialist-agents"}[5m])
+          ) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Agent {{ $labels.instance }} error rate >5%"
+          description: "{{ $value | humanizePercentage }} of requests are failing."
+
+      # --- Agent Error Rate > 20% (critical) ---
+      - alert: AgentCriticalErrorRate
+        expr: |
+          (
+            rate(http_requests_total{status=~"5..",job=~"orchestrator|specialist-agents"}[5m])
+            /
+            rate(http_requests_total{job=~"orchestrator|specialist-agents"}[5m])
+          ) > 0.20
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "CRITICAL: Agent {{ $labels.instance }} error rate >20%"
+          description: "{{ $value | humanizePercentage }} of requests are failing."
+
+      # --- LLM API Timeout Rate ---
+      - alert: LLMAPITimeouts
+        expr: rate(llm_request_timeouts_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: ml
+        annotations:
+          summary: "LLM API timeout rate elevated"
+          description: "{{ $value }} timeouts/sec for LLM calls. Check Anthropic API status."
+
+  # =========================================================================
+  # KAFKA / EVENT BUS ALERTS (replaces MSK CloudWatch alarms)
+  # =========================================================================
+  - name: kafka_alerts
+    interval: 30s
+    rules:
+
+      - alert: KafkaBrokerDown
+        expr: up{job="kafka"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Kafka broker {{ $labels.instance }} is DOWN"
+
+      - alert: KafkaConsumerLag
+        expr: kafka_consumer_group_lag > 1000
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Kafka consumer lag >1000 for group {{ $labels.group }}"
+          description: "Topic {{ $labels.topic }} partition {{ $labels.partition }} lag: {{ $value }}"
+
+      - alert: KafkaDeadLetterQueueGrowing
+        expr: rate(kafka_topic_messages_total{topic="wanderplan.dlq"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Dead letter queue receiving messages"
+          description: "{{ $value }} msg/sec landing in DLQ. Check agent processing errors."
+
+  # =========================================================================
+  # DATABASE ALERTS (replaces RDS/ElastiCache CloudWatch alarms)
+  # =========================================================================
+  - name: database_alerts
+    interval: 30s
+    rules:
+
+      - alert: PostgresPrimaryDown
+        expr: pg_up{instance=~".*primary.*"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: data
+        annotations:
+          summary: "PostgreSQL primary is DOWN"
+
+      - alert: PostgresReplicationLag
+        expr: pg_replication_lag_seconds > 30
+        for: 2m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "PostgreSQL replication lag >30s"
+          description: "Replica is {{ $value }}s behind primary. RPO risk."
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "Redis memory usage >85%"
+          description: "Redis is using {{ $value | humanizePercentage }} of max memory."
+
+      - alert: RedisSentinelMasterSwitch
+        expr: changes(redis_sentinel_master_address[5m]) > 0
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "Redis Sentinel triggered master failover"
+
+      - alert: MongoReplicaSetUnhealthy
+        expr: mongodb_replset_member_health == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: data
+        annotations:
+          summary: "MongoDB replica set member unhealthy"
+
+  # =========================================================================
+  # HOST / INFRASTRUCTURE (replaces CloudWatch EC2 alarms)
+  # =========================================================================
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: infra
+        annotations:
+          summary: "Host CPU >85%"
+          description: "CPU usage is {{ $value }}%."
+
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.90
+        for: 5m
+        labels:
+          severity: critical
+          team: infra
+        annotations:
+          summary: "Host memory >90%"
+          description: "Memory usage is {{ $value | humanizePercentage }}."
+
+      - alert: DiskSpaceLow
+        expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team: infra
+        annotations:
+          summary: "Disk usage >85% on {{ $labels.mountpoint }}"
+
+      - alert: ContainerOOMKilled
+        expr: increase(container_oom_events_total[5m]) > 0
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Container {{ $labels.name }} was OOM-killed"
+          description: "Increase memory limits in docker-compose.prod.yml"
+
+      - alert: ContainerCPUThrottled
+        expr: rate(container_cpu_cfs_throttled_seconds_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Container {{ $labels.name }} is CPU-throttled"

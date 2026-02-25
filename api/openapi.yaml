@@ -1,0 +1,2784 @@
+openapi: 3.0.3
+info:
+  title: WanderPlan AI — Travel Planning Platform API
+  description: |
+    Multi-agent intelligent travel planning platform.
+    15 specialized AI agents coordinated by a central Orchestrator produce
+    complete, calendar-ready trip plans through a conversational workflow.
+
+    ## Authentication
+    All endpoints (except `/auth/register` and `/auth/login`) require a valid
+    JWT Bearer token in the `Authorization` header.
+
+    ## Rate Limits
+    | Tier        | Requests/min | Burst | Concurrent WebSockets |
+    |-------------|-------------|-------|----------------------|
+    | Free        | 30          | 10    | 1                    |
+    | Pro         | 120         | 40    | 5                    |
+    | Enterprise  | 600         | 200   | 50                   |
+
+    Rate-limit headers are included on every response:
+    `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
+
+    ## Pagination
+    List endpoints return paginated results via `page` and `limit` query
+    parameters.  Responses include a `pagination` object with `total`,
+    `page`, `limit`, `totalPages`, `hasNext`, and `hasPrev`.
+
+    ## Agent Domains
+    Endpoints are grouped by the specialist agent that processes them.
+    The Orchestrator routes requests internally — clients always hit
+    the unified API gateway.
+  version: 1.0.0
+  contact:
+    name: WanderPlan AI Engineering
+    email: api@wanderplan.ai
+  license:
+    name: MIT
+
+servers:
+  - url: https://api.wanderplan.ai/v1
+    description: Production
+  - url: https://staging-api.wanderplan.ai/v1
+    description: Staging
+  - url: http://localhost:8000/v1
+    description: Local development
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+security:
+  - BearerAuth: []
+
+# ============================================================================
+# TAGS — one per agent domain
+# ============================================================================
+tags:
+  - name: Auth
+    description: Registration, login, social OAuth, token refresh, MFA
+  - name: Trips
+    description: Trip CRUD and member management
+  - name: Bucket List
+    description: "Agent 1 — Dream destinations and wish-list curation"
+  - name: Timing
+    description: "Agent 2 — Optimal travel window analysis"
+  - name: Interests
+    description: "Agent 3 — Traveller interest profiling"
+  - name: Health
+    description: "Agent 4 — Health, dietary, and accessibility requirements"
+  - name: POIs
+    description: "Agent 5 — Points of Interest discovery and ranking"
+  - name: Availability
+    description: "Agent 7 — Schedule coordination and date overlap"
+  - name: Budget
+    description: "Agent 8 — Budget planning, allocation, and tracking"
+  - name: Flights
+    description: "Agent 9 — Flight search and selection"
+  - name: Stays
+    description: "Agent 10 — Accommodation search and selection"
+  - name: Dining
+    description: "Agent 11 — Restaurant recommendations"
+  - name: Itinerary
+    description: "Agent 12 — Day-by-day itinerary and calendar sync"
+  - name: Storyboard
+    description: "Trip storyboard generation and retrieval"
+  - name: Analytics
+    description: "Client-side event tracking"
+
+# ============================================================================
+# PATHS
+# ============================================================================
+paths:
+
+  # ==========================================================================
+  #  AUTH
+  # ==========================================================================
+  /auth/register:
+    post:
+      operationId: registerUser
+      tags: [Auth]
+      summary: Register a new user account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/login:
+    post:
+      operationId: loginUser
+      tags: [Auth]
+      summary: Authenticate with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/social/{provider}:
+    post:
+      operationId: socialLogin
+      tags: [Auth]
+      summary: Authenticate via social OAuth provider
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, apple, facebook, github]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SocialAuthRequest"
+      responses:
+        "200":
+          description: Social login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/refresh:
+    post:
+      operationId: refreshToken
+      tags: [Auth]
+      summary: Refresh an expired access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/mfa/verify:
+    post:
+      operationId: verifyMfa
+      tags: [Auth]
+      summary: Verify multi-factor authentication code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaVerifyRequest"
+      responses:
+        "200":
+          description: MFA verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  TRIPS
+  # ==========================================================================
+  /trips:
+    post:
+      operationId: createTrip
+      tags: [Trips]
+      summary: Create a new trip planning session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTripRequest"
+      responses:
+        "201":
+          description: Trip created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getTrip
+      tags: [Trips]
+      summary: Get full trip details and current planning state
+      responses:
+        "200":
+          description: Trip details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: updateTrip
+      tags: [Trips]
+      summary: Update trip metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTripRequest"
+      responses:
+        "200":
+          description: Trip updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/members:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: inviteMember
+      tags: [Trips]
+      summary: Invite a member to the trip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteMemberRequest"
+      responses:
+        "201":
+          description: Invitation sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripMemberResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/members/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+      - $ref: "#/components/parameters/UserId"
+    delete:
+      operationId: removeMember
+      tags: [Trips]
+      summary: Remove a member from the trip
+      responses:
+        "204":
+          description: Member removed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  BUCKET LIST  (Agent 1)
+  # ==========================================================================
+  /trips/{tripId}/bucket-list:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: addBucketListItem
+      tags: [Bucket List]
+      summary: Add a destination or experience to the bucket list
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BucketListItemRequest"
+      responses:
+        "201":
+          description: Item added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BucketListItemResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/bucket-list/{itemId}/vote:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+      - $ref: "#/components/parameters/ItemId"
+    put:
+      operationId: voteBucketListItem
+      tags: [Bucket List]
+      summary: Vote on a bucket-list item (upvote/downvote)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VoteRequest"
+      responses:
+        "200":
+          description: Vote recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BucketListItemResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/bucket-list/ranked:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getRankedBucketList
+      tags: [Bucket List]
+      summary: Get bucket-list items ranked by group votes
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Ranked bucket list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BucketListRankedResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  TIMING  (Agent 2)
+  # ==========================================================================
+  /trips/{tripId}/timing-analysis:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getTimingAnalysis
+      tags: [Timing]
+      summary: Get AI-generated best travel months per destination
+      responses:
+        "200":
+          description: Timing analysis results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimingAnalysisResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  INTERESTS  (Agent 3)
+  # ==========================================================================
+  /trips/{tripId}/members/{userId}/interests:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+      - $ref: "#/components/parameters/UserId"
+    post:
+      operationId: submitInterests
+      tags: [Interests]
+      summary: Submit interest profile for a trip member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InterestProfileRequest"
+      responses:
+        "201":
+          description: Interest profile saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InterestProfileResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/group-interests:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getGroupInterests
+      tags: [Interests]
+      summary: Get merged interest profile for the entire group
+      responses:
+        "200":
+          description: Merged group interests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupInterestsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  HEALTH  (Agent 4)
+  # ==========================================================================
+  /trips/{tripId}/health-requirements:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getHealthRequirements
+      tags: [Health]
+      summary: Get health and vaccination requirements for trip destinations
+      responses:
+        "200":
+          description: Health requirements
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthRequirementsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/members/{userId}/health-acknowledgment:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+      - $ref: "#/components/parameters/UserId"
+    post:
+      operationId: acknowledgeHealthRequirements
+      tags: [Health]
+      summary: Acknowledge health requirements and submit personal health flags
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HealthAcknowledgmentRequest"
+      responses:
+        "200":
+          description: Health acknowledgment saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthAcknowledgmentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  POIs  (Agent 5)
+  # ==========================================================================
+  /trips/{tripId}/pois:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: searchPois
+      tags: [POIs]
+      summary: Search for Points of Interest filtered by hobby and destination
+      parameters:
+        - name: hobby
+          in: query
+          schema:
+            type: string
+          description: "Filter by interest category (e.g., culture, adventure, food)"
+          example: culture
+        - name: destination
+          in: query
+          schema:
+            type: string
+          description: "Filter by destination city or country"
+          example: Tokyo
+        - name: minRating
+          in: query
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 5
+          description: Minimum rating filter
+        - name: maxCost
+          in: query
+          schema:
+            type: number
+            format: float
+          description: Maximum cost estimate (USD)
+        - name: accessible
+          in: query
+          schema:
+            type: boolean
+          description: Filter for wheelchair-accessible POIs only
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: POI search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PoiSearchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/pois/{poiId}/approve:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+      - $ref: "#/components/parameters/PoiId"
+    post:
+      operationId: approvePoi
+      tags: [POIs]
+      summary: Approve a POI for inclusion in the itinerary
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PoiApprovalRequest"
+      responses:
+        "200":
+          description: POI approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PoiResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  AVAILABILITY  (Agent 7)
+  # ==========================================================================
+  /trips/{tripId}/availability:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: submitAvailability
+      tags: [Availability]
+      summary: Submit available date ranges for a trip member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityRequest"
+      responses:
+        "201":
+          description: Availability submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/availability/overlap:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getAvailabilityOverlap
+      tags: [Availability]
+      summary: Get overlapping availability windows across all members
+      responses:
+        "200":
+          description: Overlap results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityOverlapResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  BUDGET  (Agent 8)
+  # ==========================================================================
+  /trips/{tripId}/budget:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: setBudget
+      tags: [Budget]
+      summary: Set the trip budget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetRequest"
+      responses:
+        "201":
+          description: Budget set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/budget/breakdown:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getBudgetBreakdown
+      tags: [Budget]
+      summary: Get AI-recommended budget breakdown by category
+      responses:
+        "200":
+          description: Budget breakdown
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetBreakdownResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/budget/increase:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    put:
+      operationId: increaseBudget
+      tags: [Budget]
+      summary: Increase the trip budget and recalculate allocations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetIncreaseRequest"
+      responses:
+        "200":
+          description: Budget increased
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  FLIGHTS  (Agent 9)
+  # ==========================================================================
+  /trips/{tripId}/flights/search:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: searchFlights
+      tags: [Flights]
+      summary: Search for flights matching trip dates and budget
+      parameters:
+        - name: departureAirport
+          in: query
+          schema:
+            type: string
+          example: JFK
+        - name: maxStops
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 3
+        - name: preferredAirline
+          in: query
+          schema:
+            type: string
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+            enum: [price, duration, departure_time, stops]
+            default: price
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Flight search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlightSearchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/flights/select:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: selectFlight
+      tags: [Flights]
+      summary: Select a flight for the trip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FlightSelectRequest"
+      responses:
+        "200":
+          description: Flight selected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlightOptionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  STAYS  (Agent 10)
+  # ==========================================================================
+  /trips/{tripId}/stays/search:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: searchStays
+      tags: [Stays]
+      summary: Search for accommodation options
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [hotel, hostel, airbnb, resort, any]
+            default: any
+        - name: minRating
+          in: query
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 5
+        - name: amenities
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: false
+          description: "Comma-separated: wifi,pool,breakfast,parking,kitchen"
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+            enum: [price, rating, distance]
+            default: price
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Stay search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaySearchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/stays/select:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: selectStay
+      tags: [Stays]
+      summary: Select accommodation for the trip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StaySelectRequest"
+      responses:
+        "200":
+          description: Stay selected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StayOptionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  DINING  (Agent 11)
+  # ==========================================================================
+  /trips/{tripId}/dining/suggestions:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getDiningSuggestions
+      tags: [Dining]
+      summary: Get restaurant suggestions for a specific day
+      parameters:
+        - name: day
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          description: Day number in the itinerary
+        - name: meal
+          in: query
+          schema:
+            type: string
+            enum: [breakfast, lunch, dinner, any]
+            default: any
+        - name: cuisine
+          in: query
+          schema:
+            type: string
+          description: "Preferred cuisine (e.g., japanese, italian, local)"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Dining suggestions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiningSuggestionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  ITINERARY  (Agent 12)
+  # ==========================================================================
+  /trips/{tripId}/itinerary:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    get:
+      operationId: getItinerary
+      tags: [Itinerary]
+      summary: Get the full day-by-day itinerary
+      parameters:
+        - name: day
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+          description: Filter to a specific day number
+      responses:
+        "200":
+          description: Full itinerary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItineraryResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/itinerary/approve:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: approveItinerary
+      tags: [Itinerary]
+      summary: Approve the itinerary for finalization
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItineraryApprovalRequest"
+      responses:
+        "200":
+          description: Itinerary approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItineraryApprovalResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/itinerary/calendar-sync:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: syncCalendar
+      tags: [Itinerary]
+      summary: Export itinerary to a calendar provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CalendarSyncRequest"
+      responses:
+        "200":
+          description: Calendar sync initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CalendarSyncResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  STORYBOARD
+  # ==========================================================================
+  /trips/{tripId}/storyboard/generate:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+    post:
+      operationId: generateStoryboard
+      tags: [Storyboard]
+      summary: Generate an AI-powered trip storyboard with highlights
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoryboardGenerateRequest"
+      responses:
+        "202":
+          description: Storyboard generation started (async)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardJobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /trips/{tripId}/storyboard/{memberId}:
+    parameters:
+      - $ref: "#/components/parameters/TripId"
+      - name: memberId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getMemberStoryboard
+      tags: [Storyboard]
+      summary: Get the personalized storyboard for a specific member
+      responses:
+        "200":
+          description: Member storyboard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoryboardResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ==========================================================================
+  #  ANALYTICS
+  # ==========================================================================
+  /analytics/event:
+    post:
+      operationId: trackEvent
+      tags: [Analytics]
+      summary: Track a client-side analytics event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyticsEventRequest"
+      responses:
+        "202":
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsEventResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+# ============================================================================
+# COMPONENTS
+# ============================================================================
+components:
+
+  # --------------------------------------------------------------------------
+  # Security Schemes
+  # --------------------------------------------------------------------------
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "JWT access token obtained from /auth/login or /auth/refresh"
+
+  # --------------------------------------------------------------------------
+  # Reusable Parameters
+  # --------------------------------------------------------------------------
+  parameters:
+    TripId:
+      name: tripId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique trip identifier
+
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique user identifier
+
+    ItemId:
+      name: itemId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Bucket-list item identifier
+
+    PoiId:
+      name: poiId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Point of Interest identifier
+
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      description: Page number for pagination
+
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      description: Items per page
+
+  # --------------------------------------------------------------------------
+  # Reusable Responses (Error Envelopes)
+  # --------------------------------------------------------------------------
+  responses:
+    BadRequest:
+      description: Bad request — malformed syntax
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: BAD_REQUEST
+              message: "Malformed request body"
+              status: 400
+
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: "Invalid or expired JWT token"
+              status: 401
+
+    Forbidden:
+      description: Insufficient permissions for this resource
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: FORBIDDEN
+              message: "You do not have permission to access this trip"
+              status: 403
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: NOT_FOUND
+              message: "Trip not found"
+              status: 404
+
+    Conflict:
+      description: Resource conflict (duplicate, already exists)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: CONFLICT
+              message: "User is already a member of this trip"
+              status: 409
+
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationErrorResponse"
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: "Request validation failed"
+              status: 422
+              details:
+                - field: email
+                  message: "Must be a valid email address"
+                - field: password
+                  message: "Must be at least 8 characters"
+
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until the rate limit resets
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+            format: unix-timestamp
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: RATE_LIMITED
+              message: "Rate limit exceeded. Retry after 42 seconds."
+              status: 429
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: INTERNAL_ERROR
+              message: "An unexpected error occurred"
+              status: 500
+              requestId: "req_abc123"
+
+  # --------------------------------------------------------------------------
+  # Schemas
+  # --------------------------------------------------------------------------
+  schemas:
+
+    # ── Shared / Primitives ──────────────────────────────────────────────
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, status]
+          properties:
+            code:
+              type: string
+              enum:
+                - BAD_REQUEST
+                - UNAUTHORIZED
+                - FORBIDDEN
+                - NOT_FOUND
+                - CONFLICT
+                - VALIDATION_ERROR
+                - RATE_LIMITED
+                - INTERNAL_ERROR
+            message:
+              type: string
+            status:
+              type: integer
+            requestId:
+              type: string
+              description: Correlation ID for debugging
+
+    ValidationErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - type: object
+          properties:
+            error:
+              type: object
+              properties:
+                details:
+                  type: array
+                  items:
+                    type: object
+                    required: [field, message]
+                    properties:
+                      field:
+                        type: string
+                      message:
+                        type: string
+                      value: {}
+
+    Pagination:
+      type: object
+      required: [total, page, limit, totalPages, hasNext, hasPrev]
+      properties:
+        total:
+          type: integer
+          description: Total number of items
+          example: 142
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        totalPages:
+          type: integer
+          example: 8
+        hasNext:
+          type: boolean
+          example: true
+        hasPrev:
+          type: boolean
+          example: false
+
+    GeoLocation:
+      type: object
+      required: [lat, lng]
+      properties:
+        lat:
+          type: number
+          format: double
+          example: 35.6762
+        lng:
+          type: number
+          format: double
+          example: 139.6503
+
+    DateRange:
+      type: object
+      required: [start, end]
+      properties:
+        start:
+          type: string
+          format: date
+          example: "2025-04-01"
+        end:
+          type: string
+          format: date
+          example: "2025-04-15"
+
+    # ── Auth ─────────────────────────────────────────────────────────────
+
+    RegisterRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Alice Chen
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    SocialAuthRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: OAuth access token or ID token from the provider
+        redirectUri:
+          type: string
+          format: uri
+
+    RefreshTokenRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+
+    MfaVerifyRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: "^[0-9]{6}$"
+          description: 6-digit TOTP code
+          example: "482910"
+        mfaToken:
+          type: string
+          description: Temporary MFA session token from login
+
+    AuthResponse:
+      type: object
+      required: [accessToken, refreshToken, expiresIn, user]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+          description: Token lifetime in seconds
+          example: 86400
+        tokenType:
+          type: string
+          default: Bearer
+        mfaRequired:
+          type: boolean
+          default: false
+          description: If true, call /auth/mfa/verify before accessing resources
+        mfaToken:
+          type: string
+          description: Present only when mfaRequired is true
+        user:
+          $ref: "#/components/schemas/UserSummary"
+
+    UserSummary:
+      type: object
+      required: [id, name, email]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Alice Chen
+        email:
+          type: string
+          format: email
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+        tier:
+          type: string
+          enum: [free, pro, enterprise]
+          default: free
+
+    # ── Trips ────────────────────────────────────────────────────────────
+
+    CreateTripRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: "Spring Japan Adventure"
+        description:
+          type: string
+          maxLength: 2000
+
+    UpdateTripRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+
+    InviteMemberRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [member, editor, viewer]
+          default: member
+
+    TripMemberResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [owner, member, editor, viewer]
+        joinedAt:
+          type: string
+          format: date-time
+        inviteStatus:
+          type: string
+          enum: [pending, accepted, declined]
+
+    TripResponse:
+      type: object
+      required: [id, name, ownerId, currentStage, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        ownerId:
+          type: string
+          format: uuid
+        currentStage:
+          type: string
+          enum:
+            - bucket_list
+            - timing
+            - interests
+            - health
+            - pois
+            - duration
+            - availability
+            - budget
+            - flights
+            - stays
+            - dining
+            - itinerary
+            - calendar
+            - completed
+        progressPercent:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+          example: 38.5
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/TripMemberResponse"
+        bucketListCount:
+          type: integer
+        durationDays:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # ── Bucket List ──────────────────────────────────────────────────────
+
+    BucketListItemRequest:
+      type: object
+      required: [destination]
+      properties:
+        destination:
+          type: string
+          maxLength: 200
+          example: "Kyoto, Japan"
+        category:
+          type: string
+          enum: [city, country, experience, landmark]
+          default: city
+        notes:
+          type: string
+          maxLength: 500
+
+    VoteRequest:
+      type: object
+      required: [vote]
+      properties:
+        vote:
+          type: string
+          enum: [up, down, neutral]
+
+    BucketListItemResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        destination:
+          type: string
+        category:
+          type: string
+        notes:
+          type: string
+        addedBy:
+          $ref: "#/components/schemas/UserSummary"
+        votes:
+          type: object
+          properties:
+            up:
+              type: integer
+            down:
+              type: integer
+            score:
+              type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+    BucketListRankedResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BucketListItemResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    # ── Timing ───────────────────────────────────────────────────────────
+
+    DestinationTiming:
+      type: object
+      properties:
+        destination:
+          type: string
+          example: Kyoto
+        bestMonths:
+          type: array
+          items:
+            type: string
+          example: ["March", "April", "October", "November"]
+        avoidMonths:
+          type: array
+          items:
+            type: string
+          example: ["July", "August"]
+        peakSeason:
+          $ref: "#/components/schemas/DateRange"
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                example: "Cherry Blossom Season"
+              dateRange:
+                $ref: "#/components/schemas/DateRange"
+              impact:
+                type: string
+                enum: [positive, negative, neutral]
+        weatherSummary:
+          type: string
+          example: "Mild spring temperatures, occasional rain"
+        priceLevel:
+          type: string
+          enum: [low, medium, high, peak]
+
+    TimingAnalysisResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        destinations:
+          type: array
+          items:
+            $ref: "#/components/schemas/DestinationTiming"
+        recommendedWindow:
+          $ref: "#/components/schemas/DateRange"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.87
+        generatedAt:
+          type: string
+          format: date-time
+
+    # ── Interests ────────────────────────────────────────────────────────
+
+    InterestProfileRequest:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            type: string
+            enum:
+              - adventure
+              - culture
+              - food
+              - nature
+              - nightlife
+              - relaxation
+              - shopping
+              - history
+              - art
+              - sports
+              - photography
+              - wellness
+          minItems: 1
+          maxItems: 6
+        intensity:
+          type: string
+          enum: [low, moderate, high]
+          default: moderate
+        mustDo:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+        avoid:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+
+    InterestProfileResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        categories:
+          type: array
+          items:
+            type: string
+        intensity:
+          type: string
+        mustDo:
+          type: array
+          items:
+            type: string
+        avoid:
+          type: array
+          items:
+            type: string
+        submittedAt:
+          type: string
+          format: date-time
+
+    GroupInterestsResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        memberCount:
+          type: integer
+        sharedInterests:
+          type: array
+          items:
+            type: string
+          description: Categories selected by majority of members
+        conflicts:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+              mustDoBy:
+                type: array
+                items:
+                  type: string
+              avoidBy:
+                type: array
+                items:
+                  type: string
+        mergedProfile:
+          $ref: "#/components/schemas/InterestProfileResponse"
+
+    # ── Health ───────────────────────────────────────────────────────────
+
+    VaccinationRequirement:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "Japanese Encephalitis"
+        status:
+          type: string
+          enum: [required, recommended, not_needed]
+        notes:
+          type: string
+
+    HealthRequirementsResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        destinations:
+          type: array
+          items:
+            type: object
+            properties:
+              destination:
+                type: string
+              vaccinations:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VaccinationRequirement"
+              travelAdvisory:
+                type: string
+                enum: [none, low, moderate, high, extreme]
+              advisoryNotes:
+                type: string
+              healthcareRating:
+                type: string
+                enum: [excellent, good, adequate, limited]
+
+    HealthAcknowledgmentRequest:
+      type: object
+      required: [acknowledged]
+      properties:
+        acknowledged:
+          type: boolean
+          description: User acknowledges they have read health requirements
+        mobilityLevel:
+          type: string
+          enum: [full, limited, wheelchair]
+          default: full
+        dietaryRestrictions:
+          type: array
+          items:
+            type: string
+          example: ["vegetarian", "gluten-free"]
+        allergies:
+          type: array
+          items:
+            type: string
+        medicalNotes:
+          type: string
+          maxLength: 2000
+
+    HealthAcknowledgmentResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        acknowledged:
+          type: boolean
+        healthFlags:
+          type: object
+          properties:
+            mobilityLevel:
+              type: string
+            dietaryRestrictions:
+              type: array
+              items:
+                type: string
+            allergies:
+              type: array
+              items:
+                type: string
+        acknowledgedAt:
+          type: string
+          format: date-time
+
+    # ── POIs ─────────────────────────────────────────────────────────────
+
+    PoiResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Fushimi Inari Shrine"
+        category:
+          type: string
+          enum: [landmark, museum, nature, market, experience, temple, park, beach]
+        location:
+          $ref: "#/components/schemas/GeoLocation"
+        city:
+          type: string
+        country:
+          type: string
+        rating:
+          type: number
+          format: float
+          nullable: true
+        estimatedDurationHours:
+          type: number
+          format: float
+        costEstimateUsd:
+          type: number
+          format: float
+        accessibilityScore:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        tags:
+          type: array
+          items:
+            type: string
+        imageUrl:
+          type: string
+          format: uri
+          nullable: true
+        approved:
+          type: boolean
+          default: false
+        source:
+          type: string
+
+    PoiApprovalRequest:
+      type: object
+      properties:
+        preferredTimeSlot:
+          type: string
+          example: "morning"
+          enum: [morning, afternoon, evening, any]
+        notes:
+          type: string
+          maxLength: 500
+
+    PoiSearchResponse:
+      type: object
+      properties:
+        pois:
+          type: array
+          items:
+            $ref: "#/components/schemas/PoiResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+        filters:
+          type: object
+          properties:
+            hobby:
+              type: string
+              nullable: true
+            destination:
+              type: string
+              nullable: true
+            appliedCount:
+              type: integer
+
+    # ── Availability ─────────────────────────────────────────────────────
+
+    AvailabilityRequest:
+      type: object
+      required: [windows]
+      properties:
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/DateRange"
+          minItems: 1
+          maxItems: 10
+        blackoutDates:
+          type: array
+          items:
+            type: string
+            format: date
+        flexibility:
+          type: string
+          enum: [exact, flexible_1_week, flexible_2_weeks, very_flexible]
+          default: exact
+
+    AvailabilityResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/DateRange"
+        blackoutDates:
+          type: array
+          items:
+            type: string
+            format: date
+        flexibility:
+          type: string
+        submittedAt:
+          type: string
+          format: date-time
+
+    AvailabilityOverlapResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        membersSubmitted:
+          type: integer
+        membersTotal:
+          type: integer
+        overlappingWindows:
+          type: array
+          items:
+            type: object
+            properties:
+              window:
+                $ref: "#/components/schemas/DateRange"
+              availableMembers:
+                type: array
+                items:
+                  type: string
+                  format: uuid
+              coveragePercent:
+                type: number
+                format: float
+                example: 100.0
+        bestWindow:
+          $ref: "#/components/schemas/DateRange"
+        recommendation:
+          type: string
+
+    # ── Budget ───────────────────────────────────────────────────────────
+
+    BudgetRequest:
+      type: object
+      required: [totalBudget, currency]
+      properties:
+        totalBudget:
+          type: number
+          format: float
+          minimum: 0
+          example: 3000
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          example: USD
+        budgetType:
+          type: string
+          enum: [total, per_person]
+          default: total
+        priorities:
+          type: array
+          items:
+            type: string
+            enum: [flights, accommodation, dining, activities, transport]
+          description: Ordered list — first item gets highest allocation
+
+    BudgetResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+        totalBudget:
+          type: number
+          format: float
+        dailyTarget:
+          type: number
+          format: float
+        spent:
+          type: number
+          format: float
+        remaining:
+          type: number
+          format: float
+        breakdown:
+          type: object
+          additionalProperties:
+            type: number
+            format: float
+          example:
+            flights: 900
+            accommodation: 900
+            dining: 600
+            activities: 300
+            transport: 150
+            misc: 150
+        updatedAt:
+          type: string
+          format: date-time
+
+    BudgetBreakdownResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        totalBudget:
+          type: number
+          format: float
+        categories:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+              allocated:
+                type: number
+                format: float
+              spent:
+                type: number
+                format: float
+              remaining:
+                type: number
+                format: float
+              percentOfTotal:
+                type: number
+                format: float
+              status:
+                type: string
+                enum: [under_budget, on_track, over_budget]
+        dailyBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              day:
+                type: integer
+              allocated:
+                type: number
+                format: float
+              estimated:
+                type: number
+                format: float
+
+    BudgetIncreaseRequest:
+      type: object
+      required: [additionalAmount]
+      properties:
+        additionalAmount:
+          type: number
+          format: float
+          minimum: 1
+          example: 500
+        reason:
+          type: string
+          maxLength: 500
+        redistributeToCategory:
+          type: string
+          description: "If set, the entire increase goes to this category"
+          enum: [flights, accommodation, dining, activities, transport, misc]
+
+    # ── Flights ──────────────────────────────────────────────────────────
+
+    FlightOptionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        airline:
+          type: string
+        flightNumber:
+          type: string
+        departureAirport:
+          type: string
+        arrivalAirport:
+          type: string
+        departureTime:
+          type: string
+          format: date-time
+        arrivalTime:
+          type: string
+          format: date-time
+        priceUsd:
+          type: number
+          format: float
+        stops:
+          type: integer
+        durationMinutes:
+          type: integer
+        cabin:
+          type: string
+          enum: [economy, premium_economy, business, first]
+        bookingUrl:
+          type: string
+          format: uri
+          nullable: true
+        selected:
+          type: boolean
+
+    FlightSearchResponse:
+      type: object
+      properties:
+        flights:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlightOptionResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+        budgetRemaining:
+          type: number
+          format: float
+          description: Remaining flight budget after selected flights
+        searchCriteria:
+          type: object
+          properties:
+            origin:
+              type: string
+            destinations:
+              type: array
+              items:
+                type: string
+            dateRange:
+              $ref: "#/components/schemas/DateRange"
+
+    FlightSelectRequest:
+      type: object
+      required: [flightId]
+      properties:
+        flightId:
+          type: string
+          format: uuid
+        leg:
+          type: string
+          enum: [outbound, return, multi_city]
+          default: outbound
+
+    # ── Stays ────────────────────────────────────────────────────────────
+
+    StayOptionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+          enum: [hotel, hostel, airbnb, resort, guesthouse]
+        location:
+          $ref: "#/components/schemas/GeoLocation"
+        address:
+          type: string
+        pricePerNightUsd:
+          type: number
+          format: float
+        totalPriceUsd:
+          type: number
+          format: float
+        rating:
+          type: number
+          format: float
+          nullable: true
+        amenities:
+          type: array
+          items:
+            type: string
+        imageUrl:
+          type: string
+          format: uri
+          nullable: true
+        checkIn:
+          type: string
+          format: date
+          nullable: true
+        checkOut:
+          type: string
+          format: date
+          nullable: true
+        bookingUrl:
+          type: string
+          format: uri
+          nullable: true
+        selected:
+          type: boolean
+
+    StaySearchResponse:
+      type: object
+      properties:
+        stays:
+          type: array
+          items:
+            $ref: "#/components/schemas/StayOptionResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+        budgetPerNight:
+          type: number
+          format: float
+
+    StaySelectRequest:
+      type: object
+      required: [stayId]
+      properties:
+        stayId:
+          type: string
+          format: uuid
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+
+    # ── Dining ───────────────────────────────────────────────────────────
+
+    DiningOptionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        cuisine:
+          type: array
+          items:
+            type: string
+        priceLevel:
+          type: string
+          enum: ["$", "$$", "$$$", "$$$$"]
+        location:
+          $ref: "#/components/schemas/GeoLocation"
+        rating:
+          type: number
+          format: float
+          nullable: true
+        dietaryOptions:
+          type: array
+          items:
+            type: string
+        meal:
+          type: string
+          enum: [breakfast, lunch, dinner]
+        reservationUrl:
+          type: string
+          format: uri
+          nullable: true
+        distanceFromHotelKm:
+          type: number
+          format: float
+          nullable: true
+
+    DiningSuggestionsResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        day:
+          type: integer
+        suggestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiningOptionResponse"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    # ── Itinerary ────────────────────────────────────────────────────────
+
+    ItineraryActivityResponse:
+      type: object
+      properties:
+        timeSlot:
+          type: string
+          example: "09:00-11:00"
+        poiId:
+          type: string
+          format: uuid
+          nullable: true
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        costEstimateUsd:
+          type: number
+          format: float
+        transportToNext:
+          type: string
+          nullable: true
+          enum: [walk, taxi, metro, bus, train, drive, ferry]
+
+    ItineraryDayResponse:
+      type: object
+      properties:
+        dayNumber:
+          type: integer
+        date:
+          type: string
+          format: date
+          nullable: true
+        city:
+          type: string
+        theme:
+          type: string
+        activities:
+          type: array
+          items:
+            $ref: "#/components/schemas/ItineraryActivityResponse"
+        meals:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiningOptionResponse"
+        accommodation:
+          $ref: "#/components/schemas/StayOptionResponse"
+        dailyBudgetUsd:
+          type: number
+          format: float
+
+    ItineraryResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        totalDays:
+          type: integer
+        totalActivities:
+          type: integer
+        status:
+          type: string
+          enum: [draft, approved, finalized]
+        days:
+          type: array
+          items:
+            $ref: "#/components/schemas/ItineraryDayResponse"
+        generatedAt:
+          type: string
+          format: date-time
+
+    ItineraryApprovalRequest:
+      type: object
+      properties:
+        notes:
+          type: string
+          maxLength: 2000
+          description: Optional feedback or change requests
+
+    ItineraryApprovalResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [approved, finalized]
+        approvedBy:
+          type: string
+          format: uuid
+        approvedAt:
+          type: string
+          format: date-time
+        totalApprovals:
+          type: integer
+        requiredApprovals:
+          type: integer
+
+    CalendarSyncRequest:
+      type: object
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          enum: [google, outlook, apple, ics_download]
+        includeFlights:
+          type: boolean
+          default: true
+        includeHotels:
+          type: boolean
+          default: true
+        includeDining:
+          type: boolean
+          default: false
+        reminderMinutesBefore:
+          type: integer
+          minimum: 0
+          maximum: 1440
+          default: 60
+
+    CalendarSyncResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        provider:
+          type: string
+        eventsCreated:
+          type: integer
+        downloadUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: Present for ics_download provider
+        syncStatus:
+          type: string
+          enum: [completed, pending, failed]
+        syncedAt:
+          type: string
+          format: date-time
+
+    # ── Storyboard ───────────────────────────────────────────────────────
+
+    StoryboardGenerateRequest:
+      type: object
+      properties:
+        style:
+          type: string
+          enum: [cinematic, scrapbook, minimal, adventure]
+          default: cinematic
+        includePhotos:
+          type: boolean
+          default: true
+        includeMapRoute:
+          type: boolean
+          default: true
+
+    StoryboardJobResponse:
+      type: object
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, processing, completed, failed]
+        estimatedCompletionSeconds:
+          type: integer
+          example: 30
+        pollUrl:
+          type: string
+          format: uri
+
+    StoryboardResponse:
+      type: object
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        memberId:
+          type: string
+          format: uuid
+        style:
+          type: string
+        sections:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              narrative:
+                type: string
+              day:
+                type: integer
+                nullable: true
+              highlights:
+                type: array
+                items:
+                  type: string
+              mediaUrls:
+                type: array
+                items:
+                  type: string
+                  format: uri
+              mapSnippetUrl:
+                type: string
+                format: uri
+                nullable: true
+        generatedAt:
+          type: string
+          format: date-time
+        downloadUrl:
+          type: string
+          format: uri
+
+    # ── Analytics ────────────────────────────────────────────────────────
+
+    AnalyticsEventRequest:
+      type: object
+      required: [event, properties]
+      properties:
+        event:
+          type: string
+          maxLength: 100
+          example: "itinerary_viewed"
+        properties:
+          type: object
+          additionalProperties: true
+          example:
+            tripId: "abc-123"
+            dayNumber: 3
+            source: "mobile_app"
+        timestamp:
+          type: string
+          format: date-time
+          description: Client-side event timestamp (defaults to server time)
+        sessionId:
+          type: string
+
+    AnalyticsEventResponse:
+      type: object
+      properties:
+        accepted:
+          type: boolean
+          default: true
+        eventId:
+          type: string
+          format: uuid

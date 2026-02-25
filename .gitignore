@@ -1,0 +1,24 @@
+# Secrets / environment files
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# VS Code (optional - keep settings if you want shared)
+.vscode/
+*.code-workspace
+
+# OS / misc
+.DS_Store
+Thumbs.db

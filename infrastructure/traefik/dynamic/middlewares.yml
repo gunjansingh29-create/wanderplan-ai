@@ -1,0 +1,111 @@
+# =============================================================================
+# Traefik Dynamic Configuration — Middlewares & TLS
+# Replaces AWS ALB listener rules, WAF, and ACM certificate management
+# =============================================================================
+
+http:
+  middlewares:
+    # --- Rate Limiting (replaces AWS WAF rate-based rules) ---
+    rate-limit:
+      rateLimit:
+        average: 60          # requests per period
+        burst: 20            # spike allowance
+        period: 1m
+        sourceCriterion:
+          ipStrategy:
+            depth: 1         # trust first X-Forwarded-For hop
+
+    rate-limit-strict:
+      rateLimit:
+        average: 10
+        burst: 5
+        period: 1m
+
+    # --- CORS (replaces ALB CORS headers) ---
+    cors:
+      headers:
+        accessControlAllowOriginList:
+          - "https://${DOMAIN:-localhost}"
+          - "https://www.${DOMAIN:-localhost}"
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        accessControlAllowHeaders:
+          - Authorization
+          - Content-Type
+          - X-Request-ID
+          - X-Trip-ID
+        accessControlMaxAge: 3600
+        addVaryHeader: true
+
+    # --- Security Headers (replaces CloudFront security policies) ---
+    security-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        customFrameOptionsValue: SAMEORIGIN
+        referrerPolicy: strict-origin-when-cross-origin
+        customResponseHeaders:
+          X-Powered-By: ""
+          Server: ""
+
+    # --- Compression ---
+    compress:
+      compress:
+        excludedContentTypes:
+          - text/event-stream
+
+    # --- Basic Auth for admin dashboards ---
+    auth:
+      basicAuth:
+        users:
+          - "${TRAEFIK_DASHBOARD_AUTH:-admin:$$2y$$10$$placeholder}"
+
+    # --- Retry (replaces ALB retry policies) ---
+    retry:
+      retry:
+        attempts: 3
+        initialInterval: 100ms
+
+    # --- Circuit Breaker (replaces custom ALB health checks) ---
+    circuit-breaker:
+      circuitBreaker:
+        expression: "LatencyAtQuantileMS(50.0) > 5000 || ResponseCodeRatio(500, 600, 0, 600) > 0.3"
+
+    # --- Internal-only access (replaces VPC private subnet isolation) ---
+    internal-only:
+      ipAllowList:
+        sourceRange:
+          - "172.20.0.0/16"   # Docker internal networks
+          - "127.0.0.1/32"
+          - "10.0.0.0/8"
+
+  # --- Catch-all for unmatched routes ---
+  routers:
+    catch-all:
+      rule: "HostRegexp(`.*`)"
+      entryPoints:
+        - websecure
+      service: noop@internal
+      priority: 1
+      middlewares:
+        - security-headers
+
+# --- TLS configuration (replaces ACM certificates) ---
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      cipherSuites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+      sniStrict: true

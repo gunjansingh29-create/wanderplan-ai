@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "orchestrator"
+    static_configs:
+      - targets: ["orchestrator:8000"]
+
+  - job_name: "agents"
+    static_configs:
+      - targets:
+          - "bucket-list:8001"
+          - "timing:8002"
+          - "interest-profiler:8003"
+          - "health-accessibility:8004"
+          - "poi-discovery:8005"
+          - "duration-optimizer:8006"
+          - "availability:8007"
+          - "budget:8008"
+          - "flight:8009"
+          - "accommodation:8010"
+          - "dining:8011"
+          - "itinerary:8012"
+          - "calendar:8013"
+          - "group-coordinator:8014"
+
+  - job_name: "kong"
+    static_configs:
+      - targets: ["kong:8081"]
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:6379"]

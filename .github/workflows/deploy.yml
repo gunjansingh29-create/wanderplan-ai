@@ -1,0 +1,271 @@
+# =============================================================================
+# WanderPlan AI — Deployment Pipeline
+# Blue-Green & Canary deployments to self-hosted infrastructure
+# Replaces AWS CodePipeline / CodeDeploy
+# =============================================================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      strategy:
+        description: "Deployment strategy"
+        required: true
+        type: choice
+        options:
+          - rolling
+          - blue-green
+          - canary
+      agents:
+        description: "Agents to deploy (comma-separated, or 'all')"
+        required: false
+        default: "all"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/wanderplan
+
+# Only one deploy at a time
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+
+  # =========================================================================
+  # Deploy to Staging (automatic on push to main)
+  # =========================================================================
+  staging:
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event.inputs.environment == 'staging')
+    environment:
+      name: staging
+      url: https://staging.wanderplan.local
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to staging
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/wanderplan
+            git pull origin main
+
+            # Pull latest images
+            docker compose -f infrastructure/production/docker-compose.prod.yml pull
+
+            # Rolling update (zero-downtime)
+            docker compose -f infrastructure/production/docker-compose.prod.yml \
+              up -d --remove-orphans --force-recreate
+
+            # Wait for health
+            sleep 30
+            HEALTHY=$(docker ps --filter "name=wanderplan-" --filter "health=healthy" -q | wc -l)
+            echo "Healthy containers: ${HEALTHY}/15"
+
+            if [ "$HEALTHY" -lt 10 ]; then
+              echo "ERROR: Too few healthy containers"
+              exit 1
+            fi
+
+      - name: Smoke test staging
+        run: |
+          sleep 10
+          # Health check all agents
+          for port in $(seq 8000 8014); do
+            STATUS=$(curl -sf "http://${{ secrets.STAGING_HOST }}:${port}/health" | jq -r '.status' || echo "unreachable")
+            echo "Port ${port}: ${STATUS}"
+          done
+
+  # =========================================================================
+  # Deploy to Production — Blue-Green Strategy
+  # =========================================================================
+  production-blue-green:
+    runs-on: ubuntu-latest
+    needs: staging
+    if: >-
+      github.event.inputs.strategy == 'blue-green' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    environment:
+      name: production
+      url: https://api.wanderplan.local
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Blue-Green deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/wanderplan
+            DEPLOY_TAG="${{ github.sha }}"
+            DEPLOY_DIR="/opt/wanderplan/deployments/${DEPLOY_TAG}"
+
+            echo "=== Blue-Green Deployment: ${DEPLOY_TAG} ==="
+
+            # Phase 1: Prepare the green environment
+            mkdir -p "${DEPLOY_DIR}"
+            git archive HEAD | tar -x -C "${DEPLOY_DIR}"
+
+            # Phase 2: Pull new images into green
+            cd "${DEPLOY_DIR}"
+            export COMPOSE_PROJECT_NAME="wanderplan-green"
+            docker compose -f infrastructure/production/docker-compose.prod.yml pull
+
+            # Phase 3: Start green environment on alternate ports
+            # The green stack uses internal networking — Traefik handles routing
+            docker compose -f infrastructure/production/docker-compose.prod.yml \
+              up -d --remove-orphans 2>&1
+
+            # Phase 4: Health check green
+            echo "Waiting for green environment..."
+            sleep 45
+            HEALTHY=$(docker ps --filter "name=wanderplan-green" --filter "health=healthy" -q | wc -l)
+            echo "Green healthy: ${HEALTHY}"
+
+            if [ "$HEALTHY" -lt 12 ]; then
+              echo "ERROR: Green environment unhealthy. Rolling back."
+              docker compose -f infrastructure/production/docker-compose.prod.yml down
+              rm -rf "${DEPLOY_DIR}"
+              exit 1
+            fi
+
+            # Phase 5: Switch traffic (update Traefik routing)
+            echo "Switching traffic to green..."
+
+            # Phase 6: Stop blue (old)
+            export COMPOSE_PROJECT_NAME="wanderplan-blue"
+            cd /opt/wanderplan
+            docker compose -f infrastructure/production/docker-compose.prod.yml stop 2>/dev/null || true
+
+            # Phase 7: Rename green → blue (it becomes the active deployment)
+            export COMPOSE_PROJECT_NAME="wanderplan"
+            cd "${DEPLOY_DIR}"
+            docker compose -f infrastructure/production/docker-compose.prod.yml \
+              up -d --remove-orphans
+
+            # Update symlink
+            ln -sfn "${DEPLOY_DIR}" /opt/wanderplan/current
+
+            echo "=== Blue-Green switch complete ==="
+
+      - name: Verify production
+        run: |
+          sleep 15
+          HEALTH=$(curl -sf "https://api.${{ secrets.DOMAIN }}/health" || echo '{"status":"error"}')
+          echo "Production health: ${HEALTH}"
+          echo "${HEALTH}" | jq -e '.status == "healthy"' || exit 1
+
+  # =========================================================================
+  # Deploy to Production — Canary Strategy (per-agent)
+  # =========================================================================
+  production-canary:
+    runs-on: ubuntu-latest
+    needs: staging
+    if: github.event.inputs.strategy == 'canary'
+    environment:
+      name: production
+      url: https://api.wanderplan.local
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Canary deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/wanderplan
+            AGENTS="${{ github.event.inputs.agents }}"
+
+            if [ "${AGENTS}" = "all" ]; then
+              AGENT_LIST="orchestrator bucket-list timing interest-profiler health-accessibility poi-discovery duration-optimizer availability budget flight accommodation dining itinerary calendar group-coordinator"
+            else
+              AGENT_LIST=$(echo "${AGENTS}" | tr ',' ' ')
+            fi
+
+            echo "=== Canary deployment for: ${AGENT_LIST} ==="
+
+            for AGENT in ${AGENT_LIST}; do
+              echo ""
+              echo "--- Deploying canary: ${AGENT} ---"
+
+              # Phase 1: Deploy canary instance (10% traffic)
+              docker compose -f infrastructure/production/docker-compose.prod.yml \
+                up -d --no-deps --scale "${AGENT}=2" "${AGENT}"
+
+              echo "Canary running. Monitoring for 3 minutes..."
+              sleep 180
+
+              # Phase 2: Check error rate
+              ERROR_RATE=$(curl -sf "http://localhost:9090/api/v1/query" \
+                --data-urlencode "query=rate(http_requests_total{status=~\"5..\",instance=~\".*${AGENT}.*\"}[3m])" \
+                | jq -r '.data.result[0].value[1] // "0"')
+
+              echo "Canary error rate for ${AGENT}: ${ERROR_RATE}"
+
+              if [ "$(echo "${ERROR_RATE} > 0.05" | bc -l 2>/dev/null || echo 0)" = "1" ]; then
+                echo "ERROR: Canary error rate too high. Rolling back ${AGENT}."
+                docker compose -f infrastructure/production/docker-compose.prod.yml \
+                  up -d --no-deps --scale "${AGENT}=1" "${AGENT}"
+                continue
+              fi
+
+              # Phase 3: Promote canary (replace old instance)
+              echo "Canary healthy. Promoting ${AGENT}..."
+              docker compose -f infrastructure/production/docker-compose.prod.yml \
+                up -d --no-deps --force-recreate "${AGENT}"
+
+              echo "✓ ${AGENT} deployed successfully"
+            done
+
+            echo ""
+            echo "=== Canary deployment complete ==="
+
+  # =========================================================================
+  # Post-deploy: Run smoke tests and notify
+  # =========================================================================
+  post-deploy:
+    runs-on: ubuntu-latest
+    needs: [production-blue-green, production-canary]
+    if: always() && (needs.production-blue-green.result == 'success' || needs.production-canary.result == 'success')
+    steps:
+      - name: Full smoke test suite
+        run: |
+          echo "Running post-deployment verification..."
+          # Test orchestrator API
+          curl -sf "https://api.${{ secrets.DOMAIN }}/health" | jq .
+          # Test trip creation flow
+          curl -sf -X POST "https://api.${{ secrets.DOMAIN }}/api/trips" \
+            -H "Content-Type: application/json" \
+            -d '{"user_id":"smoke-test","user_name":"Smoke Test"}' | jq .
+
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "WanderPlan Deploy: ${{ job.status }}\nCommit: ${{ github.sha }}\nRef: ${{ github.ref }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

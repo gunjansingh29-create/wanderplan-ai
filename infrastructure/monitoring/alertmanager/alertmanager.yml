@@ -1,0 +1,151 @@
+# =============================================================================
+# Alertmanager Configuration — Replaces PagerDuty + CloudWatch Alarms
+# Routes alerts to Slack, PagerDuty webhooks, and email
+# =============================================================================
+
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "${SMTP_HOST:-smtp.gmail.com:587}"
+  smtp_from: "${ALERT_EMAIL_FROM:-alerts@wanderplan.local}"
+  smtp_auth_username: "${SMTP_USER:-}"
+  smtp_auth_password: "${SMTP_PASS:-}"
+  smtp_require_tls: true
+
+# --- Notification templates ---
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
+# --- Routing tree ---
+route:
+  receiver: default-slack
+  group_by: ["alertname", "team", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # PAGE-level: Orchestrator down → immediate PagerDuty
+    - match:
+        severity: page
+      receiver: pagerduty-critical
+      group_wait: 10s
+      repeat_interval: 5m
+      continue: true
+
+    # CRITICAL: Database and core infra → PagerDuty + Slack
+    - match:
+        severity: critical
+      receiver: pagerduty-critical
+      group_wait: 30s
+      repeat_interval: 1h
+      continue: true
+
+    - match:
+        severity: critical
+      receiver: slack-critical
+      continue: true
+
+    # WARNING: Performance degradation → Slack only
+    - match:
+        severity: warning
+      receiver: slack-warning
+      group_wait: 1m
+      repeat_interval: 4h
+
+    # Team-specific routing
+    - match:
+        team: data
+      receiver: slack-data-team
+
+    - match:
+        team: ml
+      receiver: slack-ml-team
+
+# --- Inhibition rules (suppress noise) ---
+inhibit_rules:
+  # If the orchestrator is down, suppress individual agent alerts
+  - source_match:
+      alertname: OrchestratorDown
+    target_match_re:
+      alertname: Agent.*
+    equal: []
+
+  # If a Kafka broker is down, suppress consumer lag alerts
+  - source_match:
+      alertname: KafkaBrokerDown
+    target_match:
+      alertname: KafkaConsumerLag
+
+  # Critical suppresses warning for the same alert
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ["alertname", "instance"]
+
+# --- Receivers ---
+receivers:
+  - name: default-slack
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/placeholder}"
+        channel: "#wanderplan-alerts"
+        title: '{{ .GroupLabels.alertname }}'
+        text: >-
+          {{ range .Alerts }}
+          *{{ .Labels.severity | toUpper }}* — {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+  - name: slack-critical
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/placeholder}"
+        channel: "#wanderplan-critical"
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        title: ':rotating_light: {{ .GroupLabels.alertname }}'
+        text: >-
+          {{ range .Alerts }}
+          *{{ .Labels.severity }}* | {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ if .Annotations.runbook }}Runbook: {{ .Annotations.runbook }}{{ end }}
+          {{ end }}
+        send_resolved: true
+
+  - name: slack-warning
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/placeholder}"
+        channel: "#wanderplan-alerts"
+        color: warning
+        title: '{{ .GroupLabels.alertname }}'
+        text: >-
+          {{ range .Alerts }}
+          {{ .Annotations.summary }}: {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+  - name: slack-data-team
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_DATA:-https://hooks.slack.com/services/placeholder}"
+        channel: "#wanderplan-data"
+
+  - name: slack-ml-team
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_ML:-https://hooks.slack.com/services/placeholder}"
+        channel: "#wanderplan-ml"
+
+  - name: pagerduty-critical
+    pagerduty_configs:
+      - service_key: "${PAGERDUTY_SERVICE_KEY:-placeholder}"
+        severity: '{{ .CommonLabels.severity }}'
+        description: '{{ .CommonAnnotations.summary }}'
+        details:
+          firing: '{{ .Alerts.Firing | len }}'
+          resolved: '{{ .Alerts.Resolved | len }}'
+          environment: production
+
+  - name: email-fallback
+    email_configs:
+      - to: "${ALERT_EMAIL_TO:-ops@wanderplan.local}"
+        headers:
+          Subject: "[WanderPlan ALERT] {{ .GroupLabels.alertname }}"
+        send_resolved: true

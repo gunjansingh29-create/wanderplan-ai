@@ -1,0 +1,582 @@
+// ============================================================================
+// WanderPlan AI — Prisma Schema (PostgreSQL)
+// All 17 tables · enums · relations · indexes · read-replica datasource
+// ============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex", "multiSchema", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgcrypto, pg_trgm, btree_gin]
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ENUMS
+// ════════════════════════════════════════════════════════════════════════════
+
+enum AuthProvider {
+  local
+  google
+  apple
+  facebook
+}
+
+enum UserRole {
+  user
+  admin
+  premium
+}
+
+enum TravelStyle {
+  solo
+  couple
+  family
+  group
+  adventure
+  luxury
+}
+
+enum FitnessLevel {
+  low
+  moderate
+  high
+  athletic
+}
+
+enum BudgetPreference {
+  budget
+  moderate
+  premium
+  luxury
+}
+
+enum TripStatus {
+  planning
+  bucket_list
+  timing
+  interests
+  health
+  pois
+  scheduling
+  budgeting
+  flights
+  stays
+  dining
+  itinerary
+  confirmed
+  active
+  completed
+}
+
+enum TripMemberRole {
+  organizer
+  member
+}
+
+enum InvitationStatus {
+  pending
+  accepted
+  declined
+}
+
+enum RequirementType {
+  vaccination
+  fitness
+  certification
+  medication
+  insurance
+}
+
+enum Severity {
+  mandatory
+  recommended
+  optional
+}
+
+enum POICategory {
+  attraction
+  activity
+  nature
+  culture
+  food
+  nightlife
+  shopping
+  relaxation
+}
+
+enum CabinClass {
+  economy
+  premium_economy
+  business
+  first
+}
+
+enum AccommodationType {
+  hotel
+  hostel
+  airbnb
+  resort
+  boutique
+}
+
+enum MealType {
+  breakfast
+  lunch
+  dinner
+  snack
+}
+
+enum PriceRange {
+  budget    @map("$")
+  moderate2 @map("$$")
+  premium2  @map("$$$")
+  luxury2   @map("$$$$")
+}
+
+enum ItineraryItemType {
+  flight
+  transfer
+  checkin
+  checkout
+  activity
+  meal
+  rest
+  travel
+}
+
+enum SocialPlatform {
+  instagram
+  twitter
+  tiktok
+  facebook
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 1. USERS
+// ════════════════════════════════════════════════════════════════════════════
+
+model User {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String    @unique @db.VarChar(255)
+  passwordHash  String?   @map("password_hash") @db.VarChar(255)
+  firstName     String?   @map("first_name") @db.VarChar(100)
+  lastName      String?   @map("last_name") @db.VarChar(100)
+  phone         String?   @db.VarChar(20)
+  avatarUrl     String?   @map("avatar_url")
+  authProvider  AuthProvider @default(local) @map("auth_provider")
+  role          UserRole     @default(user)
+  emailVerified Boolean   @default(false) @map("email_verified")
+  mfaEnabled    Boolean   @default(false) @map("mfa_enabled")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime? @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  profile           UserProfile?
+  createdTrips      Trip[]             @relation("TripCreator")
+  tripMemberships   TripMember[]
+  bucketListItems   BucketListItem[]   @relation("BucketListSuggester")
+  interestProfiles  InterestProfile[]
+  storyboardPosts   StoryboardPost[]
+  analyticsEvents   AnalyticsEvent[]
+
+  @@index([email])
+  @@index([authProvider])
+  @@map("users")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 2. USER PROFILES
+// ════════════════════════════════════════════════════════════════════════════
+
+model UserProfile {
+  userId              String         @id @map("user_id") @db.Uuid
+  travelStyle         TravelStyle?   @map("travel_style")
+  hobbies             String[]       @default([])
+  interests           String[]       @default([])
+  dietaryRestrictions String[]       @default([]) @map("dietary_restrictions")
+  fitnessLevel        FitnessLevel?  @map("fitness_level")
+  budgetPreference    BudgetPreference? @map("budget_preference")
+  preferredCurrency   String         @default("USD") @map("preferred_currency") @db.Char(3)
+  preferredLanguage   String         @default("en") @map("preferred_language") @db.VarChar(10)
+  updatedAt           DateTime?      @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([hobbies], type: Gin)
+  @@index([interests], type: Gin)
+  @@map("user_profiles")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 3. TRIPS
+// ════════════════════════════════════════════════════════════════════════════
+
+model Trip {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String     @db.VarChar(255)
+  status    TripStatus @default(planning)
+  createdBy String     @map("created_by") @db.Uuid
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime?  @updatedAt @map("updated_at") @db.Timestamptz
+
+  creator             User               @relation("TripCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  members             TripMember[]
+  bucketListItems     BucketListItem[]
+  interestProfiles    InterestProfile[]
+  healthRequirements  HealthRequirement[]
+  pointsOfInterest    PointOfInterest[]
+  budget              TripBudget?
+  flightSearches      FlightSearch[]
+  accommodations      Accommodation[]
+  diningSuggestions    DiningSuggestion[]
+  itineraryDays       ItineraryDay[]
+  storyboardPosts     StoryboardPost[]
+  analyticsEvents     AnalyticsEvent[]
+
+  @@index([createdBy])
+  @@index([status])
+  @@map("trips")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 4. TRIP MEMBERS
+// ════════════════════════════════════════════════════════════════════════════
+
+model TripMember {
+  tripId            String           @map("trip_id") @db.Uuid
+  userId            String           @map("user_id") @db.Uuid
+  role              TripMemberRole   @default(member)
+  invitationStatus  InvitationStatus @default(pending) @map("invitation_status")
+  availabilityStart Date?            @map("availability_start")
+  availabilityEnd   Date?            @map("availability_end")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([tripId, userId])
+  @@index([userId])
+  @@map("trip_members")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 5. BUCKET LIST ITEMS
+// ════════════════════════════════════════════════════════════════════════════
+
+model BucketListItem {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId           String   @map("trip_id") @db.Uuid
+  destinationName  String   @map("destination_name") @db.VarChar(255)
+  country          String?  @db.VarChar(100)
+  suggestedBy      String?  @map("suggested_by") @db.Uuid
+  latitude         Decimal? @db.Decimal(10, 8)
+  longitude        Decimal? @db.Decimal(11, 8)
+  votesUp          Int      @default(0) @map("votes_up")
+  votesDown        Int      @default(0) @map("votes_down")
+  rankScore        Decimal  @default(0) @map("rank_score") @db.Decimal(5, 2)
+  bestTravelMonths Int[]    @default([]) @map("best_travel_months")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  trip      Trip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  suggester User? @relation("BucketListSuggester", fields: [suggestedBy], references: [id], onDelete: SetNull)
+
+  @@index([tripId])
+  @@index([tripId, rankScore(sort: Desc)])
+  @@map("bucket_list_items")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 6. INTEREST PROFILES
+// ════════════════════════════════════════════════════════════════════════════
+
+model InterestProfile {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId            String   @map("trip_id") @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  hobbies           Json     @default("[]")
+  interests         Json     @default("[]")
+  healthConditions  Json     @default("[]") @map("health_conditions")
+  fitnessAssessment Json     @default("{}") @map("fitness_assessment")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime? @updatedAt @map("updated_at") @db.Timestamptz
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, userId])
+  @@index([tripId])
+  @@map("interest_profiles")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 7. HEALTH REQUIREMENTS
+// ════════════════════════════════════════════════════════════════════════════
+
+model HealthRequirement {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId          String          @map("trip_id") @db.Uuid
+  destinationName String          @map("destination_name") @db.VarChar(255)
+  requirementType RequirementType @map("requirement_type")
+  description     String?
+  severity        Severity        @default(recommended)
+  acknowledgedBy  String[]        @default([]) @map("acknowledged_by") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@index([tripId, severity])
+  @@map("health_requirements")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 8. POINTS OF INTEREST
+// ════════════════════════════════════════════════════════════════════════════
+
+model PointOfInterest {
+  id                    String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId                String      @map("trip_id") @db.Uuid
+  name                  String      @db.VarChar(255)
+  destination           String?     @db.VarChar(255)
+  category              POICategory
+  matchedHobbies        String[]    @default([]) @map("matched_hobbies")
+  estimatedDurationHours Decimal?   @map("estimated_duration_hours") @db.Decimal(4, 2)
+  costEstimate          Decimal?    @map("cost_estimate") @db.Decimal(10, 2)
+  currency              String      @default("USD") @db.Char(3)
+  rating                Decimal?    @db.Decimal(3, 2)
+  reviewCount           Int         @default(0) @map("review_count")
+  approved              Boolean     @default(false)
+  googlePlaceId         String?     @map("google_place_id") @db.VarChar(255)
+  createdAt             DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@index([tripId, category])
+  @@index([matchedHobbies], type: Gin)
+  @@map("points_of_interest")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 9. TRIP BUDGET
+// ════════════════════════════════════════════════════════════════════════════
+
+model TripBudget {
+  tripId              String   @id @map("trip_id") @db.Uuid
+  dailyBudget         Decimal  @map("daily_budget") @db.Decimal(10, 2)
+  currency            String   @default("USD") @db.Char(3)
+  totalDays           Int      @map("total_days")
+  totalBudgetComputed Decimal? @map("total_budget_computed") @db.Decimal(12, 2)
+  flightsAllocated    Decimal  @default(0) @map("flights_allocated") @db.Decimal(10, 2)
+  staysAllocated      Decimal  @default(0) @map("stays_allocated") @db.Decimal(10, 2)
+  foodAllocated       Decimal  @default(0) @map("food_allocated") @db.Decimal(10, 2)
+  activitiesAllocated Decimal  @default(0) @map("activities_allocated") @db.Decimal(10, 2)
+  bufferAllocated     Decimal  @default(0) @map("buffer_allocated") @db.Decimal(10, 2)
+  needsIncrease       Boolean  @default(false) @map("needs_increase")
+  suggestedIncrease   Decimal  @default(0) @map("suggested_increase") @db.Decimal(10, 2)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime? @updatedAt @map("updated_at") @db.Timestamptz
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@map("trip_budget")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 10. FLIGHT SEARCHES
+// ════════════════════════════════════════════════════════════════════════════
+
+model FlightSearch {
+  id                  String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId              String     @map("trip_id") @db.Uuid
+  originAirport       String     @map("origin_airport") @db.Char(3)
+  destinationAirport  String     @map("destination_airport") @db.Char(3)
+  departureDate       DateTime   @map("departure_date") @db.Date
+  returnDate          DateTime?  @map("return_date") @db.Date
+  cabinClass          CabinClass @default(economy) @map("cabin_class")
+  preferredAirline    String?    @map("preferred_airline") @db.VarChar(100)
+  bestPriceOnly       Boolean    @default(true) @map("best_price_only")
+  priceRangeMin       Decimal?   @map("price_range_min") @db.Decimal(10, 2)
+  priceRangeMax       Decimal?   @map("price_range_max") @db.Decimal(10, 2)
+  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  trip    Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  options FlightOption[]
+
+  @@index([tripId])
+  @@map("flight_searches")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 11. FLIGHT OPTIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+model FlightOption {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  searchId        String   @map("search_id") @db.Uuid
+  airline         String   @db.VarChar(100)
+  flightNumbers   String?  @map("flight_numbers")
+  departureTime   DateTime @map("departure_time") @db.Timestamptz
+  arrivalTime     DateTime @map("arrival_time") @db.Timestamptz
+  durationMinutes Int      @map("duration_minutes")
+  stops           Int      @default(0)
+  price           Decimal  @db.Decimal(10, 2)
+  currency        String   @default("USD") @db.Char(3)
+  bookingUrl      String?  @map("booking_url")
+  isSelected      Boolean  @default(false) @map("is_selected")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  search FlightSearch @relation(fields: [searchId], references: [id], onDelete: Cascade)
+
+  @@index([searchId])
+  @@index([searchId, price])
+  @@map("flight_options")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 12. ACCOMMODATIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+model Accommodation {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId        String            @map("trip_id") @db.Uuid
+  name          String            @db.VarChar(255)
+  type          AccommodationType
+  checkIn       DateTime          @map("check_in") @db.Date
+  checkOut      DateTime          @map("check_out") @db.Date
+  nightlyRate   Decimal           @map("nightly_rate") @db.Decimal(10, 2)
+  totalCost     Decimal?          @map("total_cost") @db.Decimal(10, 2)
+  currency      String            @default("USD") @db.Char(3)
+  rating        Decimal?          @db.Decimal(3, 2)
+  reviewSummary String?           @map("review_summary")
+  address       String?
+  latitude      Decimal?          @db.Decimal(10, 8)
+  longitude     Decimal?          @db.Decimal(11, 8)
+  amenities     Json              @default("[]")
+  isSelected    Boolean           @default(false) @map("is_selected")
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@map("accommodations")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 13. DINING SUGGESTIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+model DiningSuggestion {
+  id              String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId          String     @map("trip_id") @db.Uuid
+  itineraryDay    Int        @map("itinerary_day")
+  mealType        MealType   @map("meal_type")
+  restaurantName  String     @map("restaurant_name") @db.VarChar(255)
+  cuisineType     String?    @map("cuisine_type") @db.VarChar(100)
+  priceRange      PriceRange? @map("price_range")
+  rating          Decimal?   @db.Decimal(3, 2)
+  reviewCount     Int        @default(0) @map("review_count")
+  localFavorite   Boolean    @default(false) @map("local_favorite")
+  dietaryFriendly String[]   @default([]) @map("dietary_friendly")
+  address         String?
+  googlePlaceId   String?    @map("google_place_id") @db.VarChar(255)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, itineraryDay])
+  @@map("dining_suggestions")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 14. ITINERARY DAYS
+// ════════════════════════════════════════════════════════════════════════════
+
+model ItineraryDay {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId    String   @map("trip_id") @db.Uuid
+  dayNumber Int      @map("day_number")
+  date      DateTime @db.Date
+  theme     String?  @db.VarChar(255)
+
+  trip  Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  items ItineraryItem[]
+
+  @@unique([tripId, dayNumber])
+  @@index([tripId, dayNumber])
+  @@map("itinerary_days")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 15. ITINERARY ITEMS
+// ════════════════════════════════════════════════════════════════════════════
+
+model ItineraryItem {
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dayId        String            @map("day_id") @db.Uuid
+  startTime    DateTime?         @map("start_time") @db.Time
+  endTime      DateTime?         @map("end_time") @db.Time
+  itemType     ItineraryItemType @map("item_type")
+  title        String            @db.VarChar(255)
+  description  String?
+  location     String?           @db.VarChar(255)
+  costEstimate Decimal           @default(0) @map("cost_estimate") @db.Decimal(10, 2)
+  notes        String?
+  sortOrder    Int               @default(0) @map("sort_order")
+
+  day ItineraryDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  @@index([dayId, sortOrder])
+  @@map("itinerary_items")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 16. STORYBOARD POSTS
+// ════════════════════════════════════════════════════════════════════════════
+
+model StoryboardPost {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tripId      String         @map("trip_id") @db.Uuid
+  userId      String         @map("user_id") @db.Uuid
+  platform    SocialPlatform
+  caption     String?
+  mediaUrls   String[]       @default([]) @map("media_urls")
+  hashtags    String[]       @default([])
+  stylePreset String?        @map("style_preset") @db.VarChar(50)
+  generatedAt DateTime       @default(now()) @map("generated_at") @db.Timestamptz
+  posted      Boolean        @default(false)
+  postedAt    DateTime?      @map("posted_at") @db.Timestamptz
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@index([userId])
+  @@map("storyboard_posts")
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 17. ANALYTICS EVENTS
+// ════════════════════════════════════════════════════════════════════════════
+
+model AnalyticsEvent {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  tripId     String?  @map("trip_id") @db.Uuid
+  screenName String   @map("screen_name") @db.VarChar(100)
+  eventType  String   @map("event_type") @db.VarChar(50)
+  eventData  Json     @default("{}") @map("event_data")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  trip Trip? @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  @@index([screenName, eventType, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([tripId, createdAt(sort: Desc)])
+  @@map("analytics_events")
+}

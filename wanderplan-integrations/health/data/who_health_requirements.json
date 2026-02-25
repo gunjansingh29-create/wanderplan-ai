@@ -1,0 +1,42 @@
+{
+  "US": {
+    "name": "United States",
+    "required_vaccines": [],
+    "recommended_vaccines": ["Hepatitis A", "Hepatitis B", "Influenza", "Tdap"],
+    "malaria_risk": false,
+    "yellow_fever_certificate": false,
+    "notes": "Routine vaccinations recommended."
+  },
+  "IN": {
+    "name": "India",
+    "required_vaccines": ["Yellow Fever (if arriving from endemic area)"],
+    "recommended_vaccines": ["Hepatitis A", "Hepatitis B", "Typhoid", "Japanese Encephalitis", "Rabies", "Polio"],
+    "malaria_risk": true,
+    "yellow_fever_certificate": true,
+    "notes": "Malaria prophylaxis recommended for rural areas."
+  },
+  "TH": {
+    "name": "Thailand",
+    "required_vaccines": ["Yellow Fever (if arriving from endemic area)"],
+    "recommended_vaccines": ["Hepatitis A", "Hepatitis B", "Typhoid", "Japanese Encephalitis", "Rabies"],
+    "malaria_risk": true,
+    "yellow_fever_certificate": true,
+    "notes": "Malaria risk mainly in border areas."
+  },
+  "BR": {
+    "name": "Brazil",
+    "required_vaccines": ["Yellow Fever"],
+    "recommended_vaccines": ["Hepatitis A", "Hepatitis B", "Typhoid", "Rabies"],
+    "malaria_risk": true,
+    "yellow_fever_certificate": true,
+    "notes": "Yellow fever vaccine required for Amazon region."
+  },
+  "KE": {
+    "name": "Kenya",
+    "required_vaccines": ["Yellow Fever"],
+    "recommended_vaccines": ["Hepatitis A", "Hepatitis B", "Typhoid", "Meningococcal", "Rabies", "Polio"],
+    "malaria_risk": true,
+    "yellow_fever_certificate": true,
+    "notes": "Malaria prophylaxis strongly recommended."
+  }
+}

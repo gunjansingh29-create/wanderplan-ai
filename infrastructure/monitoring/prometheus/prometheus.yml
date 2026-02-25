@@ -1,0 +1,113 @@
+# =============================================================================
+# Prometheus Configuration — Replaces AWS CloudWatch Metrics
+# Scrapes all 15 agents + infrastructure + host metrics
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    cluster: wanderplan-production
+    environment: production
+
+# --- Alert rules ---
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# --- Alertmanager targets ---
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+# --- Scrape targets ---
+scrape_configs:
+
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # ---- Traefik (replaces ALB metrics) ----
+  - job_name: "traefik"
+    static_configs:
+      - targets: ["traefik:8082"]
+    metrics_path: /metrics
+
+  # ---- Orchestrator Agent ----
+  - job_name: "orchestrator"
+    static_configs:
+      - targets: ["orchestrator:8000"]
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # ---- Specialist Agents (all 14) ----
+  - job_name: "specialist-agents"
+    static_configs:
+      - targets:
+          - "bucket-list:8001"
+          - "timing:8002"
+          - "interest-profiler:8003"
+          - "health-accessibility:8004"
+          - "poi-discovery:8005"
+          - "duration-optimizer:8006"
+          - "availability:8007"
+          - "budget:8008"
+          - "flight:8009"
+          - "accommodation:8010"
+          - "dining:8011"
+          - "itinerary:8012"
+          - "calendar:8013"
+          - "group-coordinator:8014"
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "(.+):\\d+"
+        target_label: agent_name
+
+  # ---- Kafka brokers ----
+  - job_name: "kafka"
+    static_configs:
+      - targets:
+          - "kafka-1:9092"
+          - "kafka-2:9093"
+          - "kafka-3:9094"
+        labels:
+          cluster: "wanderplan-kafka"
+
+  # ---- Redis ----
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis-master:6379"]
+
+  # ---- PostgreSQL ----
+  - job_name: "postgres"
+    static_configs:
+      - targets:
+          - "postgres-primary:5432"
+          - "postgres-replica:5432"
+
+  # ---- Host machine (replaces CloudWatch EC2 metrics) ----
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # ---- Container metrics (replaces ECS container insights) ----
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # ---- OpenSearch ----
+  - job_name: "opensearch"
+    static_configs:
+      - targets: ["opensearch-node1:9200", "opensearch-node2:9200"]
+    metrics_path: /_prometheus/metrics
+
+  # ---- MinIO (replaces S3 metrics) ----
+  - job_name: "minio"
+    static_configs:
+      - targets: ["minio:9000"]
+    metrics_path: /minio/v2/metrics/cluster

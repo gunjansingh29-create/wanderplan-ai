@@ -1,0 +1,363 @@
+# =============================================================================
+# WanderPlan AI - Docker Compose
+# Full infrastructure: 15 agent services + data stores + messaging + gateway
+# =============================================================================
+
+version: "3.9"
+
+x-agent-common: &agent-common
+  build:
+    context: ..
+    dockerfile: infrastructure/Dockerfile.agent
+  restart: unless-stopped
+  networks:
+    - wanderplan
+  depends_on:
+    redis:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+  environment: &agent-env
+    REDIS_URL: redis://redis:6379/0
+    KAFKA_BOOTSTRAP: kafka:9092
+    PINECONE_API_KEY: ${PINECONE_API_KEY:-}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    LLM_MODEL: claude-sonnet-4-20250514
+    LOG_LEVEL: INFO
+
+services:
+
+  # =========================================================================
+  # API GATEWAY
+  # =========================================================================
+
+  kong:
+    image: kong:3.6
+    container_name: wanderplan-kong
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_PROXY_LISTEN: "0.0.0.0:8080"
+      KONG_ADMIN_LISTEN: "0.0.0.0:8081"
+      KONG_LOG_LEVEL: info
+    volumes:
+      - ../gateway/kong.yml:/etc/kong/kong.yml:ro
+    ports:
+      - "8080:8080"    # Public API
+      - "8081:8081"    # Admin API
+    networks:
+      - wanderplan
+    depends_on:
+      - orchestrator
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =========================================================================
+  # ORCHESTRATOR (Agent 15 — the coordinator)
+  # =========================================================================
+
+  orchestrator:
+    <<: *agent-common
+    container_name: wanderplan-orchestrator
+    command: ["uvicorn", "agents.orchestrator:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *agent-env
+      AGENT_ID: orchestrator
+      AGENT_PORT: "8000"
+
+  # =========================================================================
+  # SPECIALIST AGENTS (Agents 1–14)
+  # =========================================================================
+
+  bucket-list:
+    <<: *agent-common
+    container_name: wanderplan-bucket-list
+    command: ["uvicorn", "agents.specialists.bucket_list:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: bucket_list
+      AGENT_PORT: "8001"
+
+  timing:
+    <<: *agent-common
+    container_name: wanderplan-timing
+    command: ["uvicorn", "agents.specialists.timing:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: timing
+      AGENT_PORT: "8002"
+
+  interest-profiler:
+    <<: *agent-common
+    container_name: wanderplan-interest-profiler
+    command: ["uvicorn", "agents.specialists.interest_profiler:app", "--host", "0.0.0.0", "--port", "8003"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: interest_profiler
+      AGENT_PORT: "8003"
+
+  health-accessibility:
+    <<: *agent-common
+    container_name: wanderplan-health-accessibility
+    command: ["uvicorn", "agents.specialists.health_accessibility:app", "--host", "0.0.0.0", "--port", "8004"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: health_accessibility
+      AGENT_PORT: "8004"
+
+  poi-discovery:
+    <<: *agent-common
+    container_name: wanderplan-poi-discovery
+    command: ["uvicorn", "agents.specialists.poi_discovery:app", "--host", "0.0.0.0", "--port", "8005"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: poi_discovery
+      AGENT_PORT: "8005"
+
+  duration-optimizer:
+    <<: *agent-common
+    container_name: wanderplan-duration-optimizer
+    command: ["uvicorn", "agents.specialists.duration_optimizer:app", "--host", "0.0.0.0", "--port", "8006"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: duration_optimizer
+      AGENT_PORT: "8006"
+
+  availability:
+    <<: *agent-common
+    container_name: wanderplan-availability
+    command: ["uvicorn", "agents.specialists.availability:app", "--host", "0.0.0.0", "--port", "8007"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: availability
+      AGENT_PORT: "8007"
+
+  budget:
+    <<: *agent-common
+    container_name: wanderplan-budget
+    command: ["uvicorn", "agents.specialists.budget:app", "--host", "0.0.0.0", "--port", "8008"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: budget
+      AGENT_PORT: "8008"
+
+  flight:
+    <<: *agent-common
+    container_name: wanderplan-flight
+    command: ["uvicorn", "agents.specialists.flight:app", "--host", "0.0.0.0", "--port", "8009"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: flight
+      AGENT_PORT: "8009"
+
+  accommodation:
+    <<: *agent-common
+    container_name: wanderplan-accommodation
+    command: ["uvicorn", "agents.specialists.accommodation:app", "--host", "0.0.0.0", "--port", "8010"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: accommodation
+      AGENT_PORT: "8010"
+
+  dining:
+    <<: *agent-common
+    container_name: wanderplan-dining
+    command: ["uvicorn", "agents.specialists.dining:app", "--host", "0.0.0.0", "--port", "8011"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: dining
+      AGENT_PORT: "8011"
+
+  itinerary:
+    <<: *agent-common
+    container_name: wanderplan-itinerary
+    command: ["uvicorn", "agents.specialists.itinerary:app", "--host", "0.0.0.0", "--port", "8012"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: itinerary
+      AGENT_PORT: "8012"
+
+  calendar:
+    <<: *agent-common
+    container_name: wanderplan-calendar
+    command: ["uvicorn", "agents.specialists.calendar_agent:app", "--host", "0.0.0.0", "--port", "8013"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: calendar
+      AGENT_PORT: "8013"
+
+  group-coordinator:
+    <<: *agent-common
+    container_name: wanderplan-group-coordinator
+    command: ["uvicorn", "agents.specialists.group_coordinator:app", "--host", "0.0.0.0", "--port", "8014"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: group_coordinator
+      AGENT_PORT: "8014"
+
+  # =========================================================================
+  # DATA STORES
+  # =========================================================================
+
+  redis:
+    image: redis:7-alpine
+    container_name: wanderplan-redis
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - wanderplan
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: wanderplan-postgres
+    environment:
+      POSTGRES_DB: wanderplan
+      POSTGRES_USER: wanderplan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wanderplan_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - wanderplan
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wanderplan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    container_name: wanderplan-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: wanderplan
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-wanderplan_dev}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - wanderplan
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: elasticsearch:8.13.0
+    container_name: wanderplan-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - wanderplan
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # =========================================================================
+  # MESSAGING (Apache Kafka)
+  # =========================================================================
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: wanderplan-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - wanderplan
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: wanderplan-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 6
+    networks:
+      - wanderplan
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: wanderplan-kafka-ui
+    ports:
+      - "9090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: wanderplan
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - wanderplan
+
+  # =========================================================================
+  # OBSERVABILITY
+  # =========================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: wanderplan-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9091:9090"
+    networks:
+      - wanderplan
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: wanderplan-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    networks:
+      - wanderplan
+
+# =========================================================================
+# VOLUMES & NETWORKS
+# =========================================================================
+
+volumes:
+  redis-data:
+  postgres-data:
+  mongodb-data:
+  elasticsearch-data:
+
+networks:
+  wanderplan:
+    driver: bridge
