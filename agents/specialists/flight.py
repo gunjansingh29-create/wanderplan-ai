@@ -1,3 +1,5 @@
+
+from __future__ import annotations
 from fastapi import FastAPI
 
 app = FastAPI()
@@ -12,8 +14,6 @@ Ranks by price, duration, stops, and departure time.
 
 External APIs: Amadeus, Skyscanner, Google Flights, Kiwi.
 """
-
-from __future__ import annotations
 
 import uuid
 from datetime import datetime
@@ -42,11 +42,6 @@ class FlightAgent(BaseAgent):
             agent_name="Flight Agent",
             port=8009,
             system_prompt=SYSTEM_PROMPT,
-            from fastapi import FastAPI
-            app = FastAPI()
-            @app.get("/health")
-            def health():
-                return {"status": "ok"}
             **kwargs,
         )
         super().__init__(config)

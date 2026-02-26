@@ -1,9 +1,14 @@
 
+from __future__ import annotations
 from fastapi import FastAPI
+
 app = FastAPI()
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
 """
 Agent 8: Budget Agent
 Manages trip budget planning, allocation across categories, and real-time tracking.
@@ -11,7 +16,6 @@ Provides cost estimates and alerts when spending approaches limits.
 
 External APIs: Currency exchange rates, cost-of-living indices.
 """
-from __future__ import annotations
 
 from agents.base_agent import AgentConfig, BaseAgent
 from models.trip_context import Budget, TripContext
@@ -42,12 +46,6 @@ class BudgetAgent(BaseAgent):
         super().__init__(config)
 
     @property
-    from fastapi import FastAPI
-    app = FastAPI()
-    @app.get("/health")
-    def health():
-        return {"status": "ok"}
-    """
     def capabilities(self) -> list[str]:
         return [
             "budget_planning",
@@ -61,8 +59,12 @@ class BudgetAgent(BaseAgent):
         entities = message.payload.get("entities", {})
         budget_amount = entities.get("budget_amount")
 
-        duration = trip.duration_days or 7
 
+        # Example logic for budget calculation (replace with your actual logic)
+        if budget_amount:
+            total = float(budget_amount)
+            daily = total / duration
+            budget = Budget(
                 daily_target=round(daily, 2),
                 total_budget=total,
                 spent=0.0,

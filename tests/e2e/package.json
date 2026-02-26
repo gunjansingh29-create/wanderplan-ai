@@ -1,0 +1,31 @@
+{
+  "name": "wanderplan-ai-e2e-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright E2E tests for WanderPlan AI covering all user journeys, responsive layouts, and accessibility.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:solo": "playwright test 01-happy-path-solo.spec.ts",
+    "test:e2e:group": "playwright test 02-happy-path-group.spec.ts",
+    "test:e2e:edge": "playwright test 03-edge-cases.spec.ts",
+    "test:e2e:responsive": "playwright test 04-responsive.spec.ts",
+    "test:e2e:a11y": "playwright test 05-accessibility.spec.ts",
+    "test:e2e:report": "playwright show-report",
+    "codegen": "playwright codegen http://localhost:3000"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.9.1",
+    "axe-core": "^4.9.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0",
+    "@types/node": "^20.19.35",
+    "typescript": "^5.9.3"
+  }
+}

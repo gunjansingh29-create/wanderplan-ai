@@ -1,4 +1,55 @@
+﻿
 from __future__ import annotations
+import os
+from typing import Any, Optional
+
+import asyncpg
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# Integration-test seed users (kept in sync with tests/integration/setup/seed.sql)
+USERS = {
+    "alice@test.com": {
+        "password": "Password1!",
+        "user_id": "00000000-0000-0000-0000-000000000001",
+        "name": "Alice Chen",
+    },
+    "bob@test.com": {
+        "password": "Password1!",
+        "user_id": "00000000-0000-0000-0000-000000000002",
+        "name": "Bob Smith",
+    },
+    "carol@test.com": {
+        "password": "Password1!",
+        "user_id": "00000000-0000-0000-0000-000000000003",
+        "name": "Carol Park",
+    },
+    "dave@test.com": {
+        "password": "Password1!",
+        "user_id": "00000000-0000-0000-0000-000000000004",
+        "name": "Dave Jones",
+    },
+    "eve@test.com": {
+        "password": "Password1!",
+        "user_id": "00000000-0000-0000-0000-000000000005",
+        "name": "Eve Martinez",
+    },
+    "frank@test.com": {
+        "password": "Password1!",
+        "user_id": "00000000-0000-0000-0000-000000000006",
+        "name": "Frank Lee",
+    },
+}
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class AuthResponse(BaseModel):
+    accessToken: str
+    user_id: str
+    name: str
 
 """
 WanderPlan AI - Orchestrator Agent
@@ -10,8 +61,235 @@ Central coordinator that:
     5. Formats it as a yes/no decision or minimal-input question
     6. Tracks workflow via a planning state machine
 """
-from fastapi import FastAPI
 app = FastAPI()
+
+_allowed_origins = os.getenv("FRONTEND_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _allowed_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+db_pool: asyncpg.Pool | None = None
+
+
+class CreateTripRequest(BaseModel):
+    name: str
+    destination_hint: Optional[str] = None
+    duration_days: int = 7
+
+
+class InviteMemberRequest(BaseModel):
+    email: str
+    role: str = "member"
+
+
+class UpdateMemberRequest(BaseModel):
+    status: str
+
+
+def _parse_user_id_from_token(authorization: str) -> str:
+    prefix = "Bearer "
+    if not authorization or not authorization.startswith(prefix):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    token = authorization[len(prefix) :].strip()
+    if token.startswith("test-token:"):
+        return token.split(":", 1)[1]
+    raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def get_current_user_id(authorization: str = Header(...)) -> str:
+    return _parse_user_id_from_token(authorization)
+
+
+@app.on_event("startup")
+async def _startup_db():
+    global db_pool
+    dsn = os.getenv(
+        "POSTGRES_DSN",
+        "postgresql://wanderplan:wanderplan_test@localhost:15432/wanderplan_test",
+    )
+    # SQLAlchemy-style DSN is used in compose; asyncpg expects postgresql://...
+    dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+    db_pool = await asyncpg.create_pool(
+        dsn=dsn
+    )
+
+
+@app.on_event("shutdown")
+async def _shutdown_db():
+    global db_pool
+    if db_pool is not None:
+        await db_pool.close()
+        db_pool = None
+
+# Add /auth/login endpoint
+@app.post("/auth/login", response_model=AuthResponse)
+async def login(request: LoginRequest):
+    user = USERS.get(request.email)
+    if not user or user["password"] != request.password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return AuthResponse(
+        accessToken=f"test-token:{user['user_id']}",
+        user_id=user["user_id"],
+        name=user["name"]
+    )
+
+
+@app.post("/trips", status_code=201)
+async def create_trip(body: CreateTripRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        trip = await conn.fetchrow(
+            """
+            INSERT INTO trips (owner_id, name, status, duration_days)
+            VALUES ($1, $2, 'planning', $3)
+            RETURNING id, owner_id, name, status, duration_days
+            """,
+            user_id,
+            body.name,
+            body.duration_days,
+        )
+        await conn.execute(
+            """
+            INSERT INTO trip_members (trip_id, user_id, role, status, joined_at)
+            VALUES ($1, $2, 'owner', 'accepted', NOW())
+            ON CONFLICT (trip_id, user_id)
+            DO UPDATE SET role = 'owner', status = 'accepted', joined_at = NOW()
+            """,
+            trip["id"],
+            user_id,
+        )
+
+    return {
+        "trip": {
+            "id": str(trip["id"]),
+            "owner_id": str(trip["owner_id"]),
+            "name": trip["name"],
+            "status": trip["status"],
+            "duration_days": trip["duration_days"],
+        }
+    }
+
+
+@app.get("/trips/{trip_id}")
+async def get_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        trip = await conn.fetchrow(
+            "SELECT id, owner_id, name, status, duration_days FROM trips WHERE id = $1",
+            trip_id,
+        )
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+
+        member = await conn.fetchrow(
+            "SELECT 1 FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not member:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        members = await conn.fetch(
+            """
+            SELECT user_id, role, status
+            FROM trip_members
+            WHERE trip_id = $1
+            ORDER BY joined_at NULLS FIRST
+            """,
+            trip_id,
+        )
+
+    return {
+        "trip": {
+            "id": str(trip["id"]),
+            "owner_id": str(trip["owner_id"]),
+            "name": trip["name"],
+            "status": trip["status"],
+            "duration_days": trip["duration_days"],
+            "members": [
+                {
+                    "user_id": str(m["user_id"]),
+                    "role": m["role"],
+                    "status": m["status"],
+                }
+                for m in members
+            ],
+        }
+    }
+
+
+@app.post("/trips/{trip_id}/members", status_code=201)
+async def invite_member(
+    trip_id: str,
+    body: InviteMemberRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        if str(trip["owner_id"]) != user_id:
+            raise HTTPException(status_code=403, detail="Only owner can invite members")
+
+        invitee = await conn.fetchrow("SELECT id FROM users WHERE email = $1", body.email)
+        if not invitee:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        row = await conn.fetchrow(
+            """
+            INSERT INTO trip_members (trip_id, user_id, role, status)
+            VALUES ($1, $2, $3, 'pending')
+            ON CONFLICT (trip_id, user_id)
+            DO UPDATE SET role = EXCLUDED.role, status = 'pending'
+            RETURNING user_id, role, status
+            """,
+            trip_id,
+            invitee["id"],
+            body.role,
+        )
+
+    return {"user_id": str(row["user_id"]), "role": row["role"], "status": row["status"]}
+
+
+@app.put("/trips/{trip_id}/members/{member_user_id}")
+async def update_member_status(
+    trip_id: str,
+    member_user_id: str,
+    body: UpdateMemberRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if user_id != member_user_id:
+        raise HTTPException(status_code=403, detail="Cannot update another member status")
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE trip_members
+            SET status = $1, joined_at = CASE WHEN $1 = 'accepted' THEN NOW() ELSE joined_at END
+            WHERE trip_id = $2 AND user_id = $3
+            RETURNING user_id, role, status
+            """,
+            body.status,
+            trip_id,
+            member_user_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Membership not found")
+
+    return {"user_id": str(row["user_id"]), "role": row["role"], "status": row["status"]}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -19,10 +297,6 @@ def health():
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, Optional
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
 
 from core.intent_classifier import ClassificationResult, IntentClassifier, SystemIntent
 from core.state_machine import (
@@ -45,7 +319,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Response formatter — converts agent output into simple user questions
+# Response formatter â€” converts agent output into simple user questions
 # ---------------------------------------------------------------------------
 
 RESPONSE_FORMATTER_PROMPT = """\
@@ -54,6 +328,15 @@ You are the user-facing voice of WanderPlan AI.
 Given the specialist agent's response payload below, create a SIMPLE question
     from fastapi import FastAPI
     app = FastAPI()
+
+_allowed_origins = os.getenv("FRONTEND_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _allowed_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
     @app.get("/health")
     def health():
          return {"status": "ok"}
@@ -73,7 +356,7 @@ Stage: {stage}
 
 ## Rules
 - Keep the question under 2 sentences.
-- Never overwhelm the user with details — distill to one decision.
+- Never overwhelm the user with details â€” distill to one decision.
 - If the agent has completed its work with no further input needed, respond
   with a brief summary and set input_type to "none".
 
@@ -89,7 +372,7 @@ Respond in JSON:
 
 class OrchestratorAgent:
     """
-    The 15th agent — the brain of WanderPlan AI.
+    The 15th agent â€” the brain of WanderPlan AI.
 
     Manages the full trip planning lifecycle by coordinating 14 specialist
     agents through an event-driven architecture.
@@ -106,13 +389,13 @@ class OrchestratorAgent:
         self.classifier = IntentClassifier(llm_client)
         self._llm = llm_client
 
-        # In-memory map of trip_id → state machine (also persisted in Redis)
+        # In-memory map of trip_id â†’ state machine (also persisted in Redis)
         self._machines: dict[str, PlanningStateMachine] = {}
 
-        # Pending response futures: correlation_id → asyncio.Future
+        # Pending response futures: correlation_id â†’ asyncio.Future
         self._pending: dict[str, Any] = {}
 
-        # Connected WebSocket clients: trip_id → WebSocket
+        # Connected WebSocket clients: trip_id â†’ WebSocket
         self._ws_clients: dict[str, list[WebSocket]] = {}
 
     # -- Lifecycle -----------------------------------------------------------
@@ -142,7 +425,7 @@ class OrchestratorAgent:
         await self.state.disconnect()
 
     # -----------------------------------------------------------------------
-    # PUBLIC API — called by the FastAPI gateway
+    # PUBLIC API â€” called by the FastAPI gateway
     # -----------------------------------------------------------------------
 
     async def start_trip(self, user_id: str, user_name: str) -> TripContext:
@@ -198,7 +481,7 @@ class OrchestratorAgent:
                 trip_id, trip, sm, classification
             )
 
-        # Planning-stage intent → dispatch to specialist
+        # Planning-stage intent â†’ dispatch to specialist
         target_stage = classification.planning_stage or sm.current_stage
         return await self._dispatch_to_agent(
             trip_id, trip, sm, target_stage, user_message, classification
@@ -215,7 +498,7 @@ class OrchestratorAgent:
         }
 
     # -----------------------------------------------------------------------
-    # INTERNAL — system intent handling
+    # INTERNAL â€” system intent handling
     # -----------------------------------------------------------------------
 
     async def _handle_system_intent(
@@ -243,7 +526,7 @@ class OrchestratorAgent:
                 trip_id=trip_id,
                 stage=sm.current_stage,
                 question_text=(
-                    "I help you plan trips step by step — from dream destinations "
+                    "I help you plan trips step by step â€” from dream destinations "
                     "to a calendar-ready itinerary. Just tell me where you'd like "
                     "to go, and I'll guide you through the rest!"
                 ),
@@ -305,7 +588,7 @@ class OrchestratorAgent:
         )
 
     # -----------------------------------------------------------------------
-    # INTERNAL — specialist agent dispatch
+    # INTERNAL â€” specialist agent dispatch
     # -----------------------------------------------------------------------
 
     async def _dispatch_to_agent(
@@ -328,7 +611,7 @@ class OrchestratorAgent:
             return UserPrompt(
                 trip_id=trip_id,
                 stage=sm.current_stage,
-                question_text="Something went wrong. Let's try that again — what would you like to do?",
+                question_text="Something went wrong. Let's try that again â€” what would you like to do?",
                 input_type="text",
             )
 
@@ -379,7 +662,7 @@ class OrchestratorAgent:
         if response.requires_user_input:
             return await self._format_agent_response(trip_id, trip, sm, response)
         else:
-            # Agent completed — advance the state machine
+            # Agent completed â€” advance the state machine
             sm.advance()
             await self.state.set_stage(trip_id, sm.current_stage.value)
             await self.state.mark_agent_complete(trip_id, target_agent.value)
@@ -452,7 +735,7 @@ class OrchestratorAgent:
         )
 
     # -----------------------------------------------------------------------
-    # INTERNAL — Kafka consumer callbacks
+    # INTERNAL â€” Kafka consumer callbacks
     # -----------------------------------------------------------------------
 
     async def _handle_agent_response(self, message: AgentMessage) -> None:
@@ -526,3 +809,5 @@ class OrchestratorAgent:
                 orch._ws_clients[trip_id].remove(websocket)
 
         return app
+
+

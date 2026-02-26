@@ -22,12 +22,6 @@ from models.trip_context import DiningOption, TripContext
 from schemas.messages import AgentID, AgentMessage, PlanningStage
 
 SYSTEM_PROMPT = """\
-from fastapi import FastAPI
-app = FastAPI()
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-"""
 You are the Dining Agent for WanderPlan AI.
 Recommend restaurants and food experiences considering:
 - Cuisine preferences from interest profiles
@@ -45,6 +39,12 @@ class DiningAgent(BaseAgent):
     def __init__(self, **kwargs):
         config = AgentConfig(
             agent_id=AgentID.DINING,
+            agent_name="Dining Agent",
+            port=8011,
+            system_prompt=SYSTEM_PROMPT,
+            **kwargs,
+        )
+        super().__init__(config)
 
     @property
     def capabilities(self) -> list[str]:

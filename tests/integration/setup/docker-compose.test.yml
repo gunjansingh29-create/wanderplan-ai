@@ -1,0 +1,343 @@
+# =============================================================================
+# WanderPlan AI — Integration Test Docker Compose
+# Spins up a fully isolated stack with test-scoped databases.
+# Usage:  docker compose -f tests/integration/setup/docker-compose.test.yml up -d
+#         npm run test:integration
+#         docker compose -f tests/integration/setup/docker-compose.test.yml down -v
+# =============================================================================
+
+version: "3.9"
+
+x-agent-common: &agent-common
+  build:
+    context: ../../..
+    dockerfile: infrastructure/Dockerfile.agent
+  restart: "no"
+  networks:
+    - wanderplan-test
+  depends_on:
+    postgres-test:
+      condition: service_healthy
+    redis-test:
+      condition: service_healthy
+    kafka-test:
+      condition: service_healthy
+  environment: &agent-env
+    REDIS_URL: redis://redis-test:6379/1          # DB 1 = test isolation
+    KAFKA_BOOTSTRAP: kafka-test:9092
+    POSTGRES_DSN: postgresql+asyncpg://wanderplan:wanderplan_test@postgres-test:5432/wanderplan_test
+    MONGODB_URI: mongodb://wanderplan:wanderplan_test@mongodb-test:27017/wanderplan_test
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-test-key-stub}
+    LLM_MODEL: claude-haiku-4-5-20251001         # cheapest model for tests
+    LOG_LEVEL: WARNING
+    ENVIRONMENT: test
+    JWT_SECRET: integration-test-jwt-secret-do-not-use-in-prod
+    # External APIs stubbed via mock server
+    AMADEUS_BASE_URL: http://mock-apis:4000/amadeus
+    GOOGLE_PLACES_BASE_URL: http://mock-apis:4000/google-places
+    CALENDAR_API_BASE_URL: http://mock-apis:4000/calendar
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # MOCK EXTERNAL APIs  (nock / MSW server so no real money is spent)
+  # ---------------------------------------------------------------------------
+  mock-apis:
+    image: node:20-alpine
+    container_name: wp-test-mock-apis
+    working_dir: /app
+    volumes:
+      - ./mock-server:/app
+    command: ["node", "server.js"]
+    ports:
+      - "4000:4000"
+    networks:
+      - wanderplan-test
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # ORCHESTRATOR (gateway for all Supertest calls)
+  # ---------------------------------------------------------------------------
+  orchestrator-test:
+    <<: *agent-common
+    container_name: wp-test-orchestrator
+    command: ["uvicorn", "agents.orchestrator:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "18000:8000"          # host 18000 -> avoid clashing with local dev
+    environment:
+      <<: *agent-env
+      AGENT_ID: orchestrator
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # SPECIALIST AGENTS
+  # ---------------------------------------------------------------------------
+  bucket-list-test:
+    <<: *agent-common
+    container_name: wp-test-bucket-list
+    command: ["uvicorn", "agents.specialists.bucket_list:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: bucket_list
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  timing-test:
+    <<: *agent-common
+    container_name: wp-test-timing
+    command: ["uvicorn", "agents.specialists.timing:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: timing
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8002/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  interest-profiler-test:
+    <<: *agent-common
+    container_name: wp-test-interest-profiler
+    command: ["uvicorn", "agents.specialists.interest_profiler:app", "--host", "0.0.0.0", "--port", "8003"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: interest_profiler
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8003/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  health-accessibility-test:
+    <<: *agent-common
+    container_name: wp-test-health
+    command: ["uvicorn", "agents.specialists.health_accessibility:app", "--host", "0.0.0.0", "--port", "8004"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: health_accessibility
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8004/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  poi-discovery-test:
+    <<: *agent-common
+    container_name: wp-test-poi-discovery
+    command: ["uvicorn", "agents.specialists.poi_discovery:app", "--host", "0.0.0.0", "--port", "8005"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: poi_discovery
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8005/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  availability-test:
+    <<: *agent-common
+    container_name: wp-test-availability
+    command: ["uvicorn", "agents.specialists.availability:app", "--host", "0.0.0.0", "--port", "8007"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: availability
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8007/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  budget-test:
+    <<: *agent-common
+    container_name: wp-test-budget
+    command: ["uvicorn", "agents.specialists.budget:app", "--host", "0.0.0.0", "--port", "8008"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: budget
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8008/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  flight-test:
+    <<: *agent-common
+    container_name: wp-test-flight
+    command: ["uvicorn", "agents.specialists.flight:app", "--host", "0.0.0.0", "--port", "8009"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: flight
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8009/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  accommodation-test:
+    <<: *agent-common
+    container_name: wp-test-accommodation
+    command: ["uvicorn", "agents.specialists.accommodation:app", "--host", "0.0.0.0", "--port", "8010"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: accommodation
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8010/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  itinerary-test:
+    <<: *agent-common
+    container_name: wp-test-itinerary
+    command: ["uvicorn", "agents.specialists.itinerary:app", "--host", "0.0.0.0", "--port", "8012"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: itinerary
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8012/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  calendar-test:
+    <<: *agent-common
+    container_name: wp-test-calendar
+    command: ["uvicorn", "agents.specialists.calendar_agent:app", "--host", "0.0.0.0", "--port", "8013"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: calendar
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8013/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  group-coordinator-test:
+    <<: *agent-common
+    container_name: wp-test-group-coordinator
+    command: ["uvicorn", "agents.specialists.group_coordinator:app", "--host", "0.0.0.0", "--port", "8014"]
+    environment:
+      <<: *agent-env
+      AGENT_ID: group_coordinator
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8014/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # DATA STORES  (test-isolated, ephemeral volumes)
+  # ---------------------------------------------------------------------------
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: wp-test-postgres
+    environment:
+      POSTGRES_DB: wanderplan_test
+      POSTGRES_USER: wanderplan
+      POSTGRES_PASSWORD: wanderplan_test
+    ports:
+      - "15432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data     # in-memory: fast & auto-cleaned
+    networks:
+      - wanderplan-test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wanderplan -d wanderplan_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis-test:
+    image: redis:7-alpine
+    container_name: wp-test-redis
+    command: ["redis-server", "--save", ""]   # disable persistence
+    ports:
+      - "16379:6379"
+    networks:
+      - wanderplan-test
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mongodb-test:
+    image: mongo:7
+    container_name: wp-test-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: wanderplan
+      MONGO_INITDB_ROOT_PASSWORD: wanderplan_test
+      MONGO_INITDB_DATABASE: wanderplan_test
+    ports:
+      - "27018:27017"
+    tmpfs:
+      - /data/db
+    networks:
+      - wanderplan-test
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # KAFKA (single-node, no persistence)
+  # ---------------------------------------------------------------------------
+  zookeeper-test:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: wp-test-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - wanderplan-test
+
+  kafka-test:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: wp-test-kafka
+    depends_on:
+      - zookeeper-test
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-test:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-test:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_MS: 60000       # 1 min — test speed
+    networks:
+      - wanderplan-test
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  wanderplan-test:
+    driver: bridge
+
+# No named volumes — everything is ephemeral for test isolation

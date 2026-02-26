@@ -1,3 +1,6 @@
+
+from __future__ import annotations
+
 from fastapi import FastAPI
 
 app = FastAPI()
@@ -11,8 +14,6 @@ Searches for hotels, hostels, Airbnbs, and resorts matching budget and preferenc
 
 External APIs: Booking.com, Airbnb, Hotels.com, Expedia.
 """
-
-from __future__ import annotations
 
 import uuid
 

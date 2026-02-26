@@ -1,3 +1,5 @@
+
+from __future__ import annotations
 from fastapi import FastAPI
 
 app = FastAPI()
@@ -5,27 +7,13 @@ app = FastAPI()
 @app.get("/health")
 def health():
     return {"status": "ok"}
-from fastapi import FastAPI
 
-app = FastAPI()
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-"""
-from fastapi import FastAPI
-app = FastAPI()
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 """
 Agent 13: Calendar Agent
 Exports the finalised itinerary to calendar formats (ICS, Google Calendar, Outlook).
 
 External APIs: Google Calendar API, Microsoft Graph (Outlook).
 """
-
-from __future__ import annotations
 
 from datetime import datetime
 

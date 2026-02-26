@@ -1,12 +1,7 @@
-import React from "react";
+﻿import React from 'react';
+import TripWizard from './TripWizard';
 
-function App() {
-  return (
-    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', marginTop: 40 }}>
-      <h1>WanderPlan AI</h1>
-      <p>Welcome! The frontend container is working.</p>
-    </div>
-  );
+export default function App() {
+  return <TripWizard />;
 }
 
-export default App;

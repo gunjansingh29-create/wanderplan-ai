@@ -1,4 +1,6 @@
 
+from __future__ import annotations
+
 from fastapi import FastAPI
 app = FastAPI()
 @app.get("/health")
@@ -11,7 +13,6 @@ Integrates with calendar APIs to find overlapping free windows.
 
 External APIs: Google Calendar, Outlook Calendar.
 """
-from __future__ import annotations
 
 from agents.base_agent import AgentConfig, BaseAgent
 from models.trip_context import TripContext

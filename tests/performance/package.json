@@ -1,0 +1,44 @@
+{
+  "name": "wanderplan-performance-tests",
+  "version": "1.0.0",
+  "description": "k6 performance tests for WanderPlan AI",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "precheck": "which k6 || (echo '❌  k6 not found. Install: https://k6.io/docs/getting-started/installation/' && exit 1)",
+
+    "test:01:search":       "k6 run 01-search-performance.js",
+    "test:02:orchestration":"k6 run 02-agent-orchestration.js",
+    "test:03:db":           "k6 run 03-database-load.js",
+    "test:04:calendar":     "k6 run 04-calendar-sync-burst.js",
+    "test:05:ws":           "k6 run 05-websocket-connections.js",
+    "test:06:storyboard":   "k6 run 06-storyboard-generation.js",
+    "test:07:soak":         "k6 run 07-soak-test.js",
+
+    "test:smoke":   "k6 run --vus 5 --duration 30s 01-search-performance.js",
+    "test:all":     "npm run test:01:search && npm run test:02:orchestration && npm run test:03:db && npm run test:04:calendar && npm run test:05:ws && npm run test:06:storyboard",
+
+    "test:staging": "API_BASE_URL=$STAGING_URL npm run test:all",
+    "test:prod-readonly": "API_BASE_URL=$PROD_URL k6 run --vus 10 --duration 1m 03-database-load.js",
+
+    "test:with-metrics": "k6 run --out influxdb=http://localhost:8086/k6 --out statsd=localhost:8125",
+
+    "db:perf-seed":     "psql $DATABASE_URL -f seed/perf-seed.sql",
+    "db:perf-cleanup":  "psql $DATABASE_URL -f seed/perf-cleanup.sql",
+
+    "stack:up":   "docker compose -f ../../infrastructure/docker-compose.yml up -d --wait",
+    "stack:down": "docker compose -f ../../infrastructure/docker-compose.yml down",
+
+    "grafana:open": "open http://localhost:3001",
+    "results:open": "open results/",
+    "results:clean": "rm -f results/*.html results/*.json"
+  },
+  "devDependencies": {
+    "k6": "^0.51.0"
+  },
+  "k6": {
+    "version": ">=0.51.0"
+  }
+}

@@ -1,0 +1,80 @@
+<testsuites id="" name="" tests="28" failures="0" skipped="3" errors="0" time="224.79744200000002">
+<testsuite name="01-happy-path-solo.spec.ts" timestamp="2026-02-26T21:27:50.826Z" hostname="chromium-desktop" tests="14" failures="0" skipped="2" time="110.698" errors="0">
+<testcase name="01 — Happy Path: Solo Traveler › 1.1 User can sign up with email and complete onboarding" classname="01-happy-path-solo.spec.ts" time="0.361">
+<properties>
+<property name="skip" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.2 Onboarding shows progress bar advancing through 3 steps" classname="01-happy-path-solo.spec.ts" time="0.308">
+<properties>
+<property name="skip" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.3 Create Trip stage — trip name is editable and Continue advances stepper" classname="01-happy-path-solo.spec.ts" time="0.769">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.4 Bucket List — adding 3 destinations and approving advances to Timing" classname="01-happy-path-solo.spec.ts" time="1.309">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.5 Timing — heatmap renders and approval advances to Interests" classname="01-happy-path-solo.spec.ts" time="2.121">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.6 Interests — answering 10 yes/no questions advances to Health" classname="01-happy-path-solo.spec.ts" time="4.079">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.7 No screen shows more than 1 YesNo card requiring a decision simultaneously" classname="01-happy-path-solo.spec.ts" time="3.914">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.8 POIs — 8 approved, continue button appears after all are actioned" classname="01-happy-path-solo.spec.ts" time="7.216">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.9 Budget meter never exceeds $150/day during the journey" classname="01-happy-path-solo.spec.ts" time="19.973">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.10 Economy flight is selected and book button appears" classname="01-happy-path-solo.spec.ts" time="10.608">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.11 Full happy-path completes all 14 stages and triggers calendar sync" classname="01-happy-path-solo.spec.ts" time="14.586">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.12 Stepper shows 13 completed dots at the sync screen" classname="01-happy-path-solo.spec.ts" time="14.529">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.13 Trip summary card on sync screen shows correct budget" classname="01-happy-path-solo.spec.ts" time="15.037">
+</testcase>
+<testcase name="01 — Happy Path: Solo Traveler › 1.14 &quot;Restart demo&quot; button returns to step 0" classname="01-happy-path-solo.spec.ts" time="15.888">
+</testcase>
+</testsuite>
+<testsuite name="02-happy-path-group.spec.ts" timestamp="2026-02-26T21:27:50.826Z" hostname="chromium-desktop" tests="14" failures="0" skipped="1" time="110.874" errors="0">
+<testcase name="02 — Happy Path: Group Trip › 2.1 Organizer can create a group trip and invite 3 members" classname="02-happy-path-group.spec.ts" time="0.218">
+<properties>
+<property name="skip" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.2 Member count badge shows 4 throughout the wizard" classname="02-happy-path-group.spec.ts" time="0.595">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.3 Bucket list voting shows consensus indicator before advancing" classname="02-happy-path-group.spec.ts" time="1.21">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.4 Timing heatmap reflects group compromise (not individual preference)" classname="02-happy-path-group.spec.ts" time="2.082">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.5 Group interests panel shows merged scores from all 4 members" classname="02-happy-path-group.spec.ts" time="3.988">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.6 Health requirements show acknowledgment for all 4 members" classname="02-happy-path-group.spec.ts" time="4.856">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.7 POIs reflect group overlap interests (not individual)" classname="02-happy-path-group.spec.ts" time="7.144">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.8 Availability stage finds an overlap window for all 4 members" classname="02-happy-path-group.spec.ts" time="8.925">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.9 Group budget is set per-person and stays within range for all flights" classname="02-happy-path-group.spec.ts" time="9.858">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.10 Full group flow completes all 14 stages and syncs all 4 calendars" classname="02-happy-path-group.spec.ts" time="14.572">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.11 Sync screen lists all 4 member emails or names in the calendar list" classname="02-happy-path-group.spec.ts" time="14.313">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.12 Itinerary approval is confirmed before advancing to sync screen" classname="02-happy-path-group.spec.ts" time="14.489">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.13 Stepper shows 13 completed dots on the sync screen for group flow" classname="02-happy-path-group.spec.ts" time="14.458">
+</testcase>
+<testcase name="02 — Happy Path: Group Trip › 2.14 Trip summary shows per-person budget and group size" classname="02-happy-path-group.spec.ts" time="14.166">
+</testcase>
+</testsuite>
+</testsuites>

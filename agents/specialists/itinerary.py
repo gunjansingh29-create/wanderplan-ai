@@ -1,3 +1,5 @@
+
+from __future__ import annotations
 from fastapi import FastAPI
 
 app = FastAPI()
@@ -5,22 +7,15 @@ app = FastAPI()
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
 """
 Agent 12: Itinerary Agent
 Assembles the complete day-by-day trip itinerary from all upstream data.
-from fastapi import FastAPI
-app = FastAPI()
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-"""
 Optimises for travel time, opening hours, and activity flow.
 
-This is the most complex agent — it synthesises outputs from POI, Dining,
+This is the most complex agent - it synthesises outputs from POI, Dining,
 Accommodation, Flight, and Duration agents into a coherent schedule.
 """
-
-from __future__ import annotations
 
 from datetime import date, timedelta
 
