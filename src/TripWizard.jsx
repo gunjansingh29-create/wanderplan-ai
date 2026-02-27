@@ -1,8 +1,8 @@
 ﻿import { useState, useEffect, useRef } from "react";
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    DESIGN TOKENS
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const T = {
   primary: "#0D7377", primaryLight: "#1A9A9F", primaryDark: "#095456",
@@ -40,9 +40,9 @@ async function apiJson(path, options = {}) {
   return body;
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    GLOBAL STYLES
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const Styles = () => <style>{`
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,700&family=Source+Sans+3:wght@400;500;600&display=swap');
@@ -63,9 +63,9 @@ const Styles = () => <style>{`
   input,textarea,select{font-family:'Source Sans 3',sans-serif}
 `}</style>;
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    ICON SYSTEM
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const I = ({n,s=18,c="currentColor"}) => {
   const d = {
@@ -94,32 +94,32 @@ const I = ({n,s=18,c="currentColor"}) => {
   return <svg width={s} height={s} viewBox="0 0 24 24" aria-hidden="true">{d[n]||d.map}</svg>;
 };
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    STAGES CONFIG
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const STAGES = [
-  { key:"create",    label:"Create",     icon:"users",    emoji:"ðŸ‘‹" },
-  { key:"bucket",    label:"Bucket List", icon:"heart",    emoji:"ðŸŒ" },
-  { key:"timing",    label:"Timing",      icon:"sun",      emoji:"ðŸ“…" },
-  { key:"interests", label:"Interests",   icon:"hiking",   emoji:"ðŸŽ¯" },
-  { key:"health",    label:"Health",      icon:"shield",   emoji:"ðŸ¥" },
-  { key:"pois",      label:"POIs",        icon:"camera",   emoji:"ðŸ“" },
-  { key:"duration",  label:"Duration",    icon:"clock",    emoji:"â±ï¸" },
-  { key:"avail",     label:"Dates",       icon:"calendar", emoji:"ðŸ—“ï¸" },
-  { key:"budget",    label:"Budget",      icon:"dollar",   emoji:"ðŸ’°" },
-  { key:"flights",   label:"Flights",     icon:"plane",    emoji:"âœˆï¸" },
-  { key:"stays",     label:"Stays",       icon:"hotel",    emoji:"ðŸ¨" },
-  { key:"dining",    label:"Dining",      icon:"food",     emoji:"ðŸ½ï¸" },
-  { key:"itinerary", label:"Itinerary",   icon:"clock",    emoji:"ðŸ“‹" },
-  { key:"sync",      label:"Sync",        icon:"send",     emoji:"ðŸŽ‰" },
+  { key:"create",    label:"Create",     icon:"users",    emoji:"👋" },
+  { key:"bucket",    label:"Bucket List", icon:"heart",    emoji:"🌍" },
+  { key:"timing",    label:"Timing",      icon:"sun",      emoji:"📅" },
+  { key:"interests", label:"Interests",   icon:"hiking",   emoji:"🎯" },
+  { key:"health",    label:"Health",      icon:"shield",   emoji:"🏥" },
+  { key:"pois",      label:"POIs",        icon:"camera",   emoji:"📍" },
+  { key:"duration",  label:"Duration",    icon:"clock",    emoji:"⏱️" },
+  { key:"avail",     label:"Dates",       icon:"calendar", emoji:"🗓️" },
+  { key:"budget",    label:"Budget",      icon:"dollar",   emoji:"💰" },
+  { key:"flights",   label:"Flights",     icon:"plane",    emoji:"✈️" },
+  { key:"stays",     label:"Stays",       icon:"hotel",    emoji:"🏨" },
+  { key:"dining",    label:"Dining",      icon:"food",     emoji:"🍽️" },
+  { key:"itinerary", label:"Itinerary",   icon:"clock",    emoji:"📋" },
+  { key:"sync",      label:"Sync",        icon:"send",     emoji:"🎉" },
 ];
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    REUSABLE COMPONENTS
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-// â”€â”€ STEPPER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── STEPPER ────────────────────────────────────────────────────────────
 
 function Stepper({ current }) {
   const idx = typeof current === "number" ? current : STAGES.findIndex(s=>s.key===current);
@@ -158,9 +158,9 @@ function Stepper({ current }) {
   );
 }
 
-// â”€â”€ CHAT BUBBLE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── CHAT BUBBLE ────────────────────────────────────────────────────────
 
-function Chat({ msg, agent, emoji="ðŸ¤–", isUser=false, typing=false, delay=0 }) {
+function Chat({ msg, agent, emoji="🤖", isUser=false, typing=false, delay=0 }) {
   const [show,setShow] = useState(delay===0);
   useEffect(()=>{ if(delay>0){ const t=setTimeout(()=>setShow(true),delay); return ()=>clearTimeout(t); } },[delay]);
   if(!show) return null;
@@ -185,7 +185,7 @@ function Chat({ msg, agent, emoji="ðŸ¤–", isUser=false, typing=false, delay
   );
 }
 
-// â”€â”€ YES/NO CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── YES/NO CARD ─────────────────────────────────────────────────────────
 
 function YN({ title, subtitle, desc, tags=[], agent="AI", onYes, onNo, children }) {
   const [decided,setDecided] = useState(null);
@@ -229,7 +229,7 @@ function YN({ title, subtitle, desc, tags=[], agent="AI", onYes, onNo, children 
   );
 }
 
-// â”€â”€ BUDGET METER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── BUDGET METER ────────────────────────────────────────────────────────
 
 function BudgetMeter({ spent, allocated, label }) {
   const pct = Math.min((spent/allocated)*100, 120);
@@ -253,7 +253,7 @@ function BudgetMeter({ spent, allocated, label }) {
   );
 }
 
-// â”€â”€ SCREEN SHELL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── SCREEN SHELL ───────────────────────────────────────────────────────
 
 function Shell({ step, children }) {
   return (
@@ -267,7 +267,7 @@ function Shell({ step, children }) {
   );
 }
 
-// â”€â”€ AGENT HEADER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── AGENT HEADER ───────────────────────────────────────────────────────
 
 function AgentHeader({ emoji, name, desc }) {
   return (
@@ -283,7 +283,7 @@ function AgentHeader({ emoji, name, desc }) {
   );
 }
 
-// â”€â”€ ACTION BTN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── ACTION BTN ─────────────────────────────────────────────────────────
 
 function Btn({ children, onClick, primary=true, disabled=false, full=false }) {
   return <button onClick={onClick} disabled={disabled} className="hd" style={{
@@ -298,9 +298,9 @@ function Btn({ children, onClick, primary=true, disabled=false, full=false }) {
   </button>;
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    MOCK DATA
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const MEMBERS_SEED = [
   { name:"James W", status:"done", initials:"JW" },
@@ -351,34 +351,34 @@ const DINING = [
   { day:1, meal:"Breakfast", name:"Karma Restaurant", cuisine:"Mediterranean", cost:28, diet:["vegetarian"] },
   { day:1, meal:"Lunch", name:"Ammoudi Fish Tavern", cuisine:"Seafood", cost:45, diet:["pescatarian"] },
   { day:1, meal:"Dinner", name:"Lycabettus Restaurant", cuisine:"Fine Dining", cost:85, diet:["gluten_free"] },
-  { day:2, meal:"Breakfast", name:"Oia Sunrise CafÃ©", cuisine:"CafÃ©", cost:18, diet:["vegan"] },
+  { day:2, meal:"Breakfast", name:"Oia Sunrise Café", cuisine:"Café", cost:18, diet:["vegan"] },
   { day:2, meal:"Lunch", name:"Melitini", cuisine:"Greek", cost:35, diet:["vegetarian"] },
   { day:2, meal:"Dinner", name:"Sunset by Boutique", cuisine:"Mediterranean", cost:70, diet:[] },
 ];
 
 const ITINERARY = [
   { day:1, date:"Jun 15", theme:"Arrival in Santorini", items:[
-    { time:"14:45",type:"flight",title:"Arrive Athens â†’ Santorini", cost:0 },
+    { time:"14:45",type:"flight",title:"Arrive Athens → Santorini", cost:0 },
     { time:"16:00",type:"checkin",title:"Check in Canaves Oia Suites", cost:385 },
     { time:"18:30",type:"activity",title:"Sunset at Oia Castle",loc:"Oia", cost:0 },
     { time:"20:00",type:"meal",title:"Dinner at Lycabettus",loc:"Oia", cost:85 },
   ]},
   { day:2, date:"Jun 16", theme:"Caldera & Culture", items:[
     { time:"08:00",type:"meal",title:"Breakfast at Karma",loc:"Fira", cost:28 },
-    { time:"09:30",type:"activity",title:"Caldera Hiking Trail",loc:"Fira â†’ Oia", cost:0 },
+    { time:"09:30",type:"activity",title:"Caldera Hiking Trail",loc:"Fira → Oia", cost:0 },
     { time:"13:00",type:"meal",title:"Lunch at Ammoudi Fish Tavern",loc:"Ammoudi Bay", cost:45 },
     { time:"15:00",type:"activity",title:"Wine Tasting at Santo Wines",loc:"Pyrgos", cost:35 },
     { time:"20:00",type:"meal",title:"Dinner at Melitini",loc:"Oia", cost:70 },
   ]},
   { day:3, date:"Jun 17", theme:"Travel to Kyoto", items:[
     { time:"07:00",type:"meal",title:"Early breakfast",loc:"Hotel", cost:0 },
-    { time:"09:00",type:"flight",title:"Santorini â†’ Athens â†’ Tokyo",loc:"Airport", cost:0 },
+    { time:"09:00",type:"flight",title:"Santorini → Athens → Tokyo",loc:"Airport", cost:0 },
   ]},
 ];
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
    MAIN WIZARD
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export default function TripWizard() {
   const [step, setStep] = useState(0);
@@ -502,19 +502,19 @@ export default function TripWizard() {
     }
   };
 
-  // â”€â”€ STEP 0: CREATE TRIP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 0: CREATE TRIP ──────────────────────────────────────────────
   if (stageKey === "create") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ‘‹" name="Trip Organizer" desc="Let's get your trip started!"/>
+      <AgentHeader emoji="👋" name="Trip Organizer" desc="Let's get your trip started!"/>
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
-        <Chat agent="Trip Organizer" emoji="ðŸ‘‹" msg="Welcome! Let's create your trip. What would you like to call it?"/>
+        <Chat agent="Trip Organizer" emoji="👋" msg="Welcome! Let's create your trip. What would you like to call it?"/>
         <div style={{ animation:"fadeUp .4s ease-out .2s both" }}>
           <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Trip Name</label>
           <input value={tripName} onChange={e=>setTripName(e.target.value)} placeholder="e.g. Summer Europe Trip"
             style={{ width:"100%",padding:"13px 16px",borderRadius:12,border:`1.5px solid ${T.border}`,
               fontSize:15,color:T.text,background:T.surface,minHeight:48 }}/>
         </div>
-        <Chat agent="Trip Organizer" emoji="ðŸ‘‹" msg="Great name! Now invite your travel companions." delay={300}/>
+        <Chat agent="Trip Organizer" emoji="👋" msg="Great name! Now invite your travel companions." delay={300}/>
         <div style={{ animation:"fadeUp .4s ease-out .5s both" }}>
           <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Invite Members</label>
           <div style={{ display:"flex",gap:8 }}>
@@ -542,7 +542,7 @@ export default function TripWizard() {
         </div>
         <div style={{ marginTop:8 }}>
           <Btn onClick={handleCreateAndContinue} full disabled={apiBusy}>
-            {apiBusy ? "Saving trip..." : `Continue with ${joinedCount} members â†’`}
+            {apiBusy ? "Saving trip..." : `Continue with ${joinedCount} members →`}
           </Btn>
         </div>
         {tripId && (
@@ -559,14 +559,14 @@ export default function TripWizard() {
     </Shell>
   );
 
-  // â”€â”€ STEP 1: BUCKET LIST â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 1: BUCKET LIST ──────────────────────────────────────────────
   if (stageKey === "bucket") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸŒ" name="Bucket List Agent" desc="Collecting everyone's dream destinations"/>
+      <AgentHeader emoji="🌍" name="Bucket List Agent" desc="Collecting everyone's dream destinations"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Bucket List Agent" emoji="ðŸŒ" msg="What places have you always dreamed of visiting? Type as many as you'd like!"/>
+        <Chat agent="Bucket List Agent" emoji="🌍" msg="What places have you always dreamed of visiting? Type as many as you'd like!"/>
         <Chat isUser msg={destinations.join(", ") || "Tokyo, Kyoto"} delay={200}/>
-        <Chat agent="Bucket List Agent" emoji="ðŸŒ" msg="Love those picks! ðŸ‡¬ðŸ‡·ðŸ‡¯ðŸ‡µ I've collected everyone's suggestions and ranked them by group interest." delay={500}/>
+        <Chat agent="Bucket List Agent" emoji="🌍" msg="Love those picks! 🇬🇷🇯🇵 I've collected everyone's suggestions and ranked them by group interest." delay={500}/>
         <div style={{ display:"flex",gap:8 }}>
           <input
             value={destinationInput}
@@ -595,7 +595,7 @@ export default function TripWizard() {
                 <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8 }}>
                   <span className="hd" style={{ fontWeight:600,fontSize:13 }}>{d}</span>
                   <span style={{ fontSize:12,color: voteCount(d) >= consensusTarget ? T.success : T.text3 }}>
-                    {voteCount(d)}/{members.length} {voteCount(d) >= consensusTarget ? "✓" : ""}
+                    {voteCount(d)}/{members.length} {voteCount(d) >= consensusTarget ? "?" : ""}
                   </span>
                 </div>
                 <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
@@ -637,7 +637,7 @@ export default function TripWizard() {
               </div>
               <div style={{ flex:1 }}>
                 <p className="hd" style={{ fontWeight:600,fontSize:15 }}>{d.name}</p>
-                <p style={{ fontSize:12,color:T.text3 }}>{d.score}% match Â· {d.votes} votes</p>
+                <p style={{ fontSize:12,color:T.text3 }}>{d.score}% match · {d.votes} votes</p>
               </div>
               <div style={{ display:"flex",gap:4 }}>
                 <button style={{ width:32,height:32,borderRadius:999,border:"none",background:T.successBg,
@@ -649,7 +649,7 @@ export default function TripWizard() {
         </div>
         {hasConsensus ? (
           <div style={{ marginTop:6 }}>
-            <Btn onClick={next} full>Continue to Timing â†’</Btn>
+            <Btn onClick={next} full>Continue to Timing →</Btn>
           </div>
         ) : (
           <p style={{ fontSize:12,color:T.text3 }}>
@@ -660,12 +660,12 @@ export default function TripWizard() {
     </Shell>
   );
 
-  // â”€â”€ STEP 2: TIMING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 2: TIMING ───────────────────────────────────────────────────
   if (stageKey === "timing") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ“…" name="Timing Agent" desc="Finding the perfect travel window"/>
+      <AgentHeader emoji="📅" name="Timing Agent" desc="Finding the perfect travel window"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Timing Agent" emoji="ðŸ“…" msg="I've analyzed weather, crowds, and prices for your destinations. Here's the calendar heatmap:"/>
+        <Chat agent="Timing Agent" emoji="📅" msg="I've analyzed weather, crowds, and prices for your destinations. Here's the calendar heatmap:"/>
         {/* Calendar heatmap */}
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
@@ -693,23 +693,23 @@ export default function TripWizard() {
           </div>
         </div>
         <YN title="June is your sweet spot" agent="Timing Agent"
-          subtitle="Jun 15 â€“ Jun 28"
+          subtitle="Jun 15 – Jun 28"
           desc={`All ${destResults.length} destinations have great weather, manageable crowds, and reasonable prices in mid-June.`}
           onYes={next} onNo={()=>{}}/>
       </div>
     </Shell>
   );
 
-  // â”€â”€ STEP 3: INTERESTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 3: INTERESTS ────────────────────────────────────────────────
   if (stageKey === "interests") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸŽ¯" name="Interest Profiler" desc="Quick quiz to match activities to your group"/>
+      <AgentHeader emoji="🎯" name="Interest Profiler" desc="Quick quiz to match activities to your group"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Interest Profiler" emoji="ðŸŽ¯" msg="Quick fire round! I'll ask yes/no questions to understand your group's interests."/>
+        <Chat agent="Interest Profiler" emoji="🎯" msg="Quick fire round! I'll ask yes/no questions to understand your group's interests."/>
         {INTEREST_QUESTIONS.map((q,i)=>(
           <div key={i} style={{ display:"flex",flexDirection:"column",gap:8,
             animation:`fadeUp .35s ease-out ${.15+i*.12}s both` }}>
-            <Chat agent="Interest Profiler" emoji="ðŸŽ¯" msg={q}/>
+            <Chat agent="Interest Profiler" emoji="🎯" msg={q}/>
             <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
               {["Yes","No"].map(opt=>{
                 const value = opt==="Yes"?"yes":"no";
@@ -721,7 +721,7 @@ export default function TripWizard() {
                     color:selected?T.primary:T.text2,
                     fontWeight:600,fontSize:14,cursor:"pointer",minHeight:40 }} className="hd"
                     onClick={()=>setInterestAnswers(p=>({ ...p, [i]: value }))}>
-                    {opt==="Yes"?"ðŸ‘":"ðŸ‘Ž"} {opt}
+                    {opt==="Yes"?"👍":"👎"} {opt}
                   </button>
                 );
               })}
@@ -732,23 +732,23 @@ export default function TripWizard() {
           <>
             <Chat
               agent="Interest Profiler"
-              emoji="ðŸŽ¯"
+              emoji="🎯"
               msg={`Profile complete! Top interests: ${selectedInterests.length ? selectedInterests.join(", ") : "No strong preferences selected"}.`}
               delay={200}
             />
-            <div style={{ marginTop:4 }}><Btn onClick={next} full>Continue â†’</Btn></div>
+            <div style={{ marginTop:4 }}><Btn onClick={next} full>Continue →</Btn></div>
           </>
         )}
       </div>
     </Shell>
   );
 
-  // â”€â”€ STEP 4: HEALTH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 4: HEALTH ─────────────────────────────────────────────────── ───────────────────────────────────────────────────
   if (stageKey === "health") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ¥" name="Health & Safety Agent" desc="Checking requirements for your activities"/>
+      <AgentHeader emoji="🏥" name="Health & Safety Agent" desc="Checking requirements for your activities"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Health Agent" emoji="ðŸ¥" msg="I've reviewed health requirements for your destinations and planned activities. A couple of things to note:"/>
+        <Chat agent="Health Agent" emoji="🏥" msg="I've reviewed health requirements for your destinations and planned activities. A couple of things to note:"/>
         <YN title="Travel Insurance Recommended" agent="Health Agent" subtitle="For Greece & Japan"
           desc="Standard travel insurance covering medical emergencies is recommended for both destinations. Does everyone have this?"
           tags={["Recommended","All destinations"]} onYes={()=>{}} onNo={()=>{}}/>
@@ -759,12 +759,12 @@ export default function TripWizard() {
     </Shell>
   );
 
-  // â”€â”€ STEP 5: POIs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 5: POIs ─────────────────────────────────────────────────────
   if (stageKey === "pois") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ“" name="POI Discovery Agent" desc="Curated places matched to your group's interests"/>
+      <AgentHeader emoji="📍" name="POI Discovery Agent" desc="Curated places matched to your group's interests"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="POI Agent" emoji="ðŸ“" msg="Based on your interests in hiking, food, history, and photography, here are my top picks. Approve or skip each one!"/>
+        <Chat agent="POI Agent" emoji="📍" msg="Based on your interests in hiking, food, history, and photography, here are my top picks. Approve or skip each one!"/>
         {POIS.map((poi,i)=>{
           const catColors = { nature:T.success, food:T.primary, culture:T.warning };
           const approved = poiApproved[i];
@@ -799,14 +799,14 @@ export default function TripWizard() {
                       border:`1.5px solid ${T.error}40`,background:"transparent",color:T.error,fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Skip</button>
                     <button onClick={()=>setPoiApproved(p=>({...p,[i]:true}))} style={{ flex:1,padding:"8px",borderRadius:8,
                       border:"none",background:T.primary,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
-                      boxShadow:`0 2px 6px ${T.primary}30` }} className="hd">Include âœ“</button>
+                      boxShadow:`0 2px 6px ${T.primary}30` }} className="hd">Include ✓</button>
                   </div>
                 )}
                 {approved!==undefined && (
                   <div style={{ padding:"6px 12px",borderRadius:8,
                     background:approved?T.successBg:T.errorBg,
                     color:approved?T.success:T.error,fontSize:12,fontWeight:600,textAlign:"center" }} className="hd">
-                    {approved?"âœ“ Included":"âœ— Skipped"}
+                    {approved?"✓ Included":"✗ Skipped"}
                   </div>
                 )}
               </div>
@@ -815,19 +815,19 @@ export default function TripWizard() {
         })}
         {Object.keys(poiApproved).length >= POIS.length && (
           <div style={{ animation:"scaleIn .3s ease-out" }}>
-            <Btn onClick={next} full>{Object.values(poiApproved).filter(v=>v).length} activities selected â€” Continue â†’</Btn>
+            <Btn onClick={next} full>{Object.values(poiApproved).filter(v=>v).length} activities selected — Continue →</Btn>
           </div>
         )}
       </div>
     </Shell>
   );
 
-  // â”€â”€ STEP 6: DURATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 6: DURATION ─────────────────────────────────────────────────
   if (stageKey === "duration") return (
     <Shell step={step}>
-      <AgentHeader emoji="â±ï¸" name="Duration Calculator" desc="How many days you need"/>
+      <AgentHeader emoji="⏱️" name="Duration Calculator" desc="How many days you need"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Duration Agent" emoji="â±ï¸" msg="Let me calculate the optimal trip length based on your approved activities..."/>
+        <Chat agent="Duration Agent" emoji="⏱️" msg="Let me calculate the optimal trip length based on your approved activities..."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .3s both" }}>
           <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:12 }}>Trip Duration Breakdown</p>
@@ -852,12 +852,12 @@ export default function TripWizard() {
     </Shell>
   );
 
-  // â”€â”€ STEP 7: AVAILABILITY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 7: AVAILABILITY ─────────────────────────────────────────────
   if (stageKey === "avail") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ—“ï¸" name="Schedule Sync Agent" desc="Finding dates that work for everyone"/>
+      <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc="Finding dates that work for everyone"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Sync Agent" emoji="ðŸ—“ï¸" msg="I've collected availability from all members. Here's the overlap:"/>
+        <Chat agent="Sync Agent" emoji="🗓️" msg="I've collected availability from all members. Here's the overlap:"/>
         {/* Mini calendar */}
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
@@ -884,22 +884,22 @@ export default function TripWizard() {
           </div>
           <div style={{ display:"flex",alignItems:"center",gap:8,marginTop:12 }}>
             <div style={{ width:14,height:14,borderRadius:4,background:`${T.success}15`,border:`2px solid ${T.success}` }}/>
-            <span style={{ fontSize:12,color:T.text2 }}>All 4 members available â€” <strong>14 nights overlap</strong></span>
+            <span style={{ fontSize:12,color:T.text2 }}>All 4 members available — <strong>14 nights overlap</strong></span>
           </div>
         </div>
-        <YN title="Everyone is free Jun 15 â€“ 28" agent="Sync Agent"
+        <YN title="Everyone is free Jun 15 – 28" agent="Sync Agent"
           desc="All 4 members are available for this 14-day window. Your trip needs 10 days, giving you flexibility on start date. Lock these dates?"
           onYes={next} onNo={()=>{}}/>
       </div>
     </Shell>
   );
 
-  // â”€â”€ STEP 8: BUDGET â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 8: BUDGET ───────────────────────────────────────────────────
   if (stageKey === "budget") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ’°" name="Budget Agent" desc="Setting your spending plan"/>
+      <AgentHeader emoji="💰" name="Budget Agent" desc="Setting your spending plan"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Budget Agent" emoji="ðŸ’°" msg="What's your per-person daily budget? Drag the slider to set it."/>
+        <Chat agent="Budget Agent" emoji="💰" msg="What's your per-person daily budget? Drag the slider to set it."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
           <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:14 }}>
@@ -949,14 +949,14 @@ export default function TripWizard() {
     </Shell>
   );
 
-  // â”€â”€ STEP 9: FLIGHTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 9: FLIGHTS ──────────────────────────────────────────────────
   if (stageKey === "flights") return (
     <Shell step={step}>
-      <AgentHeader emoji="âœˆï¸" name="Flight Agent" desc="Finding the best flights for your dates"/>
+      <AgentHeader emoji="✈️" name="Flight Agent" desc="Finding the best flights for your dates"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Flight Agent" emoji="âœˆï¸" msg="Do you need flight bookings?"/>
+        <Chat agent="Flight Agent" emoji="✈️" msg="Do you need flight bookings?"/>
         <Chat isUser msg="Yes!" delay={100}/>
-        <Chat agent="Flight Agent" emoji="âœˆï¸" msg="Which class do you prefer?" delay={200}/>
+        <Chat agent="Flight Agent" emoji="✈️" msg="Which class do you prefer?" delay={200}/>
         <div style={{ display:"flex",gap:8,animation:"fadeUp .3s ease-out .3s both" }}>
           {["Economy","Business","First"].map(cls=>(
             <button key={cls} onClick={()=>setFlightClass(cls.toLowerCase())}
@@ -969,7 +969,7 @@ export default function TripWizard() {
             </button>
           ))}
         </div>
-        <Chat agent="Flight Agent" emoji="âœˆï¸" msg="Here are the top 3 options:" delay={400}/>
+        <Chat agent="Flight Agent" emoji="✈️" msg="Here are the top 3 options:" delay={400}/>
         {FLIGHTS.map((f,i)=>(
           <div key={i} onClick={()=>setFlightPick(i)}
             style={{ background:T.surface,borderRadius:14,padding:"14px 18px",
@@ -1006,22 +1006,22 @@ export default function TripWizard() {
               <p className="hd" style={{ fontWeight:700,fontSize:15 }}>{f.arr}</p>
             </div>
             {flightPick===i && <div style={{ marginTop:10,padding:"6px",borderRadius:8,background:T.successBg,
-              color:T.success,fontSize:12,fontWeight:600,textAlign:"center" }} className="hd">âœ“ Selected</div>}
+              color:T.success,fontSize:12,fontWeight:600,textAlign:"center" }} className="hd">✓ Selected</div>}
           </div>
         ))}
         {flightPick!==null && <div style={{ animation:"scaleIn .3s ease-out" }}>
-          <Btn onClick={next} full>Book {FLIGHTS[flightPick].airline} â€” Continue â†’</Btn>
+          <Btn onClick={next} full>Book {FLIGHTS[flightPick].airline} — Continue →</Btn>
         </div>}
       </div>
     </Shell>
   );
 
-  // â”€â”€ STEP 10: STAYS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 10: STAYS ───────────────────────────────────────────────────
   if (stageKey === "stays") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ¨" name="Stays Agent" desc="Finding perfect accommodations"/>
+      <AgentHeader emoji="🏨" name="Stays Agent" desc="Finding perfect accommodations"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Stays Agent" emoji="ðŸ¨" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
+        <Chat agent="Stays Agent" emoji="🏨" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
         {STAYS.map((s,i)=>{
           const picked = stayPicks[i];
           return (
@@ -1030,7 +1030,7 @@ export default function TripWizard() {
               <div style={{ height:100,background:`linear-gradient(135deg,${T.accent}20,${T.primary}12)`,
                 display:"flex",alignItems:"flex-end",padding:10 }}>
                 <span style={{ background:"rgba(0,0,0,.55)",color:"#fff",padding:"2px 9px",borderRadius:999,
-                  fontSize:11,fontWeight:500 }}>{s.type} Â· {s.dest}</span>
+                  fontSize:11,fontWeight:500 }}>{s.type} · {s.dest}</span>
               </div>
               <div style={{ padding:"14px 16px" }}>
                 <h4 className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:4 }}>{s.name}</h4>
@@ -1052,12 +1052,12 @@ export default function TripWizard() {
                         fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Skip</button>
                       <button onClick={()=>setStayPicks(p=>({...p,[i]:true}))} style={{ padding:"7px 14px",borderRadius:8,
                         border:"none",background:T.primary,color:"#fff",
-                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Book âœ“</button>
+                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Book ✓</button>
                     </div>
                   ) : (
                     <span className="hd" style={{ padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:600,
                       background:picked?T.successBg:T.errorBg,color:picked?T.success:T.error }}>
-                      {picked?"âœ“ Booked":"âœ— Skipped"}</span>
+                      {picked?"✓ Booked":"✗ Skipped"}</span>
                   )}
                 </div>
               </div>
@@ -1066,22 +1066,22 @@ export default function TripWizard() {
         })}
         {Object.keys(stayPicks).length>=STAYS.length && (
           <div style={{ animation:"scaleIn .3s ease-out" }}>
-            <Btn onClick={next} full>Continue to Dining â†’</Btn>
+            <Btn onClick={next} full>Continue to Dining →</Btn>
           </div>
         )}
       </div>
     </Shell>
   );
 
-  // â”€â”€ STEP 11: DINING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 11: DINING ──────────────────────────────────────────────────
   if (stageKey === "dining") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ½ï¸" name="Dining Agent" desc="Restaurant picks matching your diet & budget"/>
+      <AgentHeader emoji="🍽️" name="Dining Agent" desc="Restaurant picks matching your diet & budget"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Dining Agent" emoji="ðŸ½ï¸" msg="Here are restaurant suggestions for each day, matching your group's dietary needs and budget:"/>
+        <Chat agent="Dining Agent" emoji="🍽️" msg="Here are restaurant suggestions for each day, matching your group's dietary needs and budget:"/>
         {[1,2].map(day=>(
           <div key={day} style={{ animation:`fadeUp .35s ease-out ${day*.15}s both` }}>
-            <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10,color:T.text }}>Day {day} â€” {day===1?"Santorini":"Santorini"}</p>
+            <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10,color:T.text }}>Day {day} — {day===1?"Santorini":"Santorini"}</p>
             {DINING.filter(d=>d.day===day).map((d,i)=>{
               const k = `${day}-${i}`;
               const approved = diningApproved[k];
@@ -1089,14 +1089,14 @@ export default function TripWizard() {
                 <div key={k} style={{ background:T.surface,borderRadius:12,padding:"12px 16px",marginBottom:8,
                   border:`1px solid ${T.borderLight}`,display:"flex",alignItems:"center",gap:12,
                   opacity:approved===false?.4:1,transition:"opacity .3s" }}>
-                  <div style={{ fontSize:22,width:36,textAlign:"center" }}>{d.meal==="Breakfast"?"ðŸŒ…":d.meal==="Lunch"?"â˜€ï¸":"ðŸŒ™"}</div>
+                  <div style={{ fontSize:22,width:36,textAlign:"center" }}>{d.meal==="Breakfast"?"🌅":d.meal==="Lunch"?"☀️":"🌙"}</div>
                   <div style={{ flex:1,minWidth:0 }}>
                     <div style={{ display:"flex",alignItems:"baseline",gap:6 }}>
                       <span className="hd" style={{ fontWeight:600,fontSize:14 }}>{d.name}</span>
                       <span style={{ fontSize:11,color:T.text3 }}>{d.cuisine}</span>
                     </div>
                     <div style={{ display:"flex",gap:8,marginTop:3 }}>
-                      <span style={{ fontSize:12,color:T.text2 }}>{d.meal} Â· ${d.cost}</span>
+                      <span style={{ fontSize:12,color:T.text2 }}>{d.meal} · ${d.cost}</span>
                       {d.diet.map(tag=><span key={tag} style={{ fontSize:10,background:`${T.success}12`,color:T.success,
                         padding:"1px 6px",borderRadius:999 }}>{tag}</span>)}
                     </div>
@@ -1109,22 +1109,22 @@ export default function TripWizard() {
                         color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><I n="check" s={14} c="#fff"/></button>
                     </div>
                   ) : (
-                    <span style={{ fontSize:16 }}>{approved?"âœ…":"âŒ"}</span>
+                    <span style={{ fontSize:16 }}>{approved?"✅":"❌"}</span>
                   )}
                 </div>
               );
             })}
           </div>
         ))}
-        {Object.keys(diningApproved).length>=DINING.length && <Btn onClick={next} full>Continue to Itinerary â†’</Btn>}
+        {Object.keys(diningApproved).length>=DINING.length && <Btn onClick={next} full>Continue to Itinerary →</Btn>}
       </div>
     </Shell>
   );
 
-  // â”€â”€ STEP 12: ITINERARY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 12: ITINERARY ───────────────────────────────────────────────
   if (stageKey === "itinerary") return (
     <Shell step={step}>
-      <AgentHeader emoji="ðŸ“‹" name="Itinerary Agent" desc="Your complete day-by-day plan"/>
+      <AgentHeader emoji="📋" name="Itinerary Agent" desc="Your complete day-by-day plan"/>
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
         <BudgetMeter spent={1480} allocated={budgetPerDay*10} label="Total Budget"/>
         {ITINERARY.map((day,di)=>{
@@ -1135,7 +1135,7 @@ export default function TripWizard() {
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:16 }}>
                 <div>
                   <h3 className="hd" style={{ fontWeight:700,fontSize:17 }}>Day {day.day}</h3>
-                  <p style={{ fontSize:13,color:T.text2 }}>{day.date} Â· {day.theme}</p>
+                  <p style={{ fontSize:13,color:T.text2 }}>{day.date} · {day.theme}</p>
                 </div>
                 <span style={{ fontSize:13,color:T.text3 }}>${day.items.reduce((s,i)=>s+i.cost,0)}</span>
               </div>
@@ -1156,7 +1156,7 @@ export default function TripWizard() {
                       </div>
                       <div style={{ display:"flex",gap:10,marginTop:2,fontSize:12,color:T.text3 }}>
                         <span>{item.time}</span>
-                        {item.loc && <span>ðŸ“ {item.loc}</span>}
+                        {item.loc && <span>📍 {item.loc}</span>}
                       </div>
                     </div>
                   </div>
@@ -1166,7 +1166,7 @@ export default function TripWizard() {
           );
         })}
         <YN title="Your complete itinerary is ready!" agent="Itinerary Agent"
-          subtitle="3 days shown Â· 10 total planned"
+          subtitle="3 days shown · 10 total planned"
           desc="Every flight, transfer, activity, meal, and rest period has been scheduled. Approve to send calendar invites to all members?"
           tags={["10 days","6 activities","12 meals","2 destinations"]}
           onYes={next} onNo={()=>{}}/>
@@ -1174,15 +1174,15 @@ export default function TripWizard() {
     </Shell>
   );
 
-  // â”€â”€ STEP 13: CALENDAR SYNC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── STEP 13: CALENDAR SYNC ───────────────────────────────────────────
   if (stageKey === "sync") return (
     <Shell step={step}>
       <Styles/>
       <div style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
         padding:"40px 24px",textAlign:"center",animation:"scaleIn .5s ease-out" }}>
         <div style={{ position:"relative",marginBottom:24 }}>
-          <div style={{ fontSize:64,animation:"bounceIn .6s ease" }}>ðŸŽ‰</div>
-          {["ðŸŽŠ","âœ¨","ðŸŒŸ","ðŸŽˆ","âœˆï¸"].map((e,i)=>(
+          <div style={{ fontSize:64,animation:"bounceIn .6s ease" }}>🎉</div>
+          {["🎊","✨","🌟","🎈","✈️"].map((e,i)=>(
             <span key={i} style={{ position:"absolute",fontSize:20,
               top:`${-10+Math.sin(i*1.2)*30}px`,left:`${-20+Math.cos(i*1.2)*40}px`,
               animation:`confetti 1.5s ease-out ${.3+i*.15}s both`,pointerEvents:"none" }}>{e}</span>
@@ -1196,9 +1196,9 @@ export default function TripWizard() {
         {/* Calendar sync options */}
         <div style={{ display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:360,marginBottom:32 }}>
           {[
-            { name:"Google Calendar", icon:"ðŸ“…", color:"#4285F4", status:"Synced" },
-            { name:"Apple Calendar", icon:"ðŸŽ", color:"#333", status:"Synced" },
-            { name:"Outlook", icon:"ðŸ“§", color:"#0078D4", status:"Pending" },
+            { name:"Google Calendar", icon:"📅", color:"#4285F4", status:"Synced" },
+            { name:"Apple Calendar", icon:"🍎", color:"#333", status:"Synced" },
+            { name:"Outlook", icon:"📧", color:"#0078D4", status:"Pending" },
           ].map((cal,i)=>(
             <div key={i} style={{ background:T.surface,borderRadius:12,padding:"12px 16px",
               border:`1px solid ${T.borderLight}`,display:"flex",alignItems:"center",gap:12,
@@ -1208,7 +1208,7 @@ export default function TripWizard() {
               <span className="hd" style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:999,
                 background:cal.status==="Synced"?T.successBg:T.warningBg,
                 color:cal.status==="Synced"?T.success:T.warning }}>
-                {cal.status==="Synced"?"âœ“ Synced":"â³ Pending"}</span>
+                {cal.status==="Synced"?"✓ Synced":"⏳ Pending"}</span>
             </div>
           ))}
         </div>
@@ -1221,7 +1221,7 @@ export default function TripWizard() {
           <h3 className="hd" style={{ fontWeight:700,fontSize:20,marginBottom:12 }}>{tripName}</h3>
           <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
             {[
-              { label:"Dates", value:"Jun 15 â€“ Jun 28, 2025" },
+              { label:"Dates", value:"Jun 15 – Jun 28, 2025" },
               { label:"Destinations", value:"Santorini, Kyoto" },
               { label:"Members", value:`${members.length} travelers` },
               { label:"Budget", value:`$${(budgetPerDay*10).toLocaleString()} / person` },
@@ -1238,7 +1238,7 @@ export default function TripWizard() {
           borderRadius:12,border:"none",background:T.secondary,color:"#fff",
           fontSize:16,fontWeight:700,cursor:"pointer",minHeight:50,
           boxShadow:`0 4px 16px ${T.secondary}35` }}>
-          View Full Itinerary â†’
+          View Full Itinerary →
         </button>
         <button onClick={()=>setStep(0)} style={{ marginTop:12,background:"none",border:"none",
           color:T.text3,fontSize:13,cursor:"pointer",textDecoration:"underline" }}>
@@ -1250,4 +1250,5 @@ export default function TripWizard() {
 
   return null;
 }
+
 
