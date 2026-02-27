@@ -1,6 +1,9 @@
 ﻿
 from __future__ import annotations
+import asyncio
 import os
+import smtplib
+from email.message import EmailMessage
 from typing import Any, Optional
 
 import asyncpg
@@ -87,6 +90,84 @@ class InviteMemberRequest(BaseModel):
 
 class UpdateMemberRequest(BaseModel):
     status: str
+
+
+def _smtp_settings() -> tuple[str, int, str, str, str]:
+    host_port = os.getenv("SMTP_HOST", "").strip()
+    smtp_user = os.getenv("SMTP_USER", "").strip()
+    smtp_pass = os.getenv("SMTP_PASS", "").strip()
+    smtp_from = os.getenv("ALERT_EMAIL_FROM", smtp_user).strip()
+
+    host = host_port
+    port = 587
+    if ":" in host_port:
+        host, port_str = host_port.rsplit(":", 1)
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = 587
+
+    return host.strip(), port, smtp_user, smtp_pass, smtp_from
+
+
+def _send_trip_invite_email_sync(
+    *,
+    to_email: str,
+    inviter_name: str,
+    trip_name: str,
+    trip_id: str,
+) -> None:
+    host, port, smtp_user, smtp_pass, smtp_from = _smtp_settings()
+    if not host or not smtp_user or not smtp_pass or not smtp_from:
+        raise RuntimeError("SMTP is not configured (SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_EMAIL_FROM)")
+
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+    invite_link = f"{frontend_base}/#wizard?tripId={trip_id}"
+    subject = f"WanderPlan invite: {trip_name}"
+    text_body = (
+        f"{inviter_name} invited you to join a trip on WanderPlan.\n\n"
+        f"Trip: {trip_name}\n"
+        f"Open invite: {invite_link}\n\n"
+        "If you were not expecting this invite, you can ignore this email."
+    )
+    html_body = (
+        f"<p><strong>{inviter_name}</strong> invited you to join a trip on WanderPlan.</p>"
+        f"<p><strong>Trip:</strong> {trip_name}</p>"
+        f"<p><a href=\"{invite_link}\">Open invite</a></p>"
+        "<p>If you were not expecting this invite, you can ignore this email.</p>"
+    )
+
+    msg = EmailMessage()
+    msg["From"] = smtp_from
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
+
+    with smtplib.SMTP(host, port, timeout=15) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+
+
+async def _send_trip_invite_email(
+    *,
+    to_email: str,
+    inviter_name: str,
+    trip_name: str,
+    trip_id: str,
+) -> tuple[bool, str]:
+    try:
+        await asyncio.to_thread(
+            _send_trip_invite_email_sync,
+            to_email=to_email,
+            inviter_name=inviter_name,
+            trip_name=trip_name,
+            trip_id=trip_id,
+        )
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _parse_user_id_from_token(authorization: str) -> str:
@@ -235,15 +316,18 @@ async def invite_member(
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     async with db_pool.acquire() as conn:
-        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        trip = await conn.fetchrow("SELECT owner_id, name FROM trips WHERE id = $1", trip_id)
         if not trip:
             raise HTTPException(status_code=404, detail="Trip not found")
         if str(trip["owner_id"]) != user_id:
             raise HTTPException(status_code=403, detail="Only owner can invite members")
 
-        invitee = await conn.fetchrow("SELECT id FROM users WHERE email = $1", body.email)
+        invitee = await conn.fetchrow("SELECT id, email FROM users WHERE email = $1", body.email)
         if not invitee:
             raise HTTPException(status_code=404, detail="User not found")
+
+        inviter = await conn.fetchrow("SELECT name FROM users WHERE id = $1", user_id)
+        inviter_name = inviter["name"] if inviter and inviter["name"] else "A WanderPlan user"
 
         row = await conn.fetchrow(
             """
@@ -258,7 +342,20 @@ async def invite_member(
             body.role,
         )
 
-    return {"user_id": str(row["user_id"]), "role": row["role"], "status": row["status"]}
+    email_sent, email_error = await _send_trip_invite_email(
+        to_email=invitee["email"],
+        inviter_name=inviter_name,
+        trip_name=trip["name"],
+        trip_id=trip_id,
+    )
+
+    return {
+        "user_id": str(row["user_id"]),
+        "role": row["role"],
+        "status": row["status"],
+        "email_sent": email_sent,
+        "email_error": email_error or None,
+    }
 
 
 @app.put("/trips/{trip_id}/members/{member_user_id}")
@@ -809,5 +906,4 @@ class OrchestratorAgent:
                 orch._ws_clients[trip_id].remove(websocket)
 
         return app
-
 

@@ -401,6 +401,7 @@ export default function TripWizard() {
   const [tripId, setTripId] = useState("");
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState("");
+  const [inviteStatus, setInviteStatus] = useState("");
 
   const next = () => setStep(s => Math.min(s+1, STAGES.length-1));
   const back = () => setStep(s => Math.max(s-1, 0));
@@ -422,7 +423,7 @@ export default function TripWizard() {
       .toUpperCase();
     setMembers((prev) => [
       ...prev,
-      { name: email, status: "done", initials: initials || "TR" },
+      { name: email, status: "pending", initials: initials || "TR" },
     ]);
     setInviteEmail("");
   };
@@ -483,6 +484,7 @@ export default function TripWizard() {
   const handleCreateAndContinue = async () => {
     setApiBusy(true);
     setApiError("");
+    setInviteStatus("");
     try {
       const token = await ensureAuth();
       const created = await apiJson("/trips", {
@@ -493,7 +495,71 @@ export default function TripWizard() {
         },
         body: JSON.stringify({ name: tripName, duration_days: 10 }),
       });
-      setTripId(created?.trip?.id || "");
+      const createdTripId = created?.trip?.id || "";
+      setTripId(createdTripId);
+
+      const inviteEmails = members
+        .map((m) => (m.name || "").trim().toLowerCase())
+        .filter((name) => name.includes("@"));
+
+      if (createdTripId && inviteEmails.length > 0) {
+        const inviteResults = await Promise.allSettled(
+          inviteEmails.map((email) =>
+            apiJson(`/trips/${createdTripId}/members`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ email, role: "member" }),
+            }).then((resp) => ({
+              email,
+              ok: true,
+              emailSent: !!resp?.email_sent,
+              error: "",
+            }))
+          )
+        );
+
+        const successEmails = new Set();
+        const failed = [];
+        let sentCount = 0;
+
+        inviteResults.forEach((result, idx) => {
+          const email = inviteEmails[idx];
+          if (result.status === "fulfilled" && result.value?.ok) {
+            successEmails.add(email);
+            if (result.value.emailSent) sentCount += 1;
+          } else {
+            const err =
+              result.status === "rejected"
+                ? (result.reason?.message || String(result.reason))
+                : "Invite failed";
+            failed.push(`${email}: ${err}`);
+          }
+        });
+
+        setMembers((prev) =>
+          prev.map((m) => {
+            const email = (m.name || "").trim().toLowerCase();
+            if (!email.includes("@")) return m;
+            return {
+              ...m,
+              status: successEmails.has(email) ? "done" : "pending",
+            };
+          })
+        );
+
+        if (successEmails.size > 0) {
+          setInviteStatus(
+            `Invites recorded for ${successEmails.size} member(s). Email sent for ${sentCount} member(s).`
+          );
+        }
+        if (failed.length > 0) {
+          setApiError(`Some invites failed: ${failed.join(" | ")}`);
+        }
+      }
+
       next();
     } catch (err) {
       setApiError(err?.message || "Backend request failed");
@@ -550,9 +616,14 @@ export default function TripWizard() {
             Backend connected. Trip saved with id: {tripId}
           </p>
         )}
+        {inviteStatus && (
+          <p style={{ fontSize:12, color:T.success, marginTop:8 }}>
+            {inviteStatus}
+          </p>
+        )}
         {apiError && (
           <p style={{ fontSize:12, color:T.error, marginTop:8 }}>
-            Could not save trip to backend: {apiError}
+            Backend issue: {apiError}
           </p>
         )}
       </div>
