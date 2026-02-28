@@ -151,7 +151,7 @@ function GlobeCanvas() {
 // MAIN APP — Landing + Auth + Onboarding
 // ════════════════════════════════════════════════════════════════════════════
 
-export default function WanderPlanHome() {
+export default function WanderPlanHome({ onOpenFlow = () => {}, flowTiles = [] }) {
   const [screen, setScreen] = useState("landing"); // landing | auth | onboard-1 | onboard-2 | onboard-3 | dashboard
   const [authMode, setAuthMode] = useState("signup"); // signup | login
   const [email, setEmail] = useState("");
@@ -211,7 +211,21 @@ export default function WanderPlanHome() {
   );
 
   // ── Dashboard placeholder ────────────────────────────────────────────
-  return <DashboardPlaceholder travelStyle={travelStyle} interests={interests} budgetLevel={budgetLevel} onReset={() => { setScreen("landing"); setTravelStyle(null); setInterests([]); setBudgetLevel(1); }} />;
+  return (
+    <DashboardPlaceholder
+      travelStyle={travelStyle}
+      interests={interests}
+      budgetLevel={budgetLevel}
+      flowTiles={flowTiles}
+      onOpenFlow={onOpenFlow}
+      onReset={() => {
+        setScreen("landing");
+        setTravelStyle(null);
+        setInterests([]);
+        setBudgetLevel(1);
+      }}
+    />
+  );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -871,7 +885,7 @@ function OnboardBudget({ level, setLevel, onNext, onSkip, onBack, step }) {
 // DASHBOARD PLACEHOLDER
 // ════════════════════════════════════════════════════════════════════════════
 
-function DashboardPlaceholder({ travelStyle, interests, budgetLevel, onReset }) {
+function DashboardPlaceholder({ travelStyle, interests, budgetLevel, flowTiles, onOpenFlow, onReset }) {
   const budgetLabels = ["Budget", "Moderate", "Premium", "Luxury"];
   return (
     <div style={{ minHeight: "100vh", background: T.bg, fontFamily: "'Inter',sans-serif" }}>
@@ -936,23 +950,39 @@ function DashboardPlaceholder({ travelStyle, interests, budgetLevel, onReset }) 
           </div>
         </div>
 
-        {/* New trip CTA */}
+        {/* Flow hub */}
         <div style={{ background: `linear-gradient(135deg, ${T.primary}08, ${T.accent}08)`,
-          borderRadius: 20, padding: 32, textAlign: "center", border: `2px dashed ${T.primary}25`,
+          borderRadius: 20, padding: 28, border: `1px solid ${T.borderLight}`,
           animation: "fadeUp 0.6s ease-out 0.3s both" }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>✈️</div>
           <h3 style={{ fontFamily: "'DM Sans'", fontWeight: 700, fontSize: 20, marginBottom: 8 }}>
-            Ready to plan your first trip?
+            Where do you want to go next?
           </h3>
-          <p style={{ color: T.text2, fontSize: 14, marginBottom: 24 }}>
-            Our 11 AI agents will take it from here.
+          <p style={{ color: T.text2, fontSize: 14, marginBottom: 18 }}>
+            Open any planning flow from here.
           </p>
-          <button style={{ padding: "14px 36px", borderRadius: 14, border: "none",
-            background: T.primary, color: "#fff", fontSize: 16, fontWeight: 700,
-            fontFamily: "'DM Sans'", cursor: "pointer", minHeight: 52,
-            boxShadow: `0 4px 16px ${T.primary}30` }}>
-            + Create New Trip
-          </button>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10 }}>
+            {flowTiles.map((flow) => (
+              <button
+                key={flow.id}
+                onClick={() => onOpenFlow(flow.id)}
+                style={{
+                  textAlign: "left",
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 12,
+                  background: T.surface,
+                  color: T.text,
+                  fontFamily: "'DM Sans'",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  padding: "12px 14px",
+                  cursor: "pointer",
+                  minHeight: 46,
+                }}
+              >
+                {flow.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Reset */}
@@ -966,3 +996,4 @@ function DashboardPlaceholder({ travelStyle, interests, budgetLevel, onReset }) 
     </div>
   );
 }
+

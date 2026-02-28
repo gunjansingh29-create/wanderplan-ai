@@ -23,6 +23,7 @@ const shadow = {
 };
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
+const TRIP_SESSION_KEY = "wanderplan.tripSession";
 
 async function apiJson(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, options);
@@ -38,6 +39,15 @@ async function apiJson(path, options = {}) {
     throw new Error(`${res.status}: ${detail}`);
   }
   return body;
+}
+
+function safeReadSession() {
+  try {
+    const raw = window.localStorage.getItem(TRIP_SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -303,10 +313,7 @@ function Btn({ children, onClick, primary=true, disabled=false, full=false }) {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const MEMBERS_SEED = [
-  { name:"James W", status:"done", initials:"JW" },
-  { name:"Sarah W", status:"done", initials:"SW" },
-  { name:"Alex C", status:"pending", initials:"AC" },
-  { name:"Priya S", status:"done", initials:"PS" },
+  { name:"You", status:"done", initials:"YO" },
 ];
 
 const DEST_RESULTS_SEED = [
@@ -380,14 +387,23 @@ const ITINERARY = [
    MAIN WIZARD
    ═══════════════════════════════════════════════════════════════════════════ */
 
-export default function TripWizard() {
+export default function TripWizard({ initialSession = null, onTripSaved = () => {} }) {
+  const persistedSession = safeReadSession();
+  const hydratedSession = initialSession || persistedSession || {};
+
   const [step, setStep] = useState(0);
-  const [tripName, setTripName] = useState("Japan & Greece Adventure");
+  const [tripName, setTripName] = useState(hydratedSession.tripName || "");
   const [inviteEmail, setInviteEmail] = useState("");
   const [destinationInput, setDestinationInput] = useState("");
-  const [members, setMembers] = useState(MEMBERS_SEED);
+  const [members, setMembers] = useState(
+    Array.isArray(hydratedSession.members) && hydratedSession.members.length > 0
+      ? hydratedSession.members
+      : MEMBERS_SEED
+  );
   const [destinations, setDestinations] = useState(
-    DEST_RESULTS_SEED.map((d) => d.name)
+    Array.isArray(hydratedSession.destinations) && hydratedSession.destinations.length > 0
+      ? hydratedSession.destinations
+      : DEST_RESULTS_SEED.map((d) => d.name)
   );
   const [destinationVotes, setDestinationVotes] = useState({});
   const [poiApproved, setPoiApproved] = useState({});
@@ -397,8 +413,8 @@ export default function TripWizard() {
   const [diningApproved, setDiningApproved] = useState({});
   const [budgetPerDay, setBudgetPerDay] = useState(200);
   const [flightClass, setFlightClass] = useState("economy");
-  const [authToken, setAuthToken] = useState("");
-  const [tripId, setTripId] = useState("");
+  const [authToken, setAuthToken] = useState(hydratedSession.authToken || "");
+  const [tripId, setTripId] = useState(hydratedSession.tripId || "");
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState("");
   const [inviteStatus, setInviteStatus] = useState("");
@@ -470,6 +486,45 @@ export default function TripWizard() {
       : DEST_RESULTS_SEED;
   const hasConsensus = destResults.some((d) => d.votes >= consensusTarget);
 
+  useEffect(() => {
+    const snapshot = {
+      tripId,
+      tripName,
+      authToken,
+      members,
+      destinations,
+    };
+    try {
+      window.localStorage.setItem(TRIP_SESSION_KEY, JSON.stringify(snapshot));
+    } catch {
+      // Ignore storage failures.
+    }
+    onTripSaved(snapshot);
+  }, [tripId, tripName, authToken, members, destinations, onTripSaved]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function hydrateTrip() {
+      if (!tripId || !authToken) return;
+      try {
+        const payload = await apiJson(`/trips/${tripId}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (cancelled) return;
+        const savedTrip = payload?.trip;
+        if (savedTrip?.name) {
+          setTripName(savedTrip.name);
+        }
+      } catch {
+        // Keep local state if trip lookup fails.
+      }
+    }
+    hydrateTrip();
+    return () => {
+      cancelled = true;
+    };
+  }, [tripId, authToken]);
+
   const ensureAuth = async () => {
     if (authToken) return authToken;
     const login = await apiJson("/auth/login", {
@@ -482,6 +537,10 @@ export default function TripWizard() {
   };
 
   const handleCreateAndContinue = async () => {
+    if (!tripName.trim()) {
+      setApiError("Trip name is required");
+      return;
+    }
     setApiBusy(true);
     setApiError("");
     setInviteStatus("");
