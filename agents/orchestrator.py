@@ -92,6 +92,11 @@ class UpdateMemberRequest(BaseModel):
     status: str
 
 
+class SaveDestinationsRequest(BaseModel):
+    destinations: list[str]
+    votes: dict[str, int] = {}
+
+
 def _smtp_settings() -> tuple[str, int, str, str, str]:
     host_port = os.getenv("SMTP_HOST", "").strip()
     smtp_user = os.getenv("SMTP_USER", "").strip()
@@ -279,10 +284,11 @@ async def get_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
 
         members = await conn.fetch(
             """
-            SELECT user_id, role, status
-            FROM trip_members
+            SELECT tm.user_id, tm.role, tm.status, u.name, u.email
+            FROM trip_members tm
+            JOIN users u ON u.id = tm.user_id
             WHERE trip_id = $1
-            ORDER BY joined_at NULLS FIRST
+            ORDER BY tm.joined_at NULLS FIRST
             """,
             trip_id,
         )
@@ -299,6 +305,8 @@ async def get_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
                     "user_id": str(m["user_id"]),
                     "role": m["role"],
                     "status": m["status"],
+                    "name": m["name"],
+                    "email": m["email"],
                 }
                 for m in members
             ],
@@ -353,8 +361,88 @@ async def invite_member(
         "user_id": str(row["user_id"]),
         "role": row["role"],
         "status": row["status"],
+        "email": invitee["email"],
         "email_sent": email_sent,
         "email_error": email_error or None,
+    }
+
+
+@app.get("/trips/{trip_id}/destinations")
+async def get_destinations(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        member = await conn.fetchrow(
+            "SELECT 1 FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not member:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        rows = await conn.fetch(
+            """
+            SELECT destination, MAX(vote_score) AS votes
+            FROM bucket_list_items
+            WHERE trip_id = $1
+            GROUP BY destination
+            ORDER BY MAX(vote_score) DESC, destination ASC
+            """,
+            trip_id,
+        )
+
+    return {
+        "destinations": [
+            {"name": row["destination"], "votes": int(row["votes"] or 0)} for row in rows
+        ]
+    }
+
+
+@app.put("/trips/{trip_id}/destinations")
+async def save_destinations(
+    trip_id: str,
+    body: SaveDestinationsRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    clean_destinations: list[str] = []
+    seen: set[str] = set()
+    for item in body.destinations:
+        value = (item or "").strip()
+        key = value.lower()
+        if value and key not in seen:
+            seen.add(key)
+            clean_destinations.append(value)
+
+    async with db_pool.acquire() as conn:
+        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        if str(trip["owner_id"]) != user_id:
+            raise HTTPException(status_code=403, detail="Only owner can update destinations")
+
+        await conn.execute("DELETE FROM bucket_list_items WHERE trip_id = $1", trip_id)
+
+        for destination in clean_destinations:
+            votes = int(body.votes.get(destination, 0))
+            await conn.execute(
+                """
+                INSERT INTO bucket_list_items (trip_id, destination, added_by, vote_score)
+                VALUES ($1, $2, $3, $4)
+                """,
+                trip_id,
+                destination,
+                user_id,
+                votes,
+            )
+
+    return {
+        "destinations": [
+            {"name": name, "votes": int(body.votes.get(name, 0))} for name in clean_destinations
+        ]
     }
 
 
@@ -906,4 +994,3 @@ class OrchestratorAgent:
                 orch._ws_clients[trip_id].remove(websocket)
 
         return app
-

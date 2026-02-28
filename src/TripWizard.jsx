@@ -50,6 +50,27 @@ function safeReadSession() {
   }
 }
 
+function toInitials(value) {
+  return (value || "")
+    .split(/[._\-\s]/)
+    .map((part) => part[0] || "")
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "TR";
+}
+
+function mapMemberFromApi(member) {
+  const display = member?.email || member?.name || member?.user_id || "member";
+  const isAccepted = member?.status === "accepted" || member?.role === "owner";
+  return {
+    name: display,
+    status: isAccepted ? "done" : "pending",
+    initials: toInitials(member?.name || member?.email || display),
+    email: member?.email || "",
+    userId: member?.user_id || "",
+  };
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    GLOBAL STYLES
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -483,7 +504,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
             };
           })
           .sort((a, b) => b.votes - a.votes)
-      : DEST_RESULTS_SEED;
+      : [];
   const hasConsensus = destResults.some((d) => d.votes >= consensusTarget);
 
   useEffect(() => {
@@ -502,19 +523,36 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
     onTripSaved(snapshot);
   }, [tripId, tripName, authToken, members, destinations, onTripSaved]);
 
+  const refreshTripFromBackend = async (token, id) => {
+    const tripPayload = await apiJson(`/trips/${id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const savedTrip = tripPayload?.trip;
+    if (savedTrip?.name) {
+      setTripName(savedTrip.name);
+    }
+    if (Array.isArray(savedTrip?.members) && savedTrip.members.length > 0) {
+      setMembers(savedTrip.members.map(mapMemberFromApi));
+    }
+
+    const destinationsPayload = await apiJson(`/trips/${id}/destinations`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const savedDestinations = Array.isArray(destinationsPayload?.destinations)
+      ? destinationsPayload.destinations
+      : [];
+    if (savedDestinations.length > 0) {
+      setDestinations(savedDestinations.map((item) => item.name).filter(Boolean));
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     async function hydrateTrip() {
       if (!tripId || !authToken) return;
       try {
-        const payload = await apiJson(`/trips/${tripId}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
+        await refreshTripFromBackend(authToken, tripId);
         if (cancelled) return;
-        const savedTrip = payload?.trip;
-        if (savedTrip?.name) {
-          setTripName(savedTrip.name);
-        }
       } catch {
         // Keep local state if trip lookup fails.
       }
@@ -556,6 +594,9 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
       });
       const createdTripId = created?.trip?.id || "";
       setTripId(createdTripId);
+      if (createdTripId) {
+        await refreshTripFromBackend(token, createdTripId);
+      }
 
       const inviteEmails = members
         .map((m) => (m.name || "").trim().toLowerCase())
@@ -617,11 +658,42 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         if (failed.length > 0) {
           setApiError(`Some invites failed: ${failed.join(" | ")}`);
         }
+
+        await refreshTripFromBackend(token, createdTripId);
       }
 
       next();
     } catch (err) {
       setApiError(err?.message || "Backend request failed");
+    } finally {
+      setApiBusy(false);
+    }
+  };
+
+  const handleBucketContinue = async () => {
+    if (!tripId || !authToken) {
+      next();
+      return;
+    }
+
+    setApiBusy(true);
+    setApiError("");
+    try {
+      const votes = {};
+      destinations.forEach((destination) => {
+        votes[destination] = voteCount(destination);
+      });
+      await apiJson(`/trips/${tripId}/destinations`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ destinations, votes }),
+      });
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to save destinations");
     } finally {
       setApiBusy(false);
     }
@@ -779,7 +851,9 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         </div>
         {hasConsensus ? (
           <div style={{ marginTop:6 }}>
-            <Btn onClick={next} full>Continue to Timing →</Btn>
+            <Btn onClick={handleBucketContinue} full disabled={apiBusy}>
+              {apiBusy ? "Saving destinations..." : "Continue to Timing →"}
+            </Btn>
           </div>
         ) : (
           <p style={{ fontSize:12,color:T.text3 }}>
@@ -795,6 +869,18 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
     <Shell step={step}>
       <AgentHeader emoji="📅" name="Timing Agent" desc="Finding the perfect travel window"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        {destResults.length === 0 && (
+          <div style={{ background:T.warningBg, border:`1px solid ${T.warning}`, borderRadius:12, padding:12 }}>
+            <p style={{ fontSize:13, color:T.text2 }}>
+              Add and save destinations in Bucket List first so timing analysis can run.
+            </p>
+            <div style={{ marginTop:8 }}>
+              <Btn onClick={back}>Back to Bucket List</Btn>
+            </div>
+          </div>
+        )}
+        {destResults.length > 0 && (
+          <>
         <Chat agent="Timing Agent" emoji="📅" msg="I've analyzed weather, crowds, and prices for your destinations. Here's the calendar heatmap:"/>
         {/* Calendar heatmap */}
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
@@ -826,6 +912,8 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
           subtitle="Jun 15 – Jun 28"
           desc={`All ${destResults.length} destinations have great weather, manageable crowds, and reasonable prices in mid-June.`}
           onYes={next} onNo={()=>{}}/>
+          </>
+        )}
       </div>
     </Shell>
   );
