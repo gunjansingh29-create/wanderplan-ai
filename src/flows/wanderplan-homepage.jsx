@@ -151,8 +151,13 @@ function GlobeCanvas() {
 // MAIN APP — Landing + Auth + Onboarding
 // ════════════════════════════════════════════════════════════════════════════
 
-export default function WanderPlanHome({ onOpenFlow = () => {}, flowTiles = [] }) {
-  const [screen, setScreen] = useState("landing"); // landing | auth | onboard-1 | onboard-2 | onboard-3 | dashboard
+export default function WanderPlanHome({
+  onOpenFlow = () => {},
+  flowTiles = [],
+  initialScreen = "landing",
+  onScreenChange = () => {},
+}) {
+  const [screen, setScreen] = useState(initialScreen); // landing | auth | onboard-1 | onboard-2 | onboard-3 | dashboard
   const [authMode, setAuthMode] = useState("signup"); // signup | login
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -166,6 +171,10 @@ export default function WanderPlanHome({ onOpenFlow = () => {}, flowTiles = [] }
     window.addEventListener("scroll", h, { passive: true });
     return () => window.removeEventListener("scroll", h);
   }, []);
+
+  useEffect(() => {
+    onScreenChange(screen);
+  }, [screen, onScreenChange]);
 
   // ── Landing Page ─────────────────────────────────────────────────────
   if (screen === "landing") return <LandingPage scrollY={scrollY} onCTA={() => setScreen("auth")} />;
@@ -235,6 +244,9 @@ export default function WanderPlanHome({ onOpenFlow = () => {}, flowTiles = [] }
 function LandingPage({ scrollY, onCTA }) {
   const [statsVisible, setStatsVisible] = useState(false);
   const statsRef = useRef(null);
+  const openDemo = () => {
+    window.location.assign('/?entry=wizard&mode=demo');
+  };
 
   useEffect(() => {
     const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) setStatsVisible(true); }, { threshold: 0.3 });
@@ -276,10 +288,10 @@ function LandingPage({ scrollY, onCTA }) {
               transition: "color 0.3s" }}>WanderPlan</span>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button onClick={onCTA} style={{ padding: "8px 20px", borderRadius: 9999, border: "none",
+            <button onClick={openDemo} style={{ padding: "8px 20px", borderRadius: 9999, border: "none",
               background: T.secondary, color: "#fff", fontWeight: 600, fontSize: 13.5,
               fontFamily: "'DM Sans'", cursor: "pointer", transition: "all 0.2s", minHeight: 40 }}>
-              Start Planning →
+              Trip Planning Demo →
             </button>
           </div>
         </div>

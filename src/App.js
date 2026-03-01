@@ -4,6 +4,7 @@ import TripWizard from './TripWizard';
 import Dashboard from './flows/wanderplan-dashboard';
 import AnalyticsDashboard from './flows/wanderplan-analytics-dashboard';
 import BucketListAgent from './flows/wanderplan-bucket-list-agent';
+import BudgetAgent from './flows/wanderplan-budget-agent';
 import InterestHealthAgents from './flows/wanderplan-interest-health-agents';
 import InterestProfiler from './flows/wanderplan-interest-profiler';
 import TimingAgent from './flows/wanderplan-timing-agent';
@@ -13,9 +14,10 @@ const FLOWS = [
   { id: 'dashboard', label: 'Dashboard', Component: Dashboard },
   { id: 'analytics', label: 'Analytics Dashboard', Component: AnalyticsDashboard },
   { id: 'bucket-list', label: 'Bucket List', Component: BucketListAgent },
+  { id: 'budget', label: 'Budget Agent', Component: BudgetAgent },
   { id: 'interest-health', label: 'Health Compatibility', Component: InterestHealthAgents },
   { id: 'interest-profiler', label: 'Interest Profiler', Component: InterestProfiler },
-  { id: 'timing', label: 'Timing Agent', Component: TimingAgent },
+  { id: 'timing', label: 'Best Time To Travel', Component: TimingAgent },
 ];
 
 const TRIP_SESSION_KEY = 'wanderplan.tripSession';
@@ -26,6 +28,11 @@ function parseEntryFromUrl() {
   return FLOWS.some((flow) => flow.id === requested) ? requested : 'home';
 }
 
+function isDemoModeFromUrl() {
+  const mode = new URLSearchParams(window.location.search).get('mode');
+  return (mode || '').toLowerCase() === 'demo';
+}
+
 function syncHash(flowId) {
   // Keep URL stable so reload always returns landing page unless ?entry= is provided.
   if (window.location.hash) {
@@ -33,8 +40,26 @@ function syncHash(flowId) {
   }
 }
 
+function buildUrl(flowId, demoMode) {
+  const params = new URLSearchParams(window.location.search);
+  if (flowId === 'home') {
+    params.delete('entry');
+  } else {
+    params.set('entry', flowId);
+  }
+  if (demoMode) {
+    params.set('mode', 'demo');
+  } else {
+    params.delete('mode');
+  }
+  const query = params.toString();
+  return `${window.location.pathname}${query ? `?${query}` : ''}`;
+}
+
 export default function App() {
   const [activeFlow, setActiveFlow] = useState(() => parseEntryFromUrl());
+  const [demoMode, setDemoMode] = useState(() => isDemoModeFromUrl());
+  const [lastHomeScreen, setLastHomeScreen] = useState('landing');
   const [tripSession, setTripSession] = useState(() => {
     try {
       const raw = window.localStorage.getItem(TRIP_SESSION_KEY);
@@ -53,6 +78,15 @@ export default function App() {
     syncHash(activeFlow);
   }, [activeFlow]);
 
+  useEffect(() => {
+    const onPopState = () => {
+      setActiveFlow(parseEntryFromUrl());
+      setDemoMode(isDemoModeFromUrl());
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   const handleTripSaved = (session) => {
     setTripSession(session);
     try {
@@ -62,12 +96,42 @@ export default function App() {
     }
   };
 
+  const openFlow = (flowId) => {
+    window.history.pushState(null, '', buildUrl(flowId, demoMode));
+    setActiveFlow(flowId);
+  };
+
+  const goBackOneStep = () => {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState(null, '', buildUrl('home', demoMode));
+    setActiveFlow('home');
+  };
+
   if (activeFlow === 'home') {
-    return <WanderPlanHomepage onOpenFlow={setActiveFlow} flowTiles={FLOWS} />;
+    return (
+      <>
+        <WanderPlanHomepage
+          onOpenFlow={openFlow}
+          flowTiles={FLOWS}
+          initialScreen={lastHomeScreen}
+          onScreenChange={setLastHomeScreen}
+        />
+      </>
+    );
   }
 
   if (!selectedFlow) {
-    return <WanderPlanHomepage onOpenFlow={setActiveFlow} flowTiles={FLOWS} />;
+    return (
+      <WanderPlanHomepage
+        onOpenFlow={openFlow}
+        flowTiles={FLOWS}
+        initialScreen={lastHomeScreen}
+        onScreenChange={setLastHomeScreen}
+      />
+    );
   }
 
   const ActiveComponent = selectedFlow.Component;
@@ -89,7 +153,7 @@ export default function App() {
       >
         <strong>{selectedFlow.label}</strong>
         <button
-          onClick={() => setActiveFlow('home')}
+          onClick={goBackOneStep}
           style={{
             border: '1px solid #334155',
             borderRadius: 8,
@@ -100,11 +164,11 @@ export default function App() {
             fontWeight: 600,
           }}
         >
-          Back To Homepage
+          Back
         </button>
       </div>
       {selectedFlow.id === 'wizard' ? (
-        <TripWizard initialSession={tripSession} onTripSaved={handleTripSaved} />
+        <TripWizard initialSession={demoMode ? null : tripSession} onTripSaved={handleTripSaved} demoMode={demoMode} />
       ) : (
         <ActiveComponent />
       )}
