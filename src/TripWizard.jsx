@@ -495,6 +495,10 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
   const next = () => setStep(s => Math.min(s+1, STAGES.length-1));
   const back = () => setStep(s => Math.max(s-1, 0));
   const stageKey = STAGES[step]?.key;
+  const handleRevise = () => {
+    setApiError("");
+    back();
+  };
   const currentUserId = getUserIdFromToken(authToken);
   const joinedCount = members.filter((m) => m.status === "done").length;
   const consensusTarget = Math.max(2, Math.ceil(members.length * 0.6));
@@ -1519,7 +1523,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         <YN title="June is your sweet spot" agent="Timing Agent"
           subtitle="Jun 15 – Jun 28"
           desc={`All ${timingDisplay.length} destinations have great weather, manageable crowds, and reasonable prices in mid-June.`}
-          onYes={handleTimingContinue} onNo={()=>{}}/>
+          onYes={handleTimingContinue} onNo={handleRevise}/>
           </>
         )}
       </div>
@@ -1577,10 +1581,10 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         <Chat agent="Health Agent" emoji="🏥" msg="I've reviewed health requirements for your destinations and planned activities. A couple of things to note:"/>
         <YN title="Travel Insurance Recommended" agent="Health Agent" subtitle="For Greece & Japan"
           desc="Standard travel insurance covering medical emergencies is recommended for both destinations. Does everyone have this?"
-          tags={["Recommended","All destinations"]} onYes={()=>{}} onNo={()=>{}}/>
+          tags={["Recommended","All destinations"]} onYes={()=>{}} onNo={handleRevise}/>
         <YN title="No Vaccinations Required" agent="Health Agent"
           desc="Neither Greece nor Japan require special vaccinations for travelers from your home country. Standard vaccines (Tetanus, Hep A) are recommended but not mandatory."
-          tags={["Optional","Low risk"]} onYes={handleHealthContinue} onNo={()=>{}}/>
+          tags={["Optional","Low risk"]} onYes={handleHealthContinue} onNo={handleRevise}/>
       </div>
     </Shell>
   );
@@ -1673,7 +1677,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         </div>
         <YN title="10 days covers everything" agent="Duration Agent"
           desc="To fully enjoy all 6 approved activities across Santorini and Kyoto with travel and rest days, you need 10 days. Does this work?"
-          onYes={handleDurationContinue} onNo={()=>{}}/>
+          onYes={handleDurationContinue} onNo={handleRevise}/>
       </div>
     </Shell>
   );
@@ -1715,7 +1719,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         </div>
         <YN title="Everyone is free Jun 15 – 28" agent="Sync Agent"
           desc="All 4 members are available for this 14-day window. Your trip needs 10 days, giving you flexibility on start date. Lock these dates?"
-          onYes={handleAvailabilityContinue} onNo={()=>{}}/>
+          onYes={handleAvailabilityContinue} onNo={handleRevise}/>
       </div>
     </Shell>
   );
@@ -1773,7 +1777,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         </div>
         <YN title={`$${(budgetPerDay*10).toLocaleString()} total per person`} agent="Budget Agent"
           desc={`At $${budgetPerDay}/day for 10 days, your total budget is $${(budgetPerDay*10).toLocaleString()} per person ($${(budgetPerDay*10*4).toLocaleString()} for the group). Confirm?`}
-          onYes={handleBudgetContinue} onNo={()=>{}}/>
+          onYes={handleBudgetContinue} onNo={handleRevise}/>
       </div>
     </Shell>
   );
@@ -1996,7 +2000,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
           subtitle="3 days shown · 10 total planned"
           desc="Every flight, transfer, activity, meal, and rest period has been scheduled. Approve to send calendar invites to all members?"
           tags={["10 days","6 activities","12 meals","2 destinations"]}
-          onYes={handleItineraryApprove} onNo={()=>{}}/>
+          onYes={handleItineraryApprove} onNo={handleRevise}/>
       </div>
     </Shell>
   );
