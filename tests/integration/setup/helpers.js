@@ -240,6 +240,18 @@ function getPool() {
       user:     process.env.POSTGRES_USER     || 'wanderplan',
       password: process.env.POSTGRES_PASSWORD || 'wanderplan_test',
     });
+    // During docker-compose teardown Postgres is intentionally terminated.
+    // Swallow shutdown-time idle client errors so Node does not crash the run.
+    _pool.on('error', (err) => {
+      const message = String(err?.message || '');
+      const code = err?.code;
+      if (code === '57P01' || message.includes('terminating connection due to administrator command')) {
+        return;
+      }
+      // Keep non-shutdown errors visible for debugging.
+      // eslint-disable-next-line no-console
+      console.error('[integration-db] pool error:', err);
+    });
   }
   return _pool;
 }

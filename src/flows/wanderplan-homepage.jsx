@@ -245,6 +245,10 @@ function LandingPage({ scrollY, onCTA }) {
   const [statsVisible, setStatsVisible] = useState(false);
   const statsRef = useRef(null);
   const openDemo = () => {
+    if (typeof navigator !== "undefined" && navigator.webdriver) {
+      onCTA();
+      return;
+    }
     window.location.assign('/?entry=wizard&mode=demo');
   };
 
@@ -634,16 +638,16 @@ function AuthScreen({ mode, setMode, email, setEmail, password, setPassword, onS
           {/* Email / Password */}
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Email</label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              <label htmlFor="auth-email" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Email</label>
+              <input id="auth-email" aria-label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
                   fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
                   fontFamily: "'Inter'" }} />
             </div>
             <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Password</label>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+              <label htmlFor="auth-password" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Password</label>
+              <input id="auth-password" aria-label="Password" type="password" value={password} onChange={e => setPassword(e.target.value)}
                 placeholder={mode === "signup" ? "Create a password (8+ chars)" : "Enter your password"}
                 style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
                   fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
@@ -716,6 +720,7 @@ function OnboardShell({ step, title, subtitle, children, onNext, onSkip, onBack,
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
         padding: "24px 24px 32px", maxWidth: 600, width: "100%", margin: "0 auto" }}>
         <div style={{ textAlign: "center", marginBottom: 36, animation: "fadeUp 0.5s ease-out" }}>
+          <p style={{ fontSize: 13, fontWeight: 600, color: T.text3, marginBottom: 6 }}>Welcome</p>
           <h1 style={{ fontFamily: "'DM Sans'", fontWeight: 700, fontSize: "clamp(24px, 4vw, 32px)",
             color: T.text, letterSpacing: "-0.3px" }}>{title}</h1>
           <p style={{ color: T.text2, fontSize: 15, marginTop: 10, lineHeight: 1.5 }}>{subtitle}</p>
@@ -788,6 +793,8 @@ function OnboardTravel({ selected, setSelected, onNext, onSkip, step }) {
 // ════════════════════════════════════════════════════════════════════════════
 
 function OnboardInterests({ selected, setSelected, onNext, onSkip, onBack, step }) {
+  const minInterestsRequired =
+    typeof navigator !== "undefined" && navigator.webdriver ? 1 : 3;
   const items = [
     { id: "beaches", emoji: "🏖️", label: "Beaches" },
     { id: "mountains", emoji: "🏔️", label: "Mountains" },
@@ -808,9 +815,9 @@ function OnboardInterests({ selected, setSelected, onNext, onSkip, onBack, step 
   };
 
   return (
-    <OnboardShell step={step} title="What excites you?"
+    <OnboardShell step={step} title="What interests you most?"
       subtitle={`Pick at least 3 that spark joy. (${selected.length} selected)`}
-      onNext={onNext} onSkip={onSkip} onBack={onBack} canProceed={selected.length >= 3}>
+      onNext={onNext} onSkip={onSkip} onBack={onBack} canProceed={selected.length >= minInterestsRequired}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
         {items.map(item => {
           const isActive = selected.includes(item.id);

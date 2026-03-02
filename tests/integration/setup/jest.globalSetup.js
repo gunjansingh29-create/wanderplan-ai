@@ -2,6 +2,7 @@
  * Jest Global Setup for WanderPlan AI Integration Tests
  */
 'use strict';
+const fs = require('fs');
 const { execSync } = require('child_process');
 const path = require('path');
 const COMPOSE_FILE = path.resolve(__dirname, 'docker-compose.test.yml');
@@ -26,9 +27,14 @@ module.exports = async function globalSetup() {
     });
   }
   const seedFile = path.resolve(__dirname, 'seed.sql');
+  const seedSql = fs.readFileSync(seedFile, 'utf8');
   execSync(
-    `docker exec wp-test-postgres psql -U wanderplan -d wanderplan_test -f /dev/stdin < "${seedFile}"`,
-    { stdio: 'inherit', timeout: 300_000 }
+    'docker exec -i wp-test-postgres psql -U wanderplan -d wanderplan_test -f -',
+    {
+      input: seedSql,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      timeout: 300_000,
+    }
   );
   await waitForHealth('http://localhost:18000/health', 60_000);
   console.log('✅  Integration stack ready.\n');

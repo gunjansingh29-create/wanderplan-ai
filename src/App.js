@@ -23,6 +23,13 @@ const FLOWS = [
 const TRIP_SESSION_KEY = 'wanderplan.tripSession';
 
 function parseEntryFromUrl() {
+  const path = window.location.pathname.toLowerCase();
+  if (path === '/trip/new' || path.startsWith('/trip/new/')) {
+    return 'wizard';
+  }
+  if (path === '/wizard' || path.startsWith('/wizard/')) {
+    return 'wizard';
+  }
   const queryFlow = new URLSearchParams(window.location.search).get('entry');
   const requested = (queryFlow || 'home').toLowerCase();
   return FLOWS.some((flow) => flow.id === requested) ? requested : 'home';
@@ -102,6 +109,10 @@ export default function App() {
   };
 
   const goBackOneStep = () => {
+    if (selectedFlow?.id === 'wizard') {
+      window.dispatchEvent(new CustomEvent('wanderplan-wizard-back'));
+      return;
+    }
     if (window.history.length > 1) {
       window.history.back();
       return;
@@ -158,6 +169,7 @@ export default function App() {
             border: '1px solid #334155',
             borderRadius: 8,
             padding: '6px 10px',
+            minHeight: 44,
             background: '#111827',
             color: '#F8FAFC',
             cursor: 'pointer',

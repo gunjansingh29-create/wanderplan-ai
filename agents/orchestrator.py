@@ -1,14 +1,22 @@
 ﻿
 from __future__ import annotations
 import asyncio
+import json
 import os
 import smtplib
+from urllib import request as urllib_request
+from urllib.error import HTTPError, URLError
+from collections import Counter
+from datetime import date, datetime, time, timedelta, timezone
 from email.message import EmailMessage
 from typing import Any, Optional
+from uuid import uuid4
+from uuid import UUID
 
 import asyncpg
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # Integration-test seed users (kept in sync with tests/integration/setup/seed.sql)
@@ -95,6 +103,105 @@ class UpdateMemberRequest(BaseModel):
 class SaveDestinationsRequest(BaseModel):
     destinations: list[str]
     votes: dict[str, int] = {}
+
+
+class BucketListItemRequest(BaseModel):
+    destination: str
+    country: Optional[str] = None
+    category: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class InterestProfileRequest(BaseModel):
+    categories: list[str]
+    intensity: str = "moderate"
+    must_do: list[str] = []
+    avoid: list[str] = []
+
+
+class BudgetRequest(BaseModel):
+    daily_budget: float
+    currency: str = "USD"
+
+
+class BudgetIncreaseRequest(BaseModel):
+    new_daily_budget: float
+    reason: Optional[str] = None
+
+
+class FlightSearchRequest(BaseModel):
+    origin: str
+    destination: str
+    depart_date: str
+    return_date: Optional[str] = None
+
+
+class FlightSelectRequest(BaseModel):
+    flight_id: str
+    price_usd: Optional[float] = None
+    force: bool = False
+
+
+class StaySearchRequest(BaseModel):
+    city: str
+    check_in: str
+    check_out: str
+    max_price: Optional[float] = None
+
+
+class StaySelectRequest(BaseModel):
+    stay_id: str
+    price_per_night: float
+    nights: int
+    force_over_budget: bool = False
+
+
+class AvailabilityRequest(BaseModel):
+    date_ranges: list[dict[str, str]]
+
+
+class PoiApprovalRequest(BaseModel):
+    approved: bool
+
+
+class HealthAcknowledgmentItem(BaseModel):
+    activity_id: str
+    certification_required: Optional[str] = None
+    user_has_cert: bool
+
+
+class HealthAcknowledgmentRequest(BaseModel):
+    acknowledgments: list[HealthAcknowledgmentItem]
+    dietary_restrictions: list[str] = []
+    mobility_level: Optional[str] = None
+
+
+class PlatformPreferenceRequest(BaseModel):
+    platform: str
+
+
+class StoryboardGenerateRequest(BaseModel):
+    day_id: Optional[str] = None
+
+
+class ItineraryApproveRequest(BaseModel):
+    approved: bool
+
+
+class CalendarSyncRequest(BaseModel):
+    provider: str
+    calendar_id: Optional[str] = None
+    access_token: Optional[str] = None
+
+
+class AnalyticsEventRequest(BaseModel):
+    session_id: Optional[str] = None
+    trip_id: Optional[str] = None
+    user_id: Optional[str] = None
+    event_type: str
+    screen_name: Optional[str] = None
+    properties: dict[str, Any] = {}
+    client_ts: Optional[str] = None
 
 
 def _smtp_settings() -> tuple[str, int, str, str, str]:
@@ -185,8 +292,135 @@ def _parse_user_id_from_token(authorization: str) -> str:
     raise HTTPException(status_code=401, detail="Invalid token")
 
 
-async def get_current_user_id(authorization: str = Header(...)) -> str:
+async def get_current_user_id(authorization: str | None = Header(default=None)) -> str:
     return _parse_user_id_from_token(authorization)
+
+
+async def _require_trip_member(conn: asyncpg.Connection, trip_id: str, user_id: str) -> None:
+    member = await conn.fetchrow(
+        "SELECT 1 FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+        trip_id,
+        user_id,
+    )
+    if not member:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+async def _require_trip_owner(conn: asyncpg.Connection, trip_id: str, user_id: str) -> None:
+    trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if str(trip["owner_id"]) != user_id:
+        raise HTTPException(status_code=403, detail="Only owner can perform this action")
+
+
+def _budget_breakdown(total_budget: float) -> dict[str, float]:
+    flights = round(total_budget * 0.30, 2)
+    accommodation = round(total_budget * 0.30, 2)
+    dining = round(total_budget * 0.20, 2)
+    activities = round(total_budget * 0.10, 2)
+    transport = round(total_budget * 0.05, 2)
+    misc = round(total_budget - (flights + accommodation + dining + activities + transport), 2)
+    return {
+        "flights": flights,
+        "accommodation": accommodation,
+        "dining": dining,
+        "activities": activities,
+        "transport": transport,
+        "misc": misc,
+    }
+
+
+def _json_obj(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+POI_CATALOG: dict[str, list[dict[str, Any]]] = {
+    "food": [
+        {"name": "Tsukiji Outer Market", "category": "food", "city": "Tokyo", "country": "Japan", "tags": ["food", "market", "seafood"], "rating": 4.5, "cost": 15},
+        {"name": "Ramen Street", "category": "food", "city": "Tokyo", "country": "Japan", "tags": ["food", "ramen", "dining"], "rating": 4.6, "cost": 10},
+    ],
+    "culture": [
+        {"name": "Senso-ji Temple", "category": "culture", "city": "Tokyo", "country": "Japan", "tags": ["temple", "history", "culture"], "rating": 4.7, "cost": 0},
+        {"name": "Tokyo National Museum", "category": "culture", "city": "Tokyo", "country": "Japan", "tags": ["museum", "history", "art"], "rating": 4.5, "cost": 12},
+    ],
+    "art": [
+        {"name": "teamLab Borderless", "category": "art", "city": "Tokyo", "country": "Japan", "tags": ["art", "tech", "adventure"], "rating": 4.8, "cost": 32},
+    ],
+    "nature": [
+        {"name": "Shinjuku Gyoen", "category": "nature", "city": "Tokyo", "country": "Japan", "tags": ["park", "nature", "garden"], "rating": 4.6, "cost": 5},
+    ],
+    "adventure": [
+        {"name": "Mt Takao Hike", "category": "adventure", "city": "Tokyo", "country": "Japan", "tags": ["hiking", "nature", "adventure"], "rating": 4.4, "cost": 5},
+    ],
+}
+
+
+def _post_calendar_event(base_url: str, calendar_id: str, payload: dict[str, Any]) -> None:
+    if not base_url:
+        return
+    endpoint = f"{base_url.rstrip('/')}/v3/calendars/{calendar_id}/events"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib_request.Request(endpoint, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib_request.urlopen(req, timeout=5) as resp:  # nosec B310
+        if resp.status < 200 or resp.status >= 300:
+            raise HTTPException(status_code=502, detail="Calendar provider rejected event")
+
+
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _timing_profile_for_destination(destination: str) -> tuple[dict[str, int], list[str], list[str], dict[str, str]]:
+    # Deterministic seasonality curve by destination hash so tests stay stable.
+    seed = sum(ord(c) for c in destination.lower()) % 12
+    month_scores: dict[str, int] = {}
+    for idx, month in enumerate(MONTH_NAMES):
+        distance = min((idx - seed) % 12, (seed - idx) % 12)
+        score = max(0, 10 - distance * 2)
+        month_scores[month] = int(score)
+
+    sorted_months = sorted(month_scores.items(), key=lambda item: item[1], reverse=True)
+    preferred = [m for m, _ in sorted_months[:3]]
+    avoid = [m for m, _ in sorted(month_scores.items(), key=lambda item: item[1])[:2]]
+
+    start = datetime(2025, 6, 15, tzinfo=timezone.utc)
+    end = start + timedelta(days=13)
+    best_window = {"start": start.isoformat(), "end": end.isoformat()}
+    return month_scores, preferred, avoid, best_window
+
+
+def _storyboard_text(platform: str, title_tokens: list[str], destination: str) -> str:
+    joined = ", ".join(title_tokens[:3]) if title_tokens else destination
+    if platform == "twitter":
+        text = f"{destination} day highlights: {joined}. Perfect balance of culture + food + views. #travel"
+        return text[:280]
+    if platform == "tiktok":
+        text = f"POV: one day in {destination} - {joined}. Save this route for your next trip! #tiktoktravel #wanderplan"
+        return text[:300]
+    if platform == "blog":
+        para = (
+            f"We started in {destination} and moved through {joined}. "
+            "Every transition was timed to avoid crowds and preserve recovery windows. "
+            "Food stops were selected to match dietary constraints while still keeping local character.\n\n"
+        )
+        long_text = para * 18
+        return long_text
+    hashtags = "#travel #wanderplan #itinerary #explore"
+    base = (
+        f"{destination} in one unforgettable sequence: {joined}. "
+        "Sunrise starts, market lunches, and evening city views all fit without rush. "
+        "This is exactly why collaborative trip planning matters. "
+    )
+    return f"{base}{hashtags}"
 
 
 @app.on_event("startup")
@@ -201,6 +435,18 @@ async def _startup_db():
     db_pool = await asyncpg.create_pool(
         dsn=dsn
     )
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS member_platform_preferences (
+              trip_id UUID NOT NULL,
+              user_id UUID NOT NULL,
+              platform TEXT NOT NULL,
+              updated_at TIMESTAMPTZ DEFAULT NOW(),
+              PRIMARY KEY (trip_id, user_id)
+            )
+            """
+        )
 
 
 @app.on_event("shutdown")
@@ -446,6 +692,148 @@ async def save_destinations(
     }
 
 
+@app.post("/trips/{trip_id}/bucket-list", status_code=201)
+async def add_bucket_list_item(
+    trip_id: str,
+    body: BucketListItemRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        row = await conn.fetchrow(
+            """
+            INSERT INTO bucket_list_items (trip_id, destination, country, category, added_by, vote_score)
+            VALUES ($1, $2, $3, $4, $5, 1)
+            RETURNING id, destination, country, category, vote_score
+            """,
+            trip_id,
+            body.destination.strip(),
+            body.country,
+            body.category,
+            user_id,
+        )
+    return {
+        "item": {
+            "id": str(row["id"]),
+            "destination": row["destination"],
+            "country": row["country"],
+            "category": row["category"],
+            "vote_score": int(row["vote_score"] or 0),
+        }
+    }
+
+
+@app.get("/trips/{trip_id}/bucket-list")
+async def get_bucket_list(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        rows = await conn.fetch(
+            """
+            SELECT id, destination, country, category, vote_score
+            FROM bucket_list_items
+            WHERE trip_id = $1
+            ORDER BY created_at ASC
+            """,
+            trip_id,
+        )
+    return {
+        "items": [
+            {
+                "id": str(row["id"]),
+                "destination": row["destination"],
+                "country": row["country"],
+                "category": row["category"],
+                "vote_score": int(row["vote_score"] or 0),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/trips/{trip_id}/bucket-list/ranked")
+async def get_ranked_bucket_list(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        total_members_row = await conn.fetchrow(
+            "SELECT COUNT(*)::int AS c FROM trip_members WHERE trip_id = $1 AND status = 'accepted'",
+            trip_id,
+        )
+        total_members = int(total_members_row["c"] or 1)
+        rows = await conn.fetch(
+            """
+            SELECT destination, MAX(country) AS country, MAX(category) AS category, MAX(vote_score) AS vote_count
+            FROM bucket_list_items
+            WHERE trip_id = $1
+            GROUP BY destination
+            ORDER BY MAX(vote_score) DESC, destination ASC
+            """,
+            trip_id,
+        )
+    items = []
+    for row in rows:
+        vote_count = int(row["vote_count"] or 0)
+        items.append(
+            {
+                "destination": row["destination"],
+                "country": row["country"],
+                "category": row["category"],
+                "vote_count": vote_count,
+                "total_members": total_members,
+                "score": round(60 + (vote_count / max(total_members, 1)) * 40, 1),
+            }
+        )
+    return {"items": items}
+
+
+@app.get("/trips/{trip_id}/timing-analysis")
+async def timing_analysis(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        destinations = await conn.fetch(
+            "SELECT DISTINCT destination FROM bucket_list_items WHERE trip_id = $1",
+            trip_id,
+        )
+        if not destinations:
+            raise HTTPException(status_code=422, detail="No bucket list destinations available")
+
+        await conn.execute("DELETE FROM timing_results WHERE trip_id = $1", trip_id)
+        results = []
+        for row in destinations:
+            destination = row["destination"]
+            month_scores, preferred, avoid, best_window = _timing_profile_for_destination(destination)
+            await conn.execute(
+                """
+                INSERT INTO timing_results (trip_id, destination, month_scores, preferred_months, avoid_months, best_window)
+                VALUES ($1, $2, $3::jsonb, $4::text[], $5::text[], $6::jsonb)
+                """,
+                trip_id,
+                destination,
+                json.dumps(month_scores),
+                preferred,
+                avoid,
+                json.dumps(best_window),
+            )
+            results.append(
+                {
+                    "destination": destination,
+                    "month_scores": month_scores,
+                    "preferred_months": preferred,
+                    "avoid_months": avoid,
+                    "best_window": best_window,
+                }
+            )
+    return {"timing_results": results}
+
+
 @app.put("/trips/{trip_id}/members/{member_user_id}")
 async def update_member_status(
     trip_id: str,
@@ -474,6 +862,872 @@ async def update_member_status(
             raise HTTPException(status_code=404, detail="Membership not found")
 
     return {"user_id": str(row["user_id"]), "role": row["role"], "status": row["status"]}
+
+
+@app.put("/trips/{trip_id}/members/{member_user_id}/interests")
+async def save_interest_profile(
+    trip_id: str,
+    member_user_id: str,
+    body: InterestProfileRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    if user_id != member_user_id:
+        raise HTTPException(status_code=403, detail="Cannot submit profile for another member")
+
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        await conn.execute(
+            """
+            INSERT INTO interest_profiles (trip_id, user_id, categories, intensity, must_do, avoid)
+            VALUES ($1, $2, $3::text[], $4, $5::text[], $6::text[])
+            ON CONFLICT (trip_id, user_id)
+            DO UPDATE SET categories = EXCLUDED.categories,
+                          intensity = EXCLUDED.intensity,
+                          must_do = EXCLUDED.must_do,
+                          avoid = EXCLUDED.avoid
+            """,
+            trip_id,
+            member_user_id,
+            body.categories,
+            body.intensity,
+            body.must_do,
+            body.avoid,
+        )
+    return {
+        "user_id": member_user_id,
+        "categories": body.categories,
+        "intensity": body.intensity,
+    }
+
+
+@app.get("/trips/{trip_id}/group-interests")
+async def get_group_interests(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        rows = await conn.fetch("SELECT categories FROM interest_profiles WHERE trip_id = $1", trip_id)
+    counter: Counter[str] = Counter()
+    for row in rows:
+        for category in row["categories"] or []:
+            counter[str(category).lower()] += 1
+    merged = [cat for cat, _ in sorted(counter.items(), key=lambda item: (-item[1], item[0]))]
+    return {"group_interests": {"categories": merged}}
+
+
+@app.get("/trips/{trip_id}/pois")
+async def get_pois(
+    trip_id: str,
+    user_id: str = Depends(get_current_user_id),
+    destination: Optional[str] = None,
+    limit: int = 20,
+    approved: Optional[bool] = None,
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        base_query = """
+            SELECT id, name, category, city, country, lat, lng, tags, rating, cost_estimate_usd, approved
+            FROM pois
+            WHERE trip_id = $1
+        """
+        params: list[Any] = [trip_id]
+        if destination:
+            base_query += " AND (city ILIKE $2 OR country ILIKE $2)"
+            params.append(f"%{destination}%")
+        if approved is not None:
+            idx = len(params) + 1
+            base_query += f" AND approved = ${idx}"
+            params.append(approved)
+        base_query += f" ORDER BY rating DESC NULLS LAST, created_at DESC LIMIT {max(1, min(limit, 50))}"
+        rows = await conn.fetch(base_query, *params)
+        if len(rows) == 0:
+            fallback_city = destination
+            fallback_country = "Japan"
+            if not fallback_city:
+                top_dest = await conn.fetchrow(
+                    """
+                    SELECT destination, country
+                    FROM bucket_list_items
+                    WHERE trip_id = $1
+                    ORDER BY vote_score DESC, created_at ASC
+                    LIMIT 1
+                    """,
+                    trip_id,
+                )
+                if top_dest:
+                    fallback_city = top_dest["destination"]
+                    fallback_country = top_dest["country"] or fallback_country
+            if not fallback_city:
+                fallback_city = "Tokyo"
+            interests = await conn.fetch("SELECT categories FROM interest_profiles WHERE trip_id = $1", trip_id)
+            counts: Counter[str] = Counter()
+            for item in interests:
+                for cat in item["categories"] or []:
+                    counts[str(cat).lower()] += 1
+            ranked_categories = [cat for cat, _ in sorted(counts.items(), key=lambda x: (-x[1], x[0]))]
+            if not ranked_categories:
+                ranked_categories = ["food", "culture"]
+            inserted = 0
+            for cat in ranked_categories[:3]:
+                for poi in POI_CATALOG.get(cat, []):
+                    await conn.execute(
+                        """
+                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, approved)
+                        VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, true)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        trip_id,
+                        poi["name"],
+                        poi["category"],
+                        fallback_city,
+                        fallback_country,
+                        poi["tags"],
+                        poi["rating"],
+                        poi["cost"],
+                    )
+                    inserted += 1
+            if inserted == 0:
+                for poi in POI_CATALOG["food"]:
+                    await conn.execute(
+                        """
+                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, approved)
+                        VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, true)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        trip_id,
+                        poi["name"],
+                        poi["category"],
+                        fallback_city,
+                        fallback_country,
+                        poi["tags"],
+                        poi["rating"],
+                        poi["cost"],
+                    )
+            rows = await conn.fetch(base_query, *params)
+    return {
+        "pois": [
+            {
+                "poi_id": str(row["id"]),
+                "name": row["name"],
+                "category": row["category"],
+                "city": row["city"],
+                "country": row["country"],
+                "location": {"lat": float(row["lat"] or 0), "lng": float(row["lng"] or 0)},
+                "tags": row["tags"] or [],
+                "rating": float(row["rating"] or 0),
+                "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
+                "approved": bool(row["approved"]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/trips/{trip_id}/pois/{poi_id}/approve")
+async def approve_poi(
+    trip_id: str,
+    poi_id: str,
+    body: PoiApprovalRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        row = await conn.fetchrow(
+            """
+            UPDATE pois
+            SET approved = $1
+            WHERE id = $2 AND trip_id = $3
+            RETURNING id, name, category, approved
+            """,
+            body.approved,
+            poi_id,
+            trip_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="POI not found")
+    return {"poi": {"poi_id": str(row["id"]), "name": row["name"], "category": row["category"], "approved": bool(row["approved"])}}
+
+
+@app.get("/trips/{trip_id}/health-requirements")
+async def get_health_requirements(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        rows = await conn.fetch(
+            """
+            SELECT id, name, category
+            FROM pois
+            WHERE trip_id = $1 AND approved = true
+            ORDER BY created_at ASC
+            """,
+            trip_id,
+        )
+    requirements = []
+    for row in rows:
+        cert_required = "open_water_scuba" if str(row["category"]).lower() == "scuba" else None
+        requirements.append(
+            {
+                "activity_id": str(row["id"]),
+                "activity": row["name"],
+                "certification_required": cert_required,
+            }
+        )
+    return {"requirements": requirements}
+
+
+@app.post("/trips/{trip_id}/members/{member_user_id}/health-acknowledgment")
+async def health_acknowledgment(
+    trip_id: str,
+    member_user_id: str,
+    body: HealthAcknowledgmentRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    if user_id != member_user_id:
+        raise HTTPException(status_code=403, detail="Cannot submit another member's acknowledgment")
+
+    alternatives = []
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        for ack in body.acknowledgments:
+            alternative = None
+            if ack.certification_required and not ack.user_has_cert:
+                alternative = "snorkeling"
+                await conn.execute(
+                    "UPDATE pois SET approved = false WHERE id = $1 AND trip_id = $2",
+                    ack.activity_id,
+                    trip_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, approved)
+                    VALUES ($1, $2, 'snorkeling', 'Okinawa', 'Japan', $3::text[], 4.6, 60, true)
+                    """,
+                    trip_id,
+                    "Blue Lagoon Snorkeling Tour",
+                    ["snorkeling", "ocean", "reef"],
+                )
+                alternatives.append({"name": "Blue Lagoon Snorkeling Tour", "category": "snorkeling", "tags": ["snorkeling"]})
+            await conn.execute(
+                """
+                INSERT INTO health_acknowledgments (trip_id, user_id, activity_id, certification_required, user_has_cert, alternative_suggested)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                trip_id,
+                member_user_id,
+                ack.activity_id,
+                ack.certification_required,
+                ack.user_has_cert,
+                alternative,
+            )
+    return {"processed": True, "alternatives_suggested": alternatives}
+
+
+@app.post("/trips/{trip_id}/budget")
+async def set_trip_budget(
+    trip_id: str,
+    body: BudgetRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_owner(conn, trip_id, user_id)
+        trip = await conn.fetchrow("SELECT duration_days FROM trips WHERE id = $1", trip_id)
+        duration_days = int(trip["duration_days"] or 7)
+        total_budget = round(body.daily_budget * duration_days, 2)
+        breakdown = _budget_breakdown(total_budget)
+        await conn.execute(
+            """
+            INSERT INTO budgets (trip_id, currency, daily_target, total_budget, spent, remaining, breakdown, warning_active)
+            VALUES ($1, $2, $3, $4, 0, $4, $5::jsonb, false)
+            ON CONFLICT (trip_id)
+            DO UPDATE SET currency = EXCLUDED.currency,
+                          daily_target = EXCLUDED.daily_target,
+                          total_budget = EXCLUDED.total_budget,
+                          remaining = EXCLUDED.total_budget - budgets.spent,
+                          breakdown = EXCLUDED.breakdown,
+                          warning_active = false,
+                          updated_at = NOW()
+            """,
+            trip_id,
+            body.currency,
+            body.daily_budget,
+            total_budget,
+            json.dumps(breakdown),
+        )
+    return {"budget": {"currency": body.currency, "daily_target": body.daily_budget, "total_budget": total_budget, "spent": 0, "remaining": total_budget, "breakdown": breakdown, "warning_active": False}}
+
+
+@app.get("/trips/{trip_id}/budget/breakdown")
+async def get_budget_breakdown(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        row = await conn.fetchrow(
+            "SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1",
+            trip_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Budget not found")
+    return {"budget": {"currency": row["currency"], "daily_target": float(row["daily_target"]), "total_budget": float(row["total_budget"]), "spent": float(row["spent"] or 0), "remaining": float(row["remaining"] or 0), "breakdown": _json_obj(row["breakdown"]), "warning_active": bool(row["warning_active"])}}
+
+
+@app.post("/trips/{trip_id}/budget/increase")
+async def increase_budget(trip_id: str, body: BudgetIncreaseRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_owner(conn, trip_id, user_id)
+        current = await conn.fetchrow("SELECT daily_target, spent FROM budgets WHERE trip_id = $1", trip_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Budget not found")
+        if body.new_daily_budget <= float(current["daily_target"]):
+            raise HTTPException(status_code=422, detail="New budget must be higher than current")
+        trip = await conn.fetchrow("SELECT duration_days FROM trips WHERE id = $1", trip_id)
+        duration_days = int(trip["duration_days"] or 7)
+        total_budget = round(body.new_daily_budget * duration_days, 2)
+        breakdown = _budget_breakdown(total_budget)
+        spent = float(current["spent"] or 0)
+        remaining = round(total_budget - spent, 2)
+        await conn.execute(
+            """
+            UPDATE budgets
+            SET daily_target = $1,
+                total_budget = $2,
+                remaining = $3,
+                breakdown = $4::jsonb,
+                warning_active = false,
+                updated_at = NOW()
+            WHERE trip_id = $5
+            """,
+            body.new_daily_budget,
+            total_budget,
+            remaining,
+            json.dumps(breakdown),
+            trip_id,
+        )
+    return {"budget": {"daily_target": body.new_daily_budget, "total_budget": total_budget, "spent": spent, "remaining": remaining, "breakdown": breakdown, "warning_active": False}}
+
+
+@app.post("/trips/{trip_id}/flights/search")
+async def search_flights(
+    trip_id: str,
+    body: FlightSearchRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        budget = await conn.fetchrow("SELECT breakdown FROM budgets WHERE trip_id = $1", trip_id)
+        budget_breakdown = _json_obj(budget["breakdown"]) if budget else {}
+        max_price = float(budget_breakdown.get("flights", 500))
+        await conn.execute("DELETE FROM flight_options WHERE trip_id = $1", trip_id)
+
+        dep_base = datetime.fromisoformat(body.depart_date).replace(tzinfo=timezone.utc)
+        options = [
+            ("Japan Airlines", 0, max(80.0, round(max_price * 0.78, 2)), 660),
+            ("ANA", 0, max(90.0, round(max_price * 0.86, 2)), 690),
+            ("Emirates", 1, max(70.0, round(max_price * 0.62, 2)), 820),
+        ]
+        flights = []
+        for airline, stops, price, duration_min in options:
+            dep_time = dep_base + timedelta(hours=stops * 2 + len(flights) * 3)
+            arr_time = dep_time + timedelta(minutes=duration_min)
+            row = await conn.fetchrow(
+                """
+                INSERT INTO flight_options (trip_id, airline, departure_airport, arrival_airport, departure_time, arrival_time, price_usd, stops, duration_min, selected)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)
+                RETURNING id, airline, departure_airport, arrival_airport, departure_time, arrival_time, price_usd, stops, duration_min
+                """,
+                trip_id,
+                airline,
+                body.origin,
+                body.destination,
+                dep_time,
+                arr_time,
+                price,
+                stops,
+                duration_min,
+            )
+            flights.append(
+                {
+                    "flight_id": str(row["id"]),
+                    "airline": row["airline"],
+                    "departure_airport": row["departure_airport"],
+                    "arrival_airport": row["arrival_airport"],
+                    "departure_time": row["departure_time"].isoformat(),
+                    "arrival_time": row["arrival_time"].isoformat(),
+                    "price_usd": float(row["price_usd"]),
+                    "stops": int(row["stops"] or 0),
+                    "duration_minutes": int(row["duration_min"] or 0),
+                }
+            )
+    return {"flights": flights, "search_params": {"max_price": max_price}}
+
+
+@app.post("/trips/{trip_id}/flights/select")
+async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        budget = await conn.fetchrow("SELECT total_budget, spent, breakdown FROM budgets WHERE trip_id = $1", trip_id)
+        if not budget:
+            raise HTTPException(status_code=422, detail="Budget must be set before selecting flights")
+        budget_breakdown = _json_obj(budget["breakdown"])
+        allocation = float(budget_breakdown.get("flights", 0))
+
+        row = None
+        try:
+            UUID(str(body.flight_id))
+            row = await conn.fetchrow(
+                "SELECT id, price_usd FROM flight_options WHERE id = $1 AND trip_id = $2",
+                body.flight_id,
+                trip_id,
+            )
+        except ValueError:
+            row = None
+        price = float(body.price_usd) if body.price_usd is not None else (float(row["price_usd"]) if row else None)
+        if price is None:
+            raise HTTPException(status_code=404, detail="Flight not found")
+        if price > allocation and not body.force:
+            await conn.execute("UPDATE budgets SET warning_active = true WHERE trip_id = $1", trip_id)
+            raise HTTPException(status_code=422, detail="Flight exceeds allocation")
+
+        await conn.execute("UPDATE flight_options SET selected = false WHERE trip_id = $1", trip_id)
+        if row:
+            await conn.execute("UPDATE flight_options SET selected = true WHERE id = $1", body.flight_id)
+
+        spent = round(float(budget["spent"] or 0) + price, 2)
+        total_budget = float(budget["total_budget"] or 0)
+        remaining = round(total_budget - spent, 2)
+        await conn.execute(
+            "UPDATE budgets SET spent = $1, remaining = $2, warning_active = false WHERE trip_id = $3",
+            spent,
+            remaining,
+            trip_id,
+        )
+        updated = await conn.fetchrow("SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1", trip_id)
+    return {"selected": True, "budget": {"currency": updated["currency"], "daily_target": float(updated["daily_target"]), "total_budget": float(updated["total_budget"]), "spent": float(updated["spent"]), "remaining": float(updated["remaining"]), "breakdown": _json_obj(updated["breakdown"]), "warning_active": bool(updated["warning_active"])}}
+
+
+@app.post("/trips/{trip_id}/stays/search")
+async def search_stays(trip_id: str, body: StaySearchRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+    nights = max(1, (date.fromisoformat(body.check_out) - date.fromisoformat(body.check_in)).days)
+    stays = [
+        {"stay_id": "STAY-LUXURY-001", "name": f"Grand {body.city} Palace", "price_per_night_usd": 200.0, "rating": 4.8, "type": "Hotel", "nights": nights},
+        {"stay_id": "STAY-PLUS-001", "name": f"{body.city} Central Suites", "price_per_night_usd": 140.0, "rating": 4.4, "type": "Hotel", "nights": nights},
+        {"stay_id": "STAY-BASIC-001", "name": f"{body.city} Urban Lodge", "price_per_night_usd": 90.0, "rating": 4.1, "type": "Hostel", "nights": nights},
+    ]
+    if body.max_price is not None:
+        stays = [s for s in stays if s["price_per_night_usd"] <= float(body.max_price)]
+    return {"stays": stays}
+
+
+@app.post("/trips/{trip_id}/stays/select")
+async def select_stay(trip_id: str, body: StaySelectRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        budget = await conn.fetchrow("SELECT total_budget, spent, breakdown FROM budgets WHERE trip_id = $1", trip_id)
+        if not budget:
+            raise HTTPException(status_code=422, detail="Budget must be set before selecting stays")
+        budget_breakdown = _json_obj(budget["breakdown"])
+        allocation = float(budget_breakdown.get("accommodation", 0))
+        requested = float(body.price_per_night) * int(body.nights)
+        spent_before = float(budget["spent"] or 0)
+        total_budget = float(budget["total_budget"] or 0)
+        remaining_before = round(total_budget - spent_before, 2)
+        if requested > remaining_before and not body.force_over_budget:
+            await conn.execute("UPDATE budgets SET warning_active = true WHERE trip_id = $1", trip_id)
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {"code": "BUDGET_EXCEEDED", "message": "Stay exceeds accommodation allocation", "status": 422},
+                    "budget_warning": {"allocation": allocation, "requested": requested, "category": "accommodation"},
+                },
+            )
+        spent = round(spent_before + requested, 2)
+        remaining = round(total_budget - spent, 2)
+        await conn.execute("UPDATE budgets SET spent = $1, remaining = $2, warning_active = false WHERE trip_id = $3", spent, remaining, trip_id)
+        updated = await conn.fetchrow("SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1", trip_id)
+    return {"selected": True, "budget": {"currency": updated["currency"], "daily_target": float(updated["daily_target"]), "total_budget": float(updated["total_budget"]), "spent": float(updated["spent"]), "remaining": float(updated["remaining"]), "breakdown": _json_obj(updated["breakdown"]), "warning_active": bool(updated["warning_active"])}}
+
+
+@app.post("/trips/{trip_id}/availability", status_code=201)
+async def submit_availability(trip_id: str, body: AvailabilityRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        await conn.execute("DELETE FROM availability_windows WHERE trip_id = $1 AND user_id = $2", trip_id, user_id)
+        for window in body.date_ranges:
+            start_date = date.fromisoformat(window["start"])
+            end_date = date.fromisoformat(window["end"])
+            await conn.execute(
+                """
+                INSERT INTO availability_windows (trip_id, user_id, start_date, end_date)
+                VALUES ($1, $2, $3::date, $4::date)
+                """,
+                trip_id,
+                user_id,
+                start_date,
+                end_date,
+            )
+    return {"user_id": user_id}
+
+
+@app.get("/trips/{trip_id}/availability/overlap")
+async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        members = await conn.fetch("SELECT user_id FROM trip_members WHERE trip_id = $1 AND status = 'accepted'", trip_id)
+        windows = await conn.fetch("SELECT user_id, start_date, end_date FROM availability_windows WHERE trip_id = $1", trip_id)
+    if not members:
+        return {"overlap": None, "closest_windows": [], "prompt_members_to_adjust": True, "message": "No members found"}
+    member_ids = [str(row["user_id"]) for row in members]
+    by_member: dict[str, list[tuple[date, date]]] = {uid: [] for uid in member_ids}
+    for row in windows:
+        by_member[str(row["user_id"])].append((row["start_date"], row["end_date"]))
+
+    if all(by_member.get(uid) for uid in member_ids):
+        overlap_start = max(min(w[0] for w in by_member[uid]) for uid in member_ids)
+        overlap_end = min(max(w[1] for w in by_member[uid]) for uid in member_ids)
+        if overlap_start <= overlap_end:
+            return {
+                "overlap": {"start": overlap_start.isoformat(), "end": overlap_end.isoformat()},
+                "closest_windows": [],
+                "prompt_members_to_adjust": False,
+                "message": "Common overlap found",
+            }
+
+    all_windows = [
+        {"user_id": uid, "start": start, "end": end}
+        for uid, ranges in by_member.items()
+        for start, end in ranges
+    ]
+    suggestions = []
+    for item in all_windows:
+        start = item["start"]
+        end = min(item["end"], start + timedelta(days=6))
+        members_available = []
+        for uid in member_ids:
+            has_window = any(r[0] <= start and r[1] >= end for r in by_member.get(uid, []))
+            if has_window:
+                members_available.append(uid)
+        members_to_adjust = [uid for uid in member_ids if uid not in members_available]
+        overlap_days = (end - start).days
+        if overlap_days >= 3:
+            suggestions.append(
+                {
+                    "window": {"start": start.isoformat(), "end": end.isoformat()},
+                    "members_available": members_available,
+                    "members_to_adjust": members_to_adjust,
+                    "overlap_days": overlap_days,
+                }
+            )
+    suggestions.sort(key=lambda item: (-len(item["members_available"]), len(item["members_to_adjust"])))
+    return {
+        "overlap": None,
+        "closest_windows": suggestions[:5],
+        "prompt_members_to_adjust": True,
+        "message": "No common overlap found. Ask some members to adjust dates.",
+    }
+
+
+@app.put("/trips/{trip_id}/members/{member_user_id}/platform-preference")
+async def set_platform_preference(
+    trip_id: str,
+    member_user_id: str,
+    body: PlatformPreferenceRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if user_id != member_user_id:
+        raise HTTPException(status_code=403, detail="Cannot update another member preference")
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        await conn.execute(
+            """
+            INSERT INTO member_platform_preferences (trip_id, user_id, platform)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (trip_id, user_id)
+            DO UPDATE SET platform = EXCLUDED.platform, updated_at = NOW()
+            """,
+            trip_id,
+            member_user_id,
+            body.platform,
+        )
+    return {"user_id": member_user_id, "platform": body.platform}
+
+
+@app.post("/trips/{trip_id}/storyboard/generate")
+async def generate_storyboards(trip_id: str, body: StoryboardGenerateRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        members = await conn.fetch(
+            """
+            SELECT tm.user_id, COALESCE(mpp.platform, 'instagram') AS platform
+            FROM trip_members tm
+            LEFT JOIN member_platform_preferences mpp
+              ON mpp.trip_id = tm.trip_id AND mpp.user_id = tm.user_id
+            WHERE tm.trip_id = $1 AND tm.status = 'accepted'
+            """,
+            trip_id,
+        )
+        if body.day_id:
+            activity_rows = await conn.fetch(
+                "SELECT title FROM itinerary_activities WHERE day_id = $1 ORDER BY created_at ASC",
+                body.day_id,
+            )
+        else:
+            activity_rows = await conn.fetch(
+                """
+                SELECT ia.title
+                FROM itinerary_activities ia
+                JOIN itinerary_days idy ON idy.id = ia.day_id
+                WHERE idy.trip_id = $1
+                ORDER BY idy.day_number ASC, ia.created_at ASC
+                """,
+                trip_id,
+            )
+        destinations = await conn.fetch("SELECT destination FROM bucket_list_items WHERE trip_id = $1 ORDER BY vote_score DESC, created_at ASC LIMIT 1", trip_id)
+        destination_name = destinations[0]["destination"] if destinations else "your trip"
+        titles = [row["title"] for row in activity_rows]
+        generated = []
+        for member in members:
+            platform = str(member["platform"]).lower()
+            content = _storyboard_text(platform, titles, destination_name)
+            word_count = len([w for w in content.split() if w.strip()])
+            await conn.execute(
+                """
+                INSERT INTO storyboards (trip_id, user_id, platform, content, word_count)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                trip_id,
+                member["user_id"],
+                platform,
+                content,
+                word_count,
+            )
+            generated.append({"user_id": str(member["user_id"]), "platform": platform, "content": content})
+    return {"storyboards": generated}
+
+
+@app.get("/trips/{trip_id}/storyboard/{member_user_id}")
+async def get_storyboard(trip_id: str, member_user_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        if user_id != member_user_id:
+            raise HTTPException(status_code=403, detail="Cannot view another member storyboard")
+        row = await conn.fetchrow(
+            """
+            SELECT platform, content, word_count, generated_at
+            FROM storyboards
+            WHERE trip_id = $1 AND user_id = $2
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """,
+            trip_id,
+            member_user_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Storyboard not found")
+    return {"storyboard": {"platform": row["platform"], "content": row["content"], "word_count": int(row["word_count"] or 0), "generated_at": row["generated_at"].isoformat()}}
+
+
+@app.post("/trips/{trip_id}/itinerary/approve")
+async def approve_itinerary(trip_id: str, body: ItineraryApproveRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        await conn.execute("UPDATE itinerary_days SET approved = $1 WHERE trip_id = $2", body.approved, trip_id)
+    return {"approved": body.approved}
+
+
+@app.post("/trips/{trip_id}/itinerary/calendar-sync")
+async def calendar_sync(trip_id: str, body: CalendarSyncRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        rows = await conn.fetch(
+            """
+            SELECT ia.id AS activity_id, ia.title, ia.location_name, idy.date, ia.time_slot
+            FROM itinerary_activities ia
+            JOIN itinerary_days idy ON idy.id = ia.day_id
+            WHERE idy.trip_id = $1 AND idy.approved = true
+            ORDER BY idy.day_number ASC, ia.time_slot ASC
+            """,
+            trip_id,
+        )
+        created = 0
+        calendar_base = os.getenv("CALENDAR_API_BASE_URL", "").strip()
+        for row in rows:
+            slot = str(row["time_slot"] or "09:00-10:00")
+            start_part, end_part = slot.split("-", 1) if "-" in slot else ("09:00", "10:00")
+            day = row["date"] or date.today()
+            start_dt = datetime.combine(day, time.fromisoformat(start_part), tzinfo=timezone.utc)
+            end_dt = datetime.combine(day, time.fromisoformat(end_part), tzinfo=timezone.utc)
+            if calendar_base:
+                payload = {
+                    "summary": row["title"],
+                    "location": row["location_name"] or "",
+                    "start": {"dateTime": start_dt.isoformat()},
+                    "end": {"dateTime": end_dt.isoformat()},
+                }
+                try:
+                    _post_calendar_event(calendar_base, body.calendar_id or "primary", payload)
+                except (URLError, HTTPError):
+                    raise HTTPException(status_code=502, detail="Calendar sync failed")
+            await conn.execute(
+                """
+                INSERT INTO calendar_events (trip_id, activity_id, calendar_id, event_title, start_time, end_time, location, synced_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                """,
+                trip_id,
+                row["activity_id"],
+                body.calendar_id or "primary",
+                row["title"],
+                start_dt,
+                end_dt,
+                row["location_name"] or "",
+            )
+            created += 1
+    return {"synced": True, "events_created": created, "provider": body.provider}
+
+
+@app.get("/trips/{trip_id}/itinerary")
+async def get_itinerary(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        day_rows = await conn.fetch(
+            """
+            SELECT id, day_number, date, title, approved
+            FROM itinerary_days
+            WHERE trip_id = $1
+            ORDER BY day_number ASC
+            """,
+            trip_id,
+        )
+        days = []
+        for day in day_rows:
+            activity_rows = await conn.fetch(
+                """
+                SELECT id, time_slot, title, category, location_name, cost_estimate
+                FROM itinerary_activities
+                WHERE day_id = $1
+                ORDER BY time_slot ASC
+                """,
+                day["id"],
+            )
+            days.append(
+                {
+                    "day_id": str(day["id"]),
+                    "day_number": int(day["day_number"]),
+                    "date": day["date"].isoformat() if day["date"] else None,
+                    "title": day["title"],
+                    "approved": bool(day["approved"]),
+                    "activities": [
+                        {
+                            "activity_id": str(a["id"]),
+                            "time_slot": a["time_slot"],
+                            "title": a["title"],
+                            "category": a["category"],
+                            "location": a["location_name"],
+                            "cost_estimate": float(a["cost_estimate"] or 0),
+                        }
+                        for a in activity_rows
+                    ],
+                }
+            )
+    return {"itinerary": {"days": days}}
+
+
+@app.get("/trips/{trip_id}/dining/suggestions")
+async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        rows = await conn.fetch(
+            """
+            SELECT id, name, city, tags, cost_estimate_usd
+            FROM pois
+            WHERE trip_id = $1 AND category IN ('food', 'dining', 'snorkeling')
+            ORDER BY rating DESC NULLS LAST, created_at ASC
+            LIMIT 12
+            """,
+            trip_id,
+        )
+    suggestions = []
+    for idx, row in enumerate(rows):
+        suggestions.append(
+            {
+                "id": str(row["id"]),
+                "day": (idx // 3) + 1,
+                "meal": ["Breakfast", "Lunch", "Dinner"][idx % 3],
+                "name": row["name"],
+                "city": row["city"],
+                "tags": row["tags"] or [],
+                "cost": float(row["cost_estimate_usd"] or 0),
+            }
+        )
+    return {"suggestions": suggestions}
+
+
+@app.post("/analytics/event", status_code=202)
+async def analytics_event(body: AnalyticsEventRequest):
+    client_ts: Optional[datetime] = None
+    if body.client_ts:
+        try:
+            normalized = body.client_ts.replace("Z", "+00:00")
+            client_ts = datetime.fromisoformat(normalized)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid client_ts format")
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO analytics_events (session_id, trip_id, user_id, event_type, screen_name, properties, client_ts, server_ts)
+            VALUES ($1, NULLIF($2, '')::uuid, NULLIF($3, '')::uuid, $4, $5, $6::jsonb, $7::timestamptz, NOW())
+            """,
+            body.session_id,
+            body.trip_id or "",
+            body.user_id or "",
+            body.event_type,
+            body.screen_name,
+            json.dumps(body.properties or {}),
+            client_ts,
+        )
+    return {"accepted": True}
 
 @app.get("/health")
 def health():

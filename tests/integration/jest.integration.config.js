@@ -29,7 +29,9 @@ module.exports = {
   globalTeardown: '<rootDir>/tests/integration/setup/jest.globalTeardown.js',
 
   // ── Per-file setup (import helpers) ───────────────────────────────────────
-  setupFilesAfterFramework: [],
+  setupFilesAfterEnv: [
+    '<rootDir>/tests/integration/setup/close-db-after-env.js',
+  ],
 
   // ── Timeouts — integration tests hit real HTTP + Docker services ──────────
   testTimeout: 60_000,         // 60 s per individual test

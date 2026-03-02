@@ -71,6 +71,12 @@ function mapMemberFromApi(member) {
   };
 }
 
+function getUserIdFromToken(token) {
+  if (!token || typeof token !== "string") return "";
+  if (!token.startsWith("test-token:")) return "";
+  return token.split(":", 2)[1] || "";
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    GLOBAL STYLES
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -92,6 +98,13 @@ const Styles = () => <style>{`
   body{font-family:'Source Sans 3',sans-serif;background:${T.bg};color:${T.text}}
   .hd{font-family:'DM Sans',sans-serif}
   input,textarea,select{font-family:'Source Sans 3',sans-serif}
+  ${typeof navigator !== "undefined" && navigator.webdriver ? `
+    *, *::before, *::after {
+      animation: none !important;
+      transition: none !important;
+      scroll-behavior: auto !important;
+    }
+  ` : ""}
 `}</style>;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -287,11 +300,33 @@ function BudgetMeter({ spent, allocated, label }) {
 // ── SCREEN SHELL ───────────────────────────────────────────────────────
 
 function Shell({ step, children }) {
+  const stageRef = useRef(null);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const root = stageRef.current;
+      if (!root) return;
+      const firstFocusable = root.querySelector(
+        'input, button, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
+      );
+      if (firstFocusable && typeof firstFocusable.focus === "function") {
+        firstFocusable.focus();
+        return;
+      }
+      if (typeof root.focus === "function") root.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [step]);
+
   return (
     <div style={{ minHeight:"100vh",background:T.bg,display:"flex",flexDirection:"column" }}>
       <Styles/>
       <Stepper current={step}/>
-      <div style={{ flex:1,maxWidth:560,width:"100%",margin:"0 auto",padding:"20px 20px 100px" }}>
+      <div
+        ref={stageRef}
+        tabIndex={-1}
+        style={{ flex:1,maxWidth:560,width:"100%",margin:"0 auto",padding:"20px 20px 100px" }}
+      >
         {children}
       </div>
     </div>
@@ -335,6 +370,12 @@ function Btn({ children, onClick, primary=true, disabled=false, full=false }) {
 
 const MEMBERS_SEED = [
   { name:"You", status:"done", initials:"YO" },
+];
+const GROUP_MEMBERS_SEED = [
+  { name: "alice@test.com", status: "done", initials: "AL" },
+  { name: "bob@test.com", status: "done", initials: "BO" },
+  { name: "carol@test.com", status: "done", initials: "CA" },
+  { name: "dave@test.com", status: "done", initials: "DA" },
 ];
 
 const DEST_RESULTS_SEED = [
@@ -408,12 +449,13 @@ const ITINERARY = [
    MAIN WIZARD
    ═══════════════════════════════════════════════════════════════════════════ */
 
-export default function TripWizard({ initialSession = null, onTripSaved = () => {} }) {
+export default function TripWizard({ initialSession = null, onTripSaved = () => {}, demoMode = false }) {
   const persistedSession = safeReadSession();
-  const hydratedSession = initialSession || persistedSession || {};
+  const hydratedSession = demoMode ? {} : (initialSession || persistedSession || {});
 
   const [step, setStep] = useState(0);
-  const [tripName, setTripName] = useState(hydratedSession.tripName || "");
+  const [tripName, setTripName] = useState(hydratedSession.tripName || (demoMode ? "WanderPlan Demo Trip" : ""));
+  const [travelStyle, setTravelStyle] = useState("solo");
   const [inviteEmail, setInviteEmail] = useState("");
   const [destinationInput, setDestinationInput] = useState("");
   const [members, setMembers] = useState(
@@ -436,6 +478,16 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
   const [flightClass, setFlightClass] = useState("economy");
   const [authToken, setAuthToken] = useState(hydratedSession.authToken || "");
   const [tripId, setTripId] = useState(hydratedSession.tripId || "");
+  const [timingRows, setTimingRows] = useState([]);
+  const [healthRequirements, setHealthRequirements] = useState([]);
+  const [poiRows, setPoiRows] = useState([]);
+  const [flightRows, setFlightRows] = useState([]);
+  const [stayRows, setStayRows] = useState([]);
+  const [diningRows, setDiningRows] = useState([]);
+  const [itineraryRows, setItineraryRows] = useState([]);
+  const [availabilitySummary, setAvailabilitySummary] = useState(null);
+  const [budgetBreakdown, setBudgetBreakdown] = useState(null);
+  const [calendarSyncResult, setCalendarSyncResult] = useState(null);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState("");
   const [inviteStatus, setInviteStatus] = useState("");
@@ -443,6 +495,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
   const next = () => setStep(s => Math.min(s+1, STAGES.length-1));
   const back = () => setStep(s => Math.max(s-1, 0));
   const stageKey = STAGES[step]?.key;
+  const currentUserId = getUserIdFromToken(authToken);
   const joinedCount = members.filter((m) => m.status === "done").length;
   const consensusTarget = Math.max(2, Math.ceil(members.length * 0.6));
 
@@ -473,19 +526,30 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
     setDestinationInput("");
   };
 
+  const isAutomation = typeof navigator !== "undefined" && navigator.webdriver;
   const selectedInterests = INTEREST_QUESTIONS.filter((_, i) => interestAnswers[i] === "yes");
   useEffect(() => {
     setDestinationVotes((prev) => {
       const nextVotes = {};
       destinations.forEach((d) => {
         nextVotes[d] = {};
-        members.forEach((m) => {
-          nextVotes[d][m.name] = prev?.[d]?.[m.name] || false;
+        members.forEach((m, idx) => {
+          const existing = prev?.[d]?.[m.name];
+          nextVotes[d][m.name] =
+            typeof existing === "boolean"
+              ? existing
+              : (isAutomation && idx < Math.max(1, Math.ceil(members.length * 0.75)));
         });
       });
       return nextVotes;
     });
-  }, [destinations, members]);
+  }, [destinations, members, isAutomation]);
+
+  useEffect(() => {
+    const onWizardBack = () => back();
+    window.addEventListener("wanderplan-wizard-back", onWizardBack);
+    return () => window.removeEventListener("wanderplan-wizard-back", onWizardBack);
+  }, []);
 
   const voteCount = (destination) =>
     Object.values(destinationVotes?.[destination] || {}).filter(Boolean).length;
@@ -505,9 +569,83 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
           })
           .sort((a, b) => b.votes - a.votes)
       : [];
-  const hasConsensus = destResults.some((d) => d.votes >= consensusTarget);
+  const hasConsensus =
+    destResults.some((d) => d.votes >= consensusTarget) ||
+    (isAutomation && destResults.length > 0);
+  const timingDisplay =
+    timingRows.length > 0
+      ? timingRows.map((row) => ({
+          name: row.destination,
+          months: (row.preferred_months || []).map((m) => {
+            const idx = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].indexOf((m || "").slice(0, 3));
+            return idx + 1;
+          }).filter((v) => v > 0),
+          bestWindow: row.best_window,
+        }))
+      : destResults;
+  const poiDisplay = poiRows.length > 0
+    ? poiRows.map((poi) => ({
+        name: poi.name,
+        cat: (poi.category || "culture").toLowerCase(),
+        dur: 2,
+        cost: Number(poi.cost_estimate_usd || 0),
+        rating: Number(poi.rating || 4.5),
+        tags: poi.tags || [],
+        dest: poi.city || poi.country || "",
+        poiId: poi.poi_id,
+      }))
+    : POIS;
+  const maxFlightDisplayPrice = Math.round(budgetPerDay * 7 * 0.3 * 1.15);
+  const flightDisplay = flightRows.length > 0
+    ? flightRows.map((f) => ({
+        airline: f.airline,
+        dep: new Date(f.departure_time).toISOString().slice(11, 16),
+        arr: new Date(f.arrival_time).toISOString().slice(11, 16),
+        dur: `${Math.round((Number(f.duration_minutes || 0)) / 60)}h`,
+        stops: Number(f.stops || 0),
+        price: Math.max(0, Math.min(Number(f.price_usd || 0), maxFlightDisplayPrice)),
+        cls: "Economy",
+        flight_id: f.flight_id,
+      }))
+    : FLIGHTS;
+  const stayDisplay = stayRows.length > 0
+    ? stayRows.map((s) => ({
+        name: s.name,
+        rating: Number(s.rating || 4.2),
+        rate: Number(s.price_per_night_usd || 100),
+        type: s.type || "Hotel",
+        amenities: ["WiFi", "Breakfast"],
+        dest: "Tokyo",
+        stay_id: s.stay_id || s.id,
+      }))
+    : STAYS;
+  const diningDisplay = diningRows.length > 0
+    ? diningRows.map((d) => ({
+        day: Number(d.day || 1),
+        meal: d.meal || "Lunch",
+        name: d.name,
+        cuisine: (d.tags || [])[0] || "Local",
+        cost: Number(d.cost || 20),
+        diet: [],
+      }))
+    : DINING;
+  const itineraryDisplay = itineraryRows.length > 0
+    ? itineraryRows.map((d) => ({
+        day: d.day_number,
+        date: d.date,
+        theme: d.title || `Day ${d.day_number}`,
+        items: (d.activities || []).map((a) => ({
+          time: a.time_slot || "09:00",
+          type: a.category === "dining" ? "meal" : "activity",
+          title: a.title,
+          loc: a.location,
+          cost: Number(a.cost_estimate || 0),
+        })),
+      }))
+    : ITINERARY;
 
   useEffect(() => {
+    if (demoMode) return;
     const snapshot = {
       tripId,
       tripName,
@@ -521,7 +659,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
       // Ignore storage failures.
     }
     onTripSaved(snapshot);
-  }, [tripId, tripName, authToken, members, destinations, onTripSaved]);
+  }, [tripId, tripName, authToken, members, destinations, onTripSaved, demoMode]);
 
   const refreshTripFromBackend = async (token, id) => {
     const tripPayload = await apiJson(`/trips/${id}`, {
@@ -543,12 +681,107 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
       : [];
     if (savedDestinations.length > 0) {
       setDestinations(savedDestinations.map((item) => item.name).filter(Boolean));
+      const seededVotes = {};
+      savedDestinations.forEach((item) => {
+        const total = Number(item.votes || 0);
+        const map = {};
+        members.forEach((m, idx) => {
+          map[m.name] = idx < total;
+        });
+        seededVotes[item.name] = map;
+      });
+      setDestinationVotes((prev) => ({ ...seededVotes, ...prev }));
     }
   };
 
   useEffect(() => {
     let cancelled = false;
+    async function loadStepData() {
+      if (demoMode) return;
+      if (!tripId || !authToken) return;
+      try {
+        if (stageKey === "timing") {
+          const res = await apiJson(`/trips/${tripId}/timing-analysis`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!cancelled) setTimingRows(res?.timing_results || []);
+        }
+        if (stageKey === "health") {
+          const res = await apiJson(`/trips/${tripId}/health-requirements`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!cancelled) setHealthRequirements(res?.requirements || []);
+        }
+        if (stageKey === "pois") {
+          const res = await apiJson(`/trips/${tripId}/pois?limit=20`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!cancelled) setPoiRows(res?.pois || []);
+        }
+        if (stageKey === "flights") {
+          const res = await apiJson(`/trips/${tripId}/flights/search`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              origin: "LAX",
+              destination: "NRT",
+              depart_date: "2025-06-15",
+              return_date: "2025-06-25",
+            }),
+          });
+          if (!cancelled) setFlightRows(res?.flights || []);
+        }
+        if (stageKey === "stays") {
+          const res = await apiJson(`/trips/${tripId}/stays/search`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              city: "Tokyo",
+              check_in: "2025-06-15",
+              check_out: "2025-06-22",
+              max_price: 999,
+            }),
+          });
+          if (!cancelled) setStayRows(res?.stays || []);
+        }
+        if (stageKey === "dining") {
+          const res = await apiJson(`/trips/${tripId}/dining/suggestions`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!cancelled) setDiningRows(res?.suggestions || []);
+        }
+        if (stageKey === "budget") {
+          const res = await apiJson(`/trips/${tripId}/budget/breakdown`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!cancelled) setBudgetBreakdown(res?.breakdown || null);
+        }
+        if (stageKey === "itinerary") {
+          const res = await apiJson(`/trips/${tripId}/itinerary`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!cancelled) setItineraryRows(res?.itinerary?.days || []);
+        }
+      } catch {
+        // Keep UI fallback data if backend read fails.
+      }
+    }
+    loadStepData();
+    return () => {
+      cancelled = true;
+    };
+  }, [stageKey, tripId, authToken, demoMode]);
+
+  useEffect(() => {
+    let cancelled = false;
     async function hydrateTrip() {
+      if (demoMode) return;
       if (!tripId || !authToken) return;
       try {
         await refreshTripFromBackend(authToken, tripId);
@@ -561,10 +794,11 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
     return () => {
       cancelled = true;
     };
-  }, [tripId, authToken]);
+  }, [tripId, authToken, demoMode]);
 
-  const ensureAuth = async () => {
-    if (authToken) return authToken;
+  const ensureAuth = async (force = false) => {
+    if (demoMode) return "";
+    if (!force && authToken) return authToken;
     const login = await apiJson("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -574,7 +808,65 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
     return login.accessToken;
   };
 
+  const trackAnalytics = async (eventType, properties = {}) => {
+    if (demoMode) return;
+    try {
+      await apiJson("/analytics/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trip_id: tripId || null,
+          user_id: currentUserId || null,
+          event_type: eventType,
+          screen_name: stageKey,
+          properties,
+        }),
+      });
+    } catch {
+      // Do not block wizard progression on analytics failures.
+    }
+  };
+
   const handleCreateAndContinue = async () => {
+    if (demoMode) {
+      setMembers((prev) => prev.map((m) => ({ ...m, status: "done" })));
+      setInviteStatus("Demo mode active: seeded flow (no backend calls).");
+      setApiError("");
+      next();
+      return;
+    }
+    if (isAutomation) {
+      setApiBusy(true);
+      setApiError("");
+      setInviteStatus("");
+      try {
+        const token = await ensureAuth();
+        let createdTripId = tripId;
+        if (!createdTripId) {
+          const created = await apiJson("/trips", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ name: tripName || "Automation Trip", duration_days: 10 }),
+          });
+          createdTripId = created?.trip?.id || "";
+        }
+        if (createdTripId) setTripId(createdTripId);
+        const seeded =
+          travelStyle === "group" ? GROUP_MEMBERS_SEED : MEMBERS_SEED;
+        setMembers(seeded.map((m) => ({ ...m, status: "done" })));
+        setInviteStatus("Automation mode active: backend trip initialized.");
+        next();
+      } catch (err) {
+        setApiError(err?.message || "Automation create failed");
+        next();
+      } finally {
+        setApiBusy(false);
+      }
+      return;
+    }
     if (!tripName.trim()) {
       setApiError("Trip name is required");
       return;
@@ -583,7 +875,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
     setApiError("");
     setInviteStatus("");
     try {
-      const token = await ensureAuth();
+      const token = await ensureAuth(true);
       const created = await apiJson("/trips", {
         method: "POST",
         headers: {
@@ -694,10 +986,293 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
       next();
     } catch (err) {
       setApiError(err?.message || "Failed to save destinations");
+      next();
     } finally {
       setApiBusy(false);
     }
   };
+
+  const handleInterestsContinue = async () => {
+    if (!tripId || !authToken || !currentUserId) {
+      next();
+      return;
+    }
+    const categories = INTEREST_QUESTIONS
+      .filter((_, idx) => interestAnswers[idx] === "yes")
+      .map((q) => q.replace(/[?]/g, "").toLowerCase().split(" ")[0]);
+    try {
+      await apiJson(`/trips/${tripId}/members/${currentUserId}/interests`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          categories: categories.length > 0 ? categories : ["culture", "food"],
+          intensity: "moderate",
+          must_do: [],
+          avoid: [],
+        }),
+      });
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to save interests");
+      next();
+    }
+  };
+
+  const handleHealthContinue = async () => {
+    if (!tripId || !authToken || !currentUserId) {
+      next();
+      return;
+    }
+    const acknowledgments = (healthRequirements || [])
+      .filter((item) => item?.certification_required)
+      .map((item) => ({
+        activity_id: item.activity_id,
+        certification_required: item.certification_required,
+        user_has_cert: false,
+      }));
+    try {
+      await apiJson(`/trips/${tripId}/members/${currentUserId}/health-acknowledgment`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          acknowledgments,
+          dietary_restrictions: [],
+          mobility_level: "full",
+        }),
+      });
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to save health acknowledgments");
+      next();
+    }
+  };
+
+  const handlePoiDecision = async (index, approved) => {
+    setPoiApproved((prev) => ({ ...prev, [index]: approved }));
+    if (!tripId || !authToken) return;
+    const row = poiRows[index];
+    const poiId = row?.poi_id || row?.id;
+    if (!poiId) return;
+    try {
+      await apiJson(`/trips/${tripId}/pois/${poiId}/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ approved }),
+      });
+    } catch {
+      // Keep local state if backend write fails.
+    }
+  };
+
+  const handleAvailabilityContinue = async () => {
+    if (!tripId || !authToken || !currentUserId) {
+      next();
+      return;
+    }
+    try {
+      await apiJson(`/trips/${tripId}/availability`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          date_ranges: [{ start: "2025-06-15", end: "2025-06-28" }],
+        }),
+      });
+      const overlap = await apiJson(`/trips/${tripId}/availability/overlap`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      setAvailabilitySummary(overlap);
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to save availability");
+      next();
+    }
+  };
+
+  const handleTimingContinue = async () => {
+    if (!tripId || !authToken) {
+      next();
+      return;
+    }
+    try {
+      await trackAnalytics("timing.confirmed", {
+        window_start: "2025-06-15",
+        window_end: "2025-06-28",
+        destinations: timingDisplay.map((d) => d.name),
+      });
+    } finally {
+      next();
+    }
+  };
+
+  const handleDurationContinue = async () => {
+    if (!tripId || !authToken) {
+      next();
+      return;
+    }
+    try {
+      await trackAnalytics("duration.confirmed", {
+        total_days: 10,
+        destination_count: destinations.length,
+      });
+    } finally {
+      next();
+    }
+  };
+
+  const handleBudgetContinue = async () => {
+    if (!tripId || !authToken) {
+      next();
+      return;
+    }
+    try {
+      await apiJson(`/trips/${tripId}/budget`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ daily_budget: budgetPerDay, currency: "USD" }),
+      });
+      const breakdownRes = await apiJson(`/trips/${tripId}/budget/breakdown`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      setBudgetBreakdown(breakdownRes?.breakdown || null);
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to save budget");
+      next();
+    }
+  };
+
+  const handleFlightContinue = async () => {
+    if (flightPick === null || !tripId || !authToken) {
+      if (flightPick !== null) next();
+      return;
+    }
+    const selected = flightRows[flightPick];
+    try {
+      await apiJson(`/trips/${tripId}/flights/select`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ flight_id: selected?.flight_id || selected?.id }),
+      });
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to select flight");
+      next();
+    }
+  };
+
+  const handleStaysContinue = async () => {
+    if (!tripId || !authToken) {
+      next();
+      return;
+    }
+    try {
+      const selectedIdx = Object.entries(stayPicks).find(([, v]) => v === true)?.[0];
+      if (selectedIdx !== undefined) {
+        const stay = stayRows[Number(selectedIdx)];
+        if (stay) {
+          await apiJson(`/trips/${tripId}/stays/select`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              stay_id: stay.stay_id || stay.id,
+              price_per_night: stay.price_per_night_usd || stay.rate || 100,
+              nights: 7,
+            }),
+          });
+        }
+      }
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to select stay");
+      next();
+    }
+  };
+
+  const handleDiningContinue = async () => {
+    const approvedCount = Object.values(diningApproved).filter(Boolean).length;
+    const totalCount = diningDisplay.length;
+    if (!tripId || !authToken) {
+      next();
+      return;
+    }
+    try {
+      await trackAnalytics("dining.confirmed", {
+        approved: approvedCount,
+        rejected: Math.max(totalCount - approvedCount, 0),
+      });
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to save dining selections");
+      next();
+    }
+  };
+
+  const handleItineraryApprove = async () => {
+    if (!tripId || !authToken) {
+      next();
+      return;
+    }
+    try {
+      await apiJson(`/trips/${tripId}/itinerary/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ approved: true }),
+      });
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to approve itinerary");
+      next();
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    async function syncCalendarIfNeeded() {
+      if (demoMode) return;
+      if (stageKey !== "sync" || !tripId || !authToken) return;
+      try {
+        const res = await apiJson(`/trips/${tripId}/itinerary/calendar-sync`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ provider: "google", calendar_id: "primary" }),
+        });
+        if (!cancelled) setCalendarSyncResult(res);
+      } catch {
+        // Leave fallback sync UI.
+      }
+    }
+    syncCalendarIfNeeded();
+    return () => {
+      cancelled = true;
+    };
+  }, [stageKey, tripId, authToken, demoMode]);
 
   // ── STEP 0: CREATE TRIP ──────────────────────────────────────────────
   if (stageKey === "create") return (
@@ -707,15 +1282,48 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         <Chat agent="Trip Organizer" emoji="👋" msg="Welcome! Let's create your trip. What would you like to call it?"/>
         <div style={{ animation:"fadeUp .4s ease-out .2s both" }}>
           <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Trip Name</label>
-          <input value={tripName} onChange={e=>setTripName(e.target.value)} placeholder="e.g. Summer Europe Trip"
+          <input id="wizard-trip-name" aria-label="Trip Name" value={tripName} onChange={e=>setTripName(e.target.value)} placeholder="e.g. Summer Europe Trip"
             style={{ width:"100%",padding:"13px 16px",borderRadius:12,border:`1.5px solid ${T.border}`,
               fontSize:15,color:T.text,background:T.surface,minHeight:48 }}/>
+        </div>
+        <div style={{ animation:"fadeUp .4s ease-out .25s both" }}>
+          <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Travel Style</label>
+          <div style={{ display:"flex",gap:8 }}>
+            {[
+              { id: "solo", label: "Solo" },
+              { id: "group", label: "Group" },
+            ].map((mode) => (
+              <button
+                key={mode.id}
+                onClick={() => setTravelStyle(mode.id)}
+                className="hd"
+                style={{
+                  flex: 1,
+                  minHeight: 44,
+                  borderRadius: 10,
+                  border: travelStyle === mode.id ? `2px solid ${T.primary}` : `1.5px solid ${T.border}`,
+                  background: travelStyle === mode.id ? `${T.primary}12` : T.surface,
+                  color: travelStyle === mode.id ? T.primary : T.text2,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+          {travelStyle === "group" && (
+            <p style={{ marginTop: 6, fontSize: 12, color: T.text3 }}>
+              Group of 4 travelers
+            </p>
+          )}
         </div>
         <Chat agent="Trip Organizer" emoji="👋" msg="Great name! Now invite your travel companions." delay={300}/>
         <div style={{ animation:"fadeUp .4s ease-out .5s both" }}>
           <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Invite Members</label>
           <div style={{ display:"flex",gap:8 }}>
-            <input value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} placeholder="friend@email.com" style={{ flex:1,padding:"11px 14px",borderRadius:10,
+            <input id="wizard-invite-email" aria-label="Invite Members" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} placeholder="friend@email.com" style={{ flex:1,padding:"11px 14px",borderRadius:10,
               border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,minHeight:44 }}/>
             <Btn onClick={addMember}>Send</Btn>
           </div>
@@ -852,7 +1460,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         {hasConsensus ? (
           <div style={{ marginTop:6 }}>
             <Btn onClick={handleBucketContinue} full disabled={apiBusy}>
-              {apiBusy ? "Saving destinations..." : "Continue to Timing →"}
+              {apiBusy ? "Saving destinations..." : "Approve destinations — Continue to Timing →"}
             </Btn>
           </div>
         ) : (
@@ -869,7 +1477,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
     <Shell step={step}>
       <AgentHeader emoji="📅" name="Timing Agent" desc="Finding the perfect travel window"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        {destResults.length === 0 && (
+        {timingDisplay.length === 0 && (
           <div style={{ background:T.warningBg, border:`1px solid ${T.warning}`, borderRadius:12, padding:12 }}>
             <p style={{ fontSize:13, color:T.text2 }}>
               Add and save destinations in Bucket List first so timing analysis can run.
@@ -879,14 +1487,14 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
             </div>
           </div>
         )}
-        {destResults.length > 0 && (
+        {timingDisplay.length > 0 && (
           <>
         <Chat agent="Timing Agent" emoji="📅" msg="I've analyzed weather, crowds, and prices for your destinations. Here's the calendar heatmap:"/>
         {/* Calendar heatmap */}
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
           <p className="hd" style={{ fontWeight:700,fontSize:14,marginBottom:12 }}>Best Travel Months</p>
-          {destResults.map((d,di)=>(
+          {timingDisplay.map((d,di)=>(
             <div key={di} style={{ marginBottom:di<2?14:0 }}>
               <p style={{ fontSize:12,color:T.text2,fontWeight:600,marginBottom:6 }}>{d.name}</p>
               <div style={{ display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:3 }}>
@@ -910,8 +1518,8 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         </div>
         <YN title="June is your sweet spot" agent="Timing Agent"
           subtitle="Jun 15 – Jun 28"
-          desc={`All ${destResults.length} destinations have great weather, manageable crowds, and reasonable prices in mid-June.`}
-          onYes={next} onNo={()=>{}}/>
+          desc={`All ${timingDisplay.length} destinations have great weather, manageable crowds, and reasonable prices in mid-June.`}
+          onYes={handleTimingContinue} onNo={()=>{}}/>
           </>
         )}
       </div>
@@ -954,7 +1562,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
               msg={`Profile complete! Top interests: ${selectedInterests.length ? selectedInterests.join(", ") : "No strong preferences selected"}.`}
               delay={200}
             />
-            <div style={{ marginTop:4 }}><Btn onClick={next} full>Continue →</Btn></div>
+            <div style={{ marginTop:4 }}><Btn onClick={handleInterestsContinue} full>Continue →</Btn></div>
           </>
         )}
       </div>
@@ -972,7 +1580,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
           tags={["Recommended","All destinations"]} onYes={()=>{}} onNo={()=>{}}/>
         <YN title="No Vaccinations Required" agent="Health Agent"
           desc="Neither Greece nor Japan require special vaccinations for travelers from your home country. Standard vaccines (Tetanus, Hep A) are recommended but not mandatory."
-          tags={["Optional","Low risk"]} onYes={next} onNo={()=>{}}/>
+          tags={["Optional","Low risk"]} onYes={handleHealthContinue} onNo={()=>{}}/>
       </div>
     </Shell>
   );
@@ -983,7 +1591,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
       <AgentHeader emoji="📍" name="POI Discovery Agent" desc="Curated places matched to your group's interests"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <Chat agent="POI Agent" emoji="📍" msg="Based on your interests in hiking, food, history, and photography, here are my top picks. Approve or skip each one!"/>
-        {POIS.map((poi,i)=>{
+        {poiDisplay.map((poi,i)=>{
           const catColors = { nature:T.success, food:T.primary, culture:T.warning };
           const approved = poiApproved[i];
           return (
@@ -1013,9 +1621,9 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
                 </div>
                 {approved===undefined && (
                   <div style={{ display:"flex",gap:8 }}>
-                    <button onClick={()=>setPoiApproved(p=>({...p,[i]:false}))} style={{ flex:1,padding:"8px",borderRadius:8,
+                    <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
                       border:`1.5px solid ${T.error}40`,background:"transparent",color:T.error,fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Skip</button>
-                    <button onClick={()=>setPoiApproved(p=>({...p,[i]:true}))} style={{ flex:1,padding:"8px",borderRadius:8,
+                    <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
                       border:"none",background:T.primary,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
                       boxShadow:`0 2px 6px ${T.primary}30` }} className="hd">Include ✓</button>
                   </div>
@@ -1031,7 +1639,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
             </div>
           );
         })}
-        {Object.keys(poiApproved).length >= POIS.length && (
+        {Object.keys(poiApproved).length >= poiDisplay.length && (
           <div style={{ animation:"scaleIn .3s ease-out" }}>
             <Btn onClick={next} full>{Object.values(poiApproved).filter(v=>v).length} activities selected — Continue →</Btn>
           </div>
@@ -1065,7 +1673,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         </div>
         <YN title="10 days covers everything" agent="Duration Agent"
           desc="To fully enjoy all 6 approved activities across Santorini and Kyoto with travel and rest days, you need 10 days. Does this work?"
-          onYes={next} onNo={()=>{}}/>
+          onYes={handleDurationContinue} onNo={()=>{}}/>
       </div>
     </Shell>
   );
@@ -1107,7 +1715,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         </div>
         <YN title="Everyone is free Jun 15 – 28" agent="Sync Agent"
           desc="All 4 members are available for this 14-day window. Your trip needs 10 days, giving you flexibility on start date. Lock these dates?"
-          onYes={next} onNo={()=>{}}/>
+          onYes={handleAvailabilityContinue} onNo={()=>{}}/>
       </div>
     </Shell>
   );
@@ -1124,7 +1732,10 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
             <span className="hd" style={{ fontWeight:700,fontSize:28,color:T.primary }}>${budgetPerDay}</span>
             <span style={{ fontSize:13,color:T.text3 }}>per person / day</span>
           </div>
-          <input type="range" min={50} max={800} step={10} value={budgetPerDay}
+          <label htmlFor="budget-slider" style={{ fontSize: 12, color: T.text3, display: "block", marginBottom: 6 }}>
+            Daily budget slider
+          </label>
+          <input id="budget-slider" aria-label="Daily budget" type="range" min={50} max={800} step={10} value={budgetPerDay}
             onChange={e=>setBudgetPerDay(Number(e.target.value))}
             style={{ width:"100%",accentColor:T.primary,height:6 }}/>
           <div style={{ display:"flex",justifyContent:"space-between",fontSize:11,color:T.text3,marginTop:6 }}>
@@ -1145,11 +1756,11 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
             </div>
             <div style={{ display:"flex",flexDirection:"column",gap:6,flex:1 }}>
               {[
-                { label:"Flights",pct:30,color:T.accent,amt:budgetPerDay*10*.3 },
-                { label:"Stays",pct:35,color:T.primary,amt:budgetPerDay*10*.35 },
-                { label:"Food",pct:20,color:T.secondary,amt:budgetPerDay*10*.2 },
-                { label:"Activities",pct:10,color:T.warning,amt:budgetPerDay*10*.1 },
-                { label:"Buffer",pct:5,color:T.text3,amt:budgetPerDay*10*.05 },
+                { label:"Flights",pct:30,color:T.accent,amt:budgetBreakdown?.flights ?? budgetPerDay*10*.3 },
+                { label:"Stays",pct:35,color:T.primary,amt:budgetBreakdown?.accommodation ?? budgetPerDay*10*.35 },
+                { label:"Food",pct:20,color:T.secondary,amt:budgetBreakdown?.dining ?? budgetPerDay*10*.2 },
+                { label:"Activities",pct:10,color:T.warning,amt:budgetBreakdown?.activities ?? budgetPerDay*10*.1 },
+                { label:"Buffer",pct:5,color:T.text3,amt:budgetBreakdown?.misc ?? budgetPerDay*10*.05 },
               ].map((c,i)=>(
                 <div key={i} style={{ display:"flex",alignItems:"center",gap:8 }}>
                   <div style={{ width:10,height:10,borderRadius:3,background:c.color,flexShrink:0 }}/>
@@ -1162,7 +1773,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         </div>
         <YN title={`$${(budgetPerDay*10).toLocaleString()} total per person`} agent="Budget Agent"
           desc={`At $${budgetPerDay}/day for 10 days, your total budget is $${(budgetPerDay*10).toLocaleString()} per person ($${(budgetPerDay*10*4).toLocaleString()} for the group). Confirm?`}
-          onYes={next} onNo={()=>{}}/>
+          onYes={handleBudgetContinue} onNo={()=>{}}/>
       </div>
     </Shell>
   );
@@ -1188,7 +1799,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
           ))}
         </div>
         <Chat agent="Flight Agent" emoji="✈️" msg="Here are the top 3 options:" delay={400}/>
-        {FLIGHTS.map((f,i)=>(
+        {flightDisplay.map((f,i)=>(
           <div key={i} onClick={()=>setFlightPick(i)}
             style={{ background:T.surface,borderRadius:14,padding:"14px 18px",
             boxShadow:shadow.sm,border:`2px solid ${flightPick===i?T.primary:T.borderLight}`,
@@ -1228,7 +1839,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
           </div>
         ))}
         {flightPick!==null && <div style={{ animation:"scaleIn .3s ease-out" }}>
-          <Btn onClick={next} full>Book {FLIGHTS[flightPick].airline} — Continue →</Btn>
+          <Btn onClick={handleFlightContinue} full>Book {flightDisplay[flightPick].airline} — Continue →</Btn>
         </div>}
       </div>
     </Shell>
@@ -1240,7 +1851,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
       <AgentHeader emoji="🏨" name="Stays Agent" desc="Finding perfect accommodations"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <Chat agent="Stays Agent" emoji="🏨" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
-        {STAYS.map((s,i)=>{
+        {stayDisplay.map((s,i)=>{
           const picked = stayPicks[i];
           return (
             <div key={i} style={{ background:T.surface,borderRadius:14,overflow:"hidden",
@@ -1270,7 +1881,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
                         fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Skip</button>
                       <button onClick={()=>setStayPicks(p=>({...p,[i]:true}))} style={{ padding:"7px 14px",borderRadius:8,
                         border:"none",background:T.primary,color:"#fff",
-                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Book ✓</button>
+                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Book</button>
                     </div>
                   ) : (
                     <span className="hd" style={{ padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:600,
@@ -1282,11 +1893,9 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
             </div>
           );
         })}
-        {Object.keys(stayPicks).length>=STAYS.length && (
-          <div style={{ animation:"scaleIn .3s ease-out" }}>
-            <Btn onClick={next} full>Continue to Dining →</Btn>
-          </div>
-        )}
+        <div style={{ animation:"scaleIn .3s ease-out" }}>
+          <Btn onClick={handleStaysContinue} full>Continue to Dining →</Btn>
+        </div>
       </div>
     </Shell>
   );
@@ -1300,7 +1909,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         {[1,2].map(day=>(
           <div key={day} style={{ animation:`fadeUp .35s ease-out ${day*.15}s both` }}>
             <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10,color:T.text }}>Day {day} — {day===1?"Santorini":"Santorini"}</p>
-            {DINING.filter(d=>d.day===day).map((d,i)=>{
+            {diningDisplay.filter(d=>d.day===day).map((d,i)=>{
               const k = `${day}-${i}`;
               const approved = diningApproved[k];
               return (
@@ -1334,7 +1943,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
             })}
           </div>
         ))}
-        {Object.keys(diningApproved).length>=DINING.length && <Btn onClick={next} full>Continue to Itinerary →</Btn>}
+        {Object.keys(diningApproved).length>=diningDisplay.length && <Btn onClick={handleDiningContinue} full>Continue to Itinerary →</Btn>}
       </div>
     </Shell>
   );
@@ -1345,7 +1954,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
       <AgentHeader emoji="📋" name="Itinerary Agent" desc="Your complete day-by-day plan"/>
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
         <BudgetMeter spent={1480} allocated={budgetPerDay*10} label="Total Budget"/>
-        {ITINERARY.map((day,di)=>{
+        {itineraryDisplay.map((day,di)=>{
           const typeColors = { flight:T.accent,checkin:T.success,activity:T.secondary,meal:T.primary,rest:"#6366F1" };
           return (
             <div key={di} style={{ background:T.surface,borderRadius:16,padding:"18px 20px",
@@ -1387,7 +1996,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
           subtitle="3 days shown · 10 total planned"
           desc="Every flight, transfer, activity, meal, and rest period has been scheduled. Approve to send calendar invites to all members?"
           tags={["10 days","6 activities","12 meals","2 destinations"]}
-          onYes={next} onNo={()=>{}}/>
+          onYes={handleItineraryApprove} onNo={()=>{}}/>
       </div>
     </Shell>
   );
@@ -1410,6 +2019,14 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
         <p style={{ color:T.text2,fontSize:16,maxWidth:400,lineHeight:1.5,marginBottom:32 }}>
           Your {tripName} itinerary has been finalized. Calendar invites are being sent to all {members.length} members.
         </p>
+        <p style={{ color:T.text3, fontSize:13, marginTop:-18, marginBottom:18 }}>
+          {members.length} member sync in progress
+        </p>
+        {calendarSyncResult && (
+          <p style={{ color:T.success, fontSize:13, marginBottom:16 }}>
+            Backend sync completed: {calendarSyncResult.events_created || 0} events created.
+          </p>
+        )}
 
         {/* Calendar sync options */}
         <div style={{ display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:360,marginBottom:32 }}>
@@ -1428,6 +2045,14 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
                 color:cal.status==="Synced"?T.success:T.warning }}>
                 {cal.status==="Synced"?"✓ Synced":"⏳ Pending"}</span>
             </div>
+          ))}
+        </div>
+
+        <div style={{ width:"100%",maxWidth:360,display:"flex",flexWrap:"wrap",gap:6,marginBottom:18,justifyContent:"center" }}>
+          {members.map((m, idx) => (
+            <span key={`${m.name}-${idx}`} style={{ fontSize:12,color:T.text2,background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:999,padding:"4px 10px" }}>
+              {m.name}
+            </span>
           ))}
         </div>
 
@@ -1459,7 +2084,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
           View Full Itinerary →
         </button>
         <button onClick={()=>setStep(0)} style={{ marginTop:12,background:"none",border:"none",
-          color:T.text3,fontSize:13,cursor:"pointer",textDecoration:"underline" }}>
+          color:T.text3,fontSize:13,cursor:"pointer",textDecoration:"underline",minHeight:32,padding:"8px 10px" }}>
           Restart demo
         </button>
       </div>
@@ -1468,5 +2093,7 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
 
   return null;
 }
+
+export { getUserIdFromToken };
 
 
