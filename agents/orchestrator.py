@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import smtplib
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
@@ -204,6 +205,10 @@ class AnalyticsEventRequest(BaseModel):
     client_ts: Optional[str] = None
 
 
+class DestinationExtractionRequest(BaseModel):
+    text: str
+
+
 def _smtp_settings() -> tuple[str, int, str, str, str]:
     host_port = os.getenv("SMTP_HOST", "").strip()
     smtp_user = os.getenv("SMTP_USER", "").strip()
@@ -344,6 +349,235 @@ def _json_obj(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _extract_json_block(raw: str) -> dict[str, Any]:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(lines[1:-1]) if len(lines) >= 3 else text
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        snippet = text[start : end + 1]
+        try:
+            parsed = json.loads(snippet)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _simple_destination_heuristic(text: str) -> list[dict[str, str]]:
+    normalized = (text or "").replace("\n", " ").strip()
+    if not normalized:
+        return []
+    lowered = normalized.lower()
+
+    # Region shortcuts for common travel intents.
+    region_aliases: dict[str, list[str]] = {
+        "south east asia": ["Thailand", "Vietnam", "Indonesia", "Malaysia", "Singapore", "Philippines", "Cambodia", "Laos"],
+        "southeast asia": ["Thailand", "Vietnam", "Indonesia", "Malaysia", "Singapore", "Philippines", "Cambodia", "Laos"],
+        "south-east asia": ["Thailand", "Vietnam", "Indonesia", "Malaysia", "Singapore", "Philippines", "Cambodia", "Laos"],
+        "sea countries": ["Thailand", "Vietnam", "Indonesia", "Malaysia", "Singapore", "Philippines", "Cambodia", "Laos"],
+    }
+    for alias, countries in region_aliases.items():
+        if alias in lowered:
+            return [{"name": country} for country in countries]
+
+    stopwords = {
+        "a", "an", "and", "at", "for", "i", "in", "me", "my", "of", "or", "our",
+        "please", "somewhere", "the", "to", "us", "we",
+    }
+    travel_words = {
+        "explore", "go", "going", "like", "love", "plan", "planning",
+        "see", "travel", "traveling", "travelling", "visit", "visiting", "want", "wanna",
+    }
+
+    def _clean(value: str) -> str:
+        return re.sub(r"\s+", " ", value.strip(" .!?;:,"))
+
+    def _strip_intent_prefix(value: str) -> str:
+        out = _clean(value)
+        patterns = [
+            r"^(?:i|we)\s+(?:want|wanna|would like|would love)\s+to\s+",
+            r"^(?:i|we)\s+(?:plan|planning)\s+to\s+",
+            r"^(?:go|going|travel|traveling|travelling|visit|visiting|explore|see)\s+(?:to\s+)?",
+            r"^(?:to|in|at)\s+",
+        ]
+        for pattern in patterns:
+            out = re.sub(pattern, "", out, flags=re.IGNORECASE)
+        return _clean(out)
+
+    def _is_plausible(value: str) -> bool:
+        words = re.findall(r"[A-Za-z][A-Za-z'/-]*", value)
+        if not words:
+            return False
+        lowered_words = [w.lower() for w in words]
+        if len(lowered_words) > 4:
+            return False
+        if len(lowered_words) == 1 and (len(lowered_words[0]) < 3 or lowered_words[0] in stopwords):
+            return False
+        if all(w in stopwords for w in lowered_words):
+            return False
+        if any(w in travel_words for w in lowered_words):
+            return False
+        return True
+
+    candidates: list[str] = []
+
+    def _add_candidate_phrase(phrase: str) -> None:
+        stripped = _strip_intent_prefix(phrase)
+        if not stripped:
+            return
+        parts = re.split(r"\b(?:and|or|&)\b|[,;/|]+", stripped, flags=re.IGNORECASE)
+        for part in parts:
+            value = _clean(part)
+            if value and _is_plausible(value):
+                candidates.append(value)
+
+    # Prefer list-like separators first.
+    split_chunks = re.split(r"[,;/|]+", normalized)
+    if len(split_chunks) > 1:
+        for chunk in split_chunks:
+            _add_candidate_phrase(chunk)
+
+    # Handle conjunction lists (e.g., "Bali and Tokyo").
+    conjunction_chunks = re.split(r"\b(?:and|or|&)\b", normalized, flags=re.IGNORECASE)
+    if len(conjunction_chunks) > 1:
+        for chunk in conjunction_chunks:
+            _add_candidate_phrase(chunk)
+
+    # Proper-noun runs as a fallback when users type full sentences.
+    tokens = normalized.split()
+    runs: list[str] = []
+    current: list[str] = []
+    for token in tokens:
+        clean = token.strip(" .!?;:")
+        if clean and clean[:1].isupper():
+            current.append(clean)
+        else:
+            if current:
+                runs.append(" ".join(current))
+            current = []
+    if current:
+        runs.append(" ".join(current))
+    for run in runs:
+        _add_candidate_phrase(run)
+
+    # Single-value fallback for short direct inputs (e.g., "paris").
+    if not candidates:
+        _add_candidate_phrase(normalized)
+
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for item in candidates:
+        name = item.strip()
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name})
+    return out[:10]
+
+
+def _anthropic_extract_destinations(text: str) -> tuple[list[dict[str, str]], bool, str, str, str]:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return _simple_destination_heuristic(text), False, "", "fallback:no_api_key", "ANTHROPIC_API_KEY missing"
+
+    model = (
+        os.getenv("ANTHROPIC_MODEL", "").strip()
+        or os.getenv("LLM_MODEL", "claude-sonnet-4-20250514").strip()
+    )
+    prompt = (
+        "Extract travel destinations from this user text. "
+        "Return ONLY JSON with shape {\"destinations\":[{\"name\":\"...\",\"country\":\"...\"}]}. "
+        "Use city/region/country names only. Do not include commentary.\n\n"
+        f"User text: {text}"
+    )
+    payload = {
+        "model": model,
+        "max_tokens": 400,
+        "temperature": 0,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+    req = urllib_request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=20) as resp:  # nosec B310
+            raw = resp.read().decode("utf-8")
+    except HTTPError as err:
+        body = ""
+        try:
+            body = err.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+        detail = f"HTTPError {err.code}: {body[:400] or str(err.reason)}"
+        return _simple_destination_heuristic(text), False, "", "fallback:network_error", detail
+    except URLError as err:
+        detail = f"URLError: {getattr(err, 'reason', str(err))}"
+        return _simple_destination_heuristic(text), False, "", "fallback:network_error", detail
+    except TimeoutError:
+        return _simple_destination_heuristic(text), False, "", "fallback:network_error", "TimeoutError contacting Anthropic"
+
+    data = _extract_json_block(raw)
+    content = data.get("content")
+    if isinstance(content, list):
+        joined = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                joined.append(str(block.get("text", "")))
+        maybe_json = _extract_json_block("\n".join(joined))
+    else:
+        maybe_json = data
+
+    rows = maybe_json.get("destinations", [])
+    if not isinstance(rows, list):
+        return _simple_destination_heuristic(text), False, "", "fallback:llm_unparsable", "Anthropic response did not contain destinations[] JSON"
+
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", "")).strip()
+        country = str(row.get("country", "")).strip()
+        if not name:
+            continue
+        k = name.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        item = {"name": name}
+        if country:
+            item["country"] = country
+        out.append(item)
+    if out:
+        raw_text = ""
+        if isinstance(content, list):
+            raw_text = "\n".join(
+                str(block.get("text", ""))
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ).strip()
+        return out[:10], True, raw_text, "llm", ""
+    return _simple_destination_heuristic(text), False, "", "fallback:empty_llm", "Anthropic returned empty destination list"
+
+
 POI_CATALOG: dict[str, list[dict[str, Any]]] = {
     "food": [
         {"name": "Tsukiji Outer Market", "category": "food", "city": "Tokyo", "country": "Japan", "tags": ["food", "market", "seafood"], "rating": 4.5, "cost": 15},
@@ -467,6 +701,30 @@ async def login(request: LoginRequest):
         user_id=user["user_id"],
         name=user["name"]
     )
+
+
+@app.post("/nlp/extract-destinations")
+async def extract_destinations(body: DestinationExtractionRequest):
+    text = (body.text or "").strip()
+    if not text:
+        return {
+            "destinations": [],
+            "llm_used": False,
+            "llm_raw_text": "",
+            "parse_source": "empty_input",
+            "llm_error": "empty input",
+        }
+
+    destinations, llm_used, llm_raw_text, parse_source, llm_error = await asyncio.to_thread(
+        _anthropic_extract_destinations, text
+    )
+    return {
+        "destinations": destinations,
+        "llm_used": llm_used,
+        "llm_raw_text": llm_raw_text,
+        "parse_source": parse_source,
+        "llm_error": llm_error,
+    }
 
 
 @app.post("/trips", status_code=201)

@@ -9,6 +9,8 @@ x-agent-common: &agent-common
   build:
     context: ..
     dockerfile: infrastructure/Dockerfile.agent
+  env_file:
+    - ../.env
   restart: unless-stopped
   networks:
     - wanderplan
@@ -20,8 +22,6 @@ x-agent-common: &agent-common
   environment: &agent-env
     REDIS_URL: redis://redis:6379/0
     KAFKA_BOOTSTRAP: kafka:9092
-    PINECONE_API_KEY: ${PINECONE_API_KEY:-}
-    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     LLM_MODEL: claude-sonnet-4-20250514
     LOG_LEVEL: INFO
     SMTP_HOST: ${SMTP_HOST:-}
@@ -29,7 +29,7 @@ x-agent-common: &agent-common
     SMTP_PASS: ${SMTP_PASS:-}
     ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
     FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:3000}
-    POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://wanderplan:${POSTGRES_PASSWORD:-wanderplan_dev}@postgres:5432/wanderplan}
+    POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://wanderplan:${POSTGRES_PASSWORD:-wanderplan}@postgres:5432/wanderplan}
 
 services:
 
@@ -232,7 +232,7 @@ services:
     environment:
       POSTGRES_DB: wanderplan
       POSTGRES_USER: wanderplan
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wanderplan_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wanderplan}
     ports:
       - "5432:5432"
     volumes:
