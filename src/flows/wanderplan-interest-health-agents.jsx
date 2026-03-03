@@ -73,12 +73,9 @@ const Ic=({n,s=18,c="currentColor"})=>{const p={
    TRIP MEMBERS
    ═══════════════════════════════════════════════════════════════════════════ */
 const MEMBERS = [
-  { id:"james", name:"James Wilson",  initials:"JW", destinations:["Bali","Kyoto"] },
-  { id:"sarah", name:"Sarah Wilson",  initials:"SW", destinations:["Bali","Kyoto"] },
-  { id:"alex",  name:"Alex Chen",     initials:"AC", destinations:["Bali","Kyoto"] },
-  { id:"priya", name:"Priya Sharma",  initials:"PS", destinations:["Bali","Kyoto"] },
+  { id:"you", name:"You", initials:"YO", destinations:["Bali","Kyoto"] },
 ];
-const MC = { james:T.primary, sarah:T.secondary, alex:T.accent, priya:"#8B5CF6" };
+const MC = { you:T.primary };
 
 /* ═══════════════════════════════════════════════════════════════════════════
    HOBBY CATEGORIES & ACTIVITIES

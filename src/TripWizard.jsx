@@ -476,7 +476,6 @@ export default function TripWizard({
       ? hydratedSession.destinations
       : DEST_RESULTS_SEED.map((d) => d.name)
   );
-  const [destinationVotes, setDestinationVotes] = useState({});
   const [poiApproved, setPoiApproved] = useState({});
   const [interestAnswers, setInterestAnswers] = useState({});
   const [flightPick, setFlightPick] = useState(null);
@@ -510,7 +509,6 @@ export default function TripWizard({
   const stageKey = STAGES[step]?.key;
   const currentUserId = getUserIdFromToken(authToken);
   const joinedCount = members.filter((m) => m.status === "done").length;
-  const consensusTarget = Math.max(2, Math.ceil(members.length * 0.6));
 
   const addMember = () => {
     const email = inviteEmail.trim().toLowerCase();
@@ -556,23 +554,6 @@ export default function TripWizard({
   }, [step, onStepChange]);
 
   useEffect(() => {
-    setDestinationVotes((prev) => {
-      const nextVotes = {};
-      destinations.forEach((d) => {
-        nextVotes[d] = {};
-        members.forEach((m, idx) => {
-          const existing = prev?.[d]?.[m.name];
-          nextVotes[d][m.name] =
-            typeof existing === "boolean"
-              ? existing
-              : (isAutomation && idx < Math.max(1, Math.ceil(members.length * 0.75)));
-        });
-      });
-      return nextVotes;
-    });
-  }, [destinations, members, isAutomation]);
-
-  useEffect(() => {
     if (backSignal <= handledBackSignalRef.current) return;
     handledBackSignalRef.current = backSignal;
     if (step > 0) {
@@ -582,27 +563,19 @@ export default function TripWizard({
     onBackBoundary();
   }, [backSignal, step, onBackBoundary]);
 
-  const voteCount = (destination) =>
-    Object.values(destinationVotes?.[destination] || {}).filter(Boolean).length;
-
   const destResults =
     destinations.length > 0
       ? [...destinations]
           .map((name, i) => {
-            const votes = voteCount(name);
-            const ratio = members.length ? votes / members.length : 0;
             return {
               name,
-              score: Math.round(60 + ratio * 40),
+              score: DEST_RESULTS_SEED[i % DEST_RESULTS_SEED.length].score,
               months: DEST_RESULTS_SEED[i % DEST_RESULTS_SEED.length].months,
-              votes,
+              votes: 1,
             };
           })
-          .sort((a, b) => b.votes - a.votes)
+          .sort((a, b) => b.score - a.score)
       : [];
-  const hasConsensus =
-    destResults.some((d) => d.votes >= consensusTarget) ||
-    (isAutomation && destResults.length > 0);
   const timingDisplay =
     timingRows.length > 0
       ? timingRows.map((row) => ({
@@ -712,16 +685,6 @@ export default function TripWizard({
       : [];
     if (savedDestinations.length > 0) {
       setDestinations(savedDestinations.map((item) => item.name).filter(Boolean));
-      const seededVotes = {};
-      savedDestinations.forEach((item) => {
-        const total = Number(item.votes || 0);
-        const map = {};
-        members.forEach((m, idx) => {
-          map[m.name] = idx < total;
-        });
-        seededVotes[item.name] = map;
-      });
-      setDestinationVotes((prev) => ({ ...seededVotes, ...prev }));
     }
   };
 
@@ -1004,7 +967,7 @@ export default function TripWizard({
     try {
       const votes = {};
       destinations.forEach((destination) => {
-        votes[destination] = voteCount(destination);
+        votes[destination] = 1;
       });
       await apiJson(`/trips/${tripId}/destinations`, {
         method: "PUT",
@@ -1403,11 +1366,11 @@ export default function TripWizard({
   // ── STEP 1: BUCKET LIST ──────────────────────────────────────────────
   if (stageKey === "bucket") return (
     <Shell step={step}>
-      <AgentHeader emoji="🌍" name="Bucket List Agent" desc="Collecting everyone's dream destinations"/>
+      <AgentHeader emoji="🌍" name="Bucket List Agent" desc="Collecting your dream destinations"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <Chat agent="Bucket List Agent" emoji="🌍" msg="What places have you always dreamed of visiting? Type as many as you'd like!"/>
         <Chat isUser msg={destinations.join(", ") || "Tokyo, Kyoto"} delay={200}/>
-        <Chat agent="Bucket List Agent" emoji="🌍" msg="Love those picks! 🇬🇷🇯🇵 I've collected everyone's suggestions and ranked them by group interest." delay={500}/>
+        <Chat agent="Bucket List Agent" emoji="🌍" msg="Love those picks! 🇬🇷🇯🇵 I've ranked them by your preferences and destination quality." delay={500}/>
         <div style={{ display:"flex",gap:8 }}>
           <input
             value={destinationInput}
@@ -1425,47 +1388,6 @@ export default function TripWizard({
             ))}
           </div>
         )}
-        <div style={{ background:T.surface,borderRadius:14,padding:14,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm }}>
-          <p className="hd" style={{ fontWeight:700,fontSize:14,marginBottom:4 }}>Group Voting</p>
-          <p style={{ fontSize:12,color:T.text3,marginBottom:10 }}>
-            Consensus target: {consensusTarget}/{members.length} votes
-          </p>
-          <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-            {destinations.map((d)=>(
-              <div key={d} style={{ border:`1px solid ${T.borderLight}`,borderRadius:10,padding:10 }}>
-                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8 }}>
-                  <span className="hd" style={{ fontWeight:600,fontSize:13 }}>{d}</span>
-                  <span style={{ fontSize:12,color: voteCount(d) >= consensusTarget ? T.success : T.text3 }}>
-                    {voteCount(d)}/{members.length} {voteCount(d) >= consensusTarget ? "?" : ""}
-                  </span>
-                </div>
-                <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
-                  {members.map((m)=>(
-                    <button
-                      key={`${d}-${m.name}`}
-                      onClick={()=>setDestinationVotes((prev)=>({
-                        ...prev,
-                        [d]: { ...(prev[d]||{}), [m.name]: !prev?.[d]?.[m.name] }
-                      }))}
-                      className="hd"
-                      style={{
-                        borderRadius:999,
-                        border:`1px solid ${destinationVotes?.[d]?.[m.name] ? T.primary : T.border}`,
-                        background: destinationVotes?.[d]?.[m.name] ? `${T.primary}14` : T.surface,
-                        color: destinationVotes?.[d]?.[m.name] ? T.primary : T.text2,
-                        fontSize:11,
-                        fontWeight:600,
-                        padding:"4px 8px",
-                        cursor:"pointer"
-                      }}>
-                      {m.initials}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
         {/* Ranked destinations */}
         <div style={{ display:"flex",flexDirection:"column",gap:10,animation:"fadeUp .4s ease-out .6s both" }}>
           {destResults.map((d,i)=>(
@@ -1478,7 +1400,7 @@ export default function TripWizard({
               </div>
               <div style={{ flex:1 }}>
                 <p className="hd" style={{ fontWeight:600,fontSize:15 }}>{d.name}</p>
-                <p style={{ fontSize:12,color:T.text3 }}>{d.score}% match · {d.votes} votes</p>
+                <p style={{ fontSize:12,color:T.text3 }}>{d.score}% confidence match</p>
               </div>
               <div style={{ display:"flex",gap:4 }}>
                 <button style={{ width:32,height:32,borderRadius:999,border:"none",background:T.successBg,
@@ -1488,15 +1410,20 @@ export default function TripWizard({
             </div>
           ))}
         </div>
-        {hasConsensus ? (
+        {destResults.length > 0 ? (
           <div style={{ marginTop:6 }}>
-            <Btn onClick={handleBucketContinue} full disabled={apiBusy}>
-              {apiBusy ? "Saving destinations..." : "Approve destinations — Continue to Timing →"}
-            </Btn>
+            <YN
+              title="Approve these destinations?"
+              agent="Bucket List Agent"
+              subtitle="Ready to move into timing analysis"
+              desc={`Top picks: ${destResults.slice(0, 3).map((d) => d.name).join(", ")}`}
+              onYes={handleBucketContinue}
+              onNo={handleRevise}
+            />
           </div>
         ) : (
           <p style={{ fontSize:12,color:T.text3 }}>
-            Vote on destinations until at least one reaches consensus.
+            Add at least one destination to continue.
           </p>
         )}
       </div>

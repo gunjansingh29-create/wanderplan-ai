@@ -271,10 +271,7 @@ function findDestinationByName(name) {
    TRIP MEMBERS
    ═══════════════════════════════════════════════════════════════════════════ */
 const MEMBERS = [
-  { id: "james",  name: "James W",  initials: "JW", nationality: "US", home: "New York" },
-  { id: "sarah",  name: "Sarah W",  initials: "SW", nationality: "US", home: "New York" },
-  { id: "alex",   name: "Alex C",   initials: "AC", nationality: "UK", home: "London" },
-  { id: "priya",  name: "Priya S",  initials: "PS", nationality: "IN", home: "Mumbai" },
+  { id: "you", name: "You", initials: "You", nationality: "US", home: "Your city" },
 ];
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -335,11 +332,10 @@ const Ic = ({n,s=18,c="currentColor"}) => {
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════════════════ */
 
-const PHASES = ["collect", "processing", "enriched", "voting", "selection", "complete"];
+const PHASES = ["collect", "processing", "enriched", "selection", "complete"];
 
 export default function BucketListAgent({ tripSession = null, onTripSaved = () => {} }) {
   const [phase, setPhase] = useState("collect");
-  const [activeMember, setActiveMember] = useState(0);
   const [memberInputs, setMemberInputs] = useState({});
   const [chatHistories, setChatHistories] = useState({});
   const [currentInput, setCurrentInput] = useState("");
@@ -360,8 +356,8 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
   const inputRef = useRef(null);
   const hydratedOnceRef = useRef(false);
 
-  const member = MEMBERS[activeMember];
-  const allSubmitted = Object.keys(memberInputs).length === MEMBERS.length;
+  const member = MEMBERS[0];
+  const hasAnyDestinations = (memberInputs[member.id]?.destinations || []).length > 0;
 
   const extractWithBackend = useCallback(async (text) => {
     try {
@@ -412,18 +408,18 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
   // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistories, activeMember, phase]);
+  }, [chatHistories, phase]);
 
-  // Initialize chat for current member
+  // Initialize chat
   useEffect(() => {
     if (phase === "collect" && member && !chatHistories[member.id]) {
       const initial = [
-        { from: "agent", text: `Hey ${member.name.split(" ")[0]}! 🌍`, delay: 0 },
-        { from: "agent", text: `What 3–5 places have you always dreamed of visiting? Type freely — I'll figure out the destinations!`, delay: 600 },
+        { from: "agent", text: `Hey! 🌍`, delay: 0 },
+        { from: "agent", text: `Tell me places you've always wanted to visit. Type naturally and I will extract destinations for your bucket list.`, delay: 600 },
       ];
       setChatHistories(prev => ({ ...prev, [member.id]: initial }));
     }
-  }, [activeMember, phase]);
+  }, [phase, chatHistories, member]);
 
   // ── HANDLE USER INPUT ────────────────────────────────────────────────
   // Handle user input
@@ -488,7 +484,23 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
       [member.id]: [...prev[member.id], { from: "agent", text: responseMsg, extracted }],
     }));
 
-    setMemberInputs((prev) => ({ ...prev, [member.id]: { text, destinations: extracted } }));
+    setMemberInputs((prev) => {
+      const existing = prev[member.id]?.destinations || [];
+      const merged = [];
+      const seen = new Set();
+      [...existing, ...extracted].forEach((item) => {
+        if (!item?.key || seen.has(item.key)) return;
+        seen.add(item.key);
+        merged.push(item);
+      });
+      return {
+        ...prev,
+        [member.id]: {
+          text: `${prev[member.id]?.text || ""}\n${text}`.trim(),
+          destinations: merged,
+        },
+      };
+    });
 
     setTimeout(() => {
       setChatHistories((prev) => ({
@@ -498,9 +510,7 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
           {
             from: "agent",
             text:
-              extracted.length < 3
-                ? `Got it! Want to add more? You've listed ${extracted.length} so far.`
-                : `Great picks! I've locked in your ${extracted.length} dream destinations.`,
+              `Got it. Add more destinations if you want, then click "Process & Enrich Destinations" when ready.`,
           },
         ],
       }));
@@ -519,7 +529,7 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
 
     // Animate processing steps
     const steps = [
-      { label: "Collecting submissions from 4 members...", delay: 800 },
+      { label: "Collecting your submitted destinations...", delay: 800 },
       { label: "Running NLP entity recognition...", delay: 1400 },
       { label: `Deduplicating ${allExtractions.reduce((s, e) => s + e.destinations.length, 0)} entries → ${deduped.length} unique...`, delay: 2200 },
       { label: "Fetching cover photos from Unsplash...", delay: 3000 },
@@ -547,17 +557,16 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
   };
 
   const getRankScore = (destKey) => {
+    const destination = uniqueDestinations.find((d) => d.key === destKey);
+    const fallbackScore = Number(destination?.mentions || destination?.mentionedBy?.length || 0);
     const v = votes[destKey] || {};
+    if (Object.keys(v).length === 0) return fallbackScore;
     const ups = Object.values(v).filter(x => x === "up").length;
     const downs = Object.values(v).filter(x => x === "down").length;
     return (ups - downs) / MEMBERS.length;
   };
 
-  const allVoted = uniqueDestinations.length > 0 &&
-    uniqueDestinations.every(d => {
-      const v = votes[d.key] || {};
-      return Object.keys(v).length === MEMBERS.length;
-    });
+  const allVoted = true;
 
   const rankedDestinations = [...uniqueDestinations].sort((a, b) => getRankScore(b.key) - getRankScore(a.key));
   const topDestinations = rankedDestinations.slice(0, topN);
@@ -692,7 +701,7 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
       const voteMap = {};
       topDestinations.forEach((d) => {
         const ups = Object.values(votes[d.key] || {}).filter((v) => v === "up").length;
-        voteMap[d.canonical] = ups;
+        voteMap[d.canonical] = ups > 0 ? ups : 1;
       });
       await apiJson(`/trips/${id}/destinations`, {
         method: "PUT",
@@ -757,7 +766,7 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
             ))}
           </div>
           <div style={{ display:"flex",justifyContent:"space-between",marginTop:6,fontSize:11,opacity:.5 }}>
-            <span>Collect</span><span>Process</span><span>Enrich</span><span>Vote</span><span>Select</span><span>Done</span>
+            <span>Collect</span><span>Process</span><span>Enrich</span><span>Select</span><span>Done</span>
           </div>
         </div>
       </header>
@@ -793,30 +802,6 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
            ═══════════════════════════════════════════════════════════ */}
         {phase === "collect" && (
           <div style={{ animation:"fadeUp .4s ease-out" }}>
-            {/* Member tabs */}
-            <div style={{ display:"flex",gap:6,marginBottom:18,overflowX:"auto",padding:"2px 0" }}>
-              {MEMBERS.map((m, i) => {
-                const submitted = !!memberInputs[m.id];
-                const active = i === activeMember;
-                return (
-                  <button key={m.id} onClick={() => setActiveMember(i)} className="hd"
-                    style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
-                      borderRadius:12,border:`2px solid ${active?T.primary:submitted?T.success+"50":T.borderLight}`,
-                      background:active?`${T.primary}08`:T.surface,cursor:"pointer",
-                      minHeight:44,transition:"all .2s",flexShrink:0 }}>
-                    <div style={{ width:28,height:28,borderRadius:999,
-                      background:`linear-gradient(135deg,${active?T.primary:submitted?T.success:T.accent},${T.primaryDark})`,
-                      display:"flex",alignItems:"center",justifyContent:"center",
-                      color:"#fff",fontSize:10,fontWeight:700 }}>{m.initials}</div>
-                    <span style={{ fontSize:13,fontWeight:active?700:500,color:active?T.primary:T.text2 }}>{m.name.split(" ")[0]}</span>
-                    {submitted && <div style={{ width:16,height:16,borderRadius:999,background:T.success,
-                      display:"flex",alignItems:"center",justifyContent:"center",animation:"popIn .3s ease" }}>
-                      <Ic n="check" s={10} c="#fff"/></div>}
-                  </button>
-                );
-              })}
-            </div>
-
             {/* Chat area */}
             <div style={{ background:T.surface,borderRadius:18,border:`1px solid ${T.borderLight}`,
               boxShadow:sh.sm,overflow:"hidden" }}>
@@ -828,42 +813,34 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
               </div>
 
               {/* Input bar */}
-              {!memberInputs[member?.id] && (
-                <div style={{ borderTop:`1px solid ${T.borderLight}`,padding:14,display:"flex",gap:10 }}>
-                  <input ref={inputRef} value={currentInput} onChange={e => setCurrentInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
-                    placeholder="Type destinations… e.g. Tokyo, Paris, Bali"
-                    style={{ flex:1,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${T.border}`,
-                      fontSize:15,color:T.text,background:T.bg,minHeight:46 }}/>
-                  <button onClick={handleSubmit} style={{ width:46,height:46,borderRadius:12,border:"none",
-                    background:T.primary,color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
-                    boxShadow:`0 2px 8px ${T.primary}30` }}>
-                    <Ic n="send" s={18} c="#fff"/>
-                  </button>
-                </div>
-              )}
-
-              {memberInputs[member?.id] && (
-                <div style={{ borderTop:`1px solid ${T.borderLight}`,padding:14,textAlign:"center" }}>
-                  <p style={{ fontSize:13,color:T.success,fontWeight:600 }} className="hd">✓ {member.name.split(" ")[0]}'s destinations submitted</p>
-                </div>
-              )}
+              <div style={{ borderTop:`1px solid ${T.borderLight}`,padding:14,display:"flex",gap:10 }}>
+                <input ref={inputRef} value={currentInput} onChange={e => setCurrentInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
+                  placeholder="Type destinations… e.g. Tokyo, Paris, Bali"
+                  style={{ flex:1,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${T.border}`,
+                    fontSize:15,color:T.text,background:T.bg,minHeight:46 }}/>
+                <button onClick={handleSubmit} style={{ width:46,height:46,borderRadius:12,border:"none",
+                  background:T.primary,color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+                  boxShadow:`0 2px 8px ${T.primary}30` }}>
+                  <Ic n="send" s={18} c="#fff"/>
+                </button>
+              </div>
             </div>
 
             {/* Actions */}
             <div style={{ display:"flex",gap:10,marginTop:16,flexWrap:"wrap" }}>
-              {!allSubmitted && (
+              {!hasAnyDestinations && (
                 <p style={{ fontSize:13,color:T.text3 }}>
-                  Collect destination input from each member tab before processing.
+                  Add at least one destination in chat to continue.
                 </p>
               )}
-              {allSubmitted && (
+              {hasAnyDestinations && (
                 <button onClick={startProcessing} className="hd"
                   style={{ padding:"12px 24px",borderRadius:12,border:"none",
                     background:T.primary,color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer",
                     minHeight:48,boxShadow:`0 2px 12px ${T.primary}30`,
                     display:"flex",alignItems:"center",gap:8,animation:"ripple 2s infinite" }}>
-                  Process & Enrich All Destinations →
+                  Process & Enrich Destinations →
                 </button>
               )}
             </div>
@@ -886,7 +863,7 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
 
               <div style={{ display:"flex",flexDirection:"column",gap:12,textAlign:"left",maxWidth:440,margin:"0 auto" }}>
                 {[
-                  "Collecting submissions from 4 members...",
+                  "Collecting your submitted destinations...",
                   "Running NLP entity recognition...",
                   `Deduplicating entries → unique destinations...`,
                   "Fetching cover photos from Unsplash...",
@@ -921,13 +898,13 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18 }}>
               <div>
                 <h2 className="hd" style={{ fontWeight:700,fontSize:20 }}>{uniqueDestinations.length} Unique Destinations Found</h2>
-                <p style={{ fontSize:13,color:T.text2 }}>Merged from {Object.values(memberInputs).reduce((s, v) => s + v.destinations.length, 0)} submissions across {MEMBERS.length} members</p>
+                <p style={{ fontSize:13,color:T.text2 }}>Extracted from your natural-language bucket list input</p>
               </div>
-              <button onClick={() => setPhase("voting")} className="hd"
+              <button onClick={() => setPhase("selection")} className="hd"
                 style={{ padding:"10px 20px",borderRadius:10,border:"none",background:T.primary,
                   color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer",minHeight:42,
                   boxShadow:`0 2px 8px ${T.primary}30` }}>
-                Start Group Vote →
+                Review Ranked List →
               </button>
             </div>
 
@@ -1053,14 +1030,14 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
         {phase === "selection" && (
           <div style={{ animation:"fadeUp .4s ease-out" }}>
             <h2 className="hd" style={{ fontWeight:700,fontSize:20,marginBottom:4 }}>Final Rankings</h2>
-            <p style={{ fontSize:13,color:T.text2,marginBottom:18 }}>Ranked by group consensus score</p>
+            <p style={{ fontSize:13,color:T.text2,marginBottom:18 }}>Ranked by extraction confidence and mentions</p>
 
             {/* Rankings */}
             <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:24 }}>
               {rankedDestinations.map((dest, i) => {
                 const score = getRankScore(dest.key);
                 const isTop = i < topN;
-                const ups = Object.values(votes[dest.key] || {}).filter(v => v === "up").length;
+                const mentionCount = Number(dest.mentions || dest.mentionedBy?.length || 0);
                 return (
                   <div key={dest.key} style={{ background:T.surface,borderRadius:14,padding:"12px 16px",
                     border:`2px solid ${isTop?(showAlternatives&&i>=topN?T.primary:T.primary):T.borderLight}`,
@@ -1076,7 +1053,7 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
                       background:`url(${dest.photo}) center/cover` }}/>
                     <div style={{ flex:1,minWidth:0 }}>
                       <p className="hd" style={{ fontWeight:600,fontSize:15 }}>{dest.canonical}</p>
-                      <p style={{ fontSize:12,color:T.text2 }}>{dest.country} · {ups}/{MEMBERS.length} upvotes</p>
+                      <p style={{ fontSize:12,color:T.text2 }}>{dest.country} · {mentionCount} mention{mentionCount === 1 ? "" : "s"}</p>
                     </div>
                     <div className="hd" style={{ padding:"4px 12px",borderRadius:999,
                       background:score>0?T.successBg:T.warningBg,
@@ -1213,7 +1190,7 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
             {/* Reset */}
             <div style={{ textAlign:"center",marginTop:24 }}>
               <button onClick={() => {
-                setPhase("collect"); setActiveMember(0); setMemberInputs({});
+                setPhase("collect"); setMemberInputs({});
                 setChatHistories({}); setCurrentInput(""); setUniqueDestinations([]);
                 setVotes({}); setSelectionDecided(null); setShowAlternatives(false);
                 setDbRecords(null);

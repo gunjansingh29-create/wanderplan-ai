@@ -192,6 +192,7 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
     { id: "interest-profiler", icon: "users", label: "Interest Profiler" },
     { id: "timing", icon: "clock", label: "Best Time To Travel" },
   ];
+  const isTripsPage = page === "trips" || page === "detail";
 
   const openTrip = (trip) => {
     setSelectedTrip(trip);
@@ -235,6 +236,7 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
             background:`linear-gradient(135deg,${T.primary},${T.primaryLight})`, color:"#fff",
             fontWeight:600, fontSize:14, cursor:"pointer", display:"flex", alignItems:"center", gap:8,
             boxShadow:`0 2px 10px ${T.primary}30`, transition:"all .2s", minHeight:44 }}
+            onClick={() => openPlannerFlow("wizard")}
             onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
             onMouseLeave={e=>e.currentTarget.style.transform="none"}>
             <Ic n="plus" s={16} c="#fff"/> New Trip
@@ -264,16 +266,29 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
           ))}
 
           <p style={{ fontSize:11, fontWeight:700, letterSpacing:".06em", color:T.text3, margin:"14px 10px 6px" }}>
-            DASHBOARD
+            MY SPACE
           </p>
+          <button
+            onClick={() => setPage("trips")}
+            style={{
+              display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:10,
+              border:"none", background:isTripsPage?`${T.primary}08`:"transparent",
+              color:isTripsPage?T.primary:T.text2, cursor:"pointer", fontSize:14, fontWeight:isTripsPage?600:500,
+              minHeight:42, transition:"all .15s", textAlign:"left", width:"100%",
+            }}
+            onMouseEnter={e=>{ if(!isTripsPage) e.currentTarget.style.background=T.borderLight; }}
+            onMouseLeave={e=>{ if(!isTripsPage) e.currentTarget.style.background="transparent"; }}
+          >
+            <Ic n="home" s={18} c={isTripsPage ? T.primary : T.text3}/>
+            <span style={{ flex:1 }}>My Trips</span>
+          </button>
           {[
-            { id:"trips", icon:"home", label:"My Trips" },
             { id:"active", icon:"map", label:"Active Trip" },
-            { id:"profile", icon:"user", label:"Profile" },
             { id:"crew", icon:"users", label:"My Crew" },
+            { id:"profile", icon:"user", label:"Profile" },
             { id:"prompts", icon:"code", label:"Prompt Library" },
           ].map(item => {
-            const active = page === item.id || (page === "detail" && item.id === "trips");
+            const active = page === item.id;
             return (
               <button key={item.id} onClick={()=>{ setPage(item.id); if(item.id==="active") setSelectedTrip(TRIPS[0]); }}
                 style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:10,
@@ -356,9 +371,20 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
 function TripsPage({ trips, onOpen }) {
   const statusColors = { planning:T.warning, confirmed:T.accent, active:T.success, completed:T.text3 };
   const statusBg = { planning:T.warningBg, confirmed:`${T.accent}12`, active:T.successBg, completed:T.borderLight };
+  const visibleTrips = trips;
+
+  if (visibleTrips.length === 0) {
+    return (
+      <div style={{ textAlign:"center", padding:"64px 20px", color:T.text3 }}>
+        <p className="hd" style={{ fontWeight:600, fontSize:17, marginBottom:8 }}>No trips in this category yet</p>
+        <p style={{ fontSize:14 }}>Start a new trip to populate this view.</p>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))", gap:20 }}>
-      {trips.map((trip,i) => (
+      {visibleTrips.map((trip,i) => (
         <div key={trip.id} onClick={()=>onOpen(trip)}
           style={{ background:T.surface, borderRadius:18, overflow:"hidden", cursor:"pointer",
             border:`1px solid ${T.borderLight}`, transition:"all .25s",
