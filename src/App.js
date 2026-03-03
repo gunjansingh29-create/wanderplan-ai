@@ -220,7 +220,11 @@ export default function App() {
           onStepChange={setWizardStep}
         />
       ) : (
-        <ActiveComponent tripSession={tripSession} onTripSaved={handleTripSaved} />
+        <ActiveComponent
+          tripSession={tripSession}
+          onTripSaved={handleTripSaved}
+          onOpenFlow={openFlow}
+        />
       )}
     </div>
   );

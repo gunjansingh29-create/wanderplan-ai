@@ -124,18 +124,90 @@ const PROMPTS = [
   { id:8, agent:"Health Agent", emoji:"🏥", name:"Health Requirements Checker", prompt:"Destinations: {{destinations}}\nActivities: {{activities}}\n\nList all health requirements: vaccinations, certifications, fitness levels, travel insurance needs. Categorize as mandatory/recommended/optional.", uses:156 },
 ];
 
+const LOCAL_AUTH_SESSION_KEY = "wanderplan.auth.session";
+const LOCAL_PROFILE_BY_EMAIL_KEY = "wanderplan.profile.byEmail";
+
+function readJsonStorage(key) {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function splitName(name) {
+  const tokens = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { firstName: "Traveler", lastName: "" };
+  if (tokens.length === 1) return { firstName: tokens[0], lastName: "" };
+  return { firstName: tokens[0], lastName: tokens.slice(1).join(" ") };
+}
+
+function initialsFromName(name) {
+  const tokens = String(name || "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+  if (tokens.length === 0) return "U";
+  return tokens.map((token) => token.charAt(0).toUpperCase()).join("");
+}
+
+function loadViewerProfile() {
+  const session = readJsonStorage(LOCAL_AUTH_SESSION_KEY);
+  const email = String(session?.email || "").trim().toLowerCase();
+  const profilesByEmail = readJsonStorage(LOCAL_PROFILE_BY_EMAIL_KEY);
+  const stored = email ? profilesByEmail[email] : null;
+  const name =
+    String(stored?.name || session?.profile_name || session?.name || "").trim() ||
+    "Traveler";
+  const { firstName, lastName } = splitName(name);
+  return {
+    name,
+    firstName,
+    lastName,
+    email: email || "traveler@example.com",
+    initials: initialsFromName(name),
+    planLabel: "Premium Plan",
+  };
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════════════════════════════════════ */
-export default function Dashboard() {
+export default function Dashboard({ onOpenFlow = () => {} }) {
   const [page, setPage] = useState("trips"); // trips | active | detail | profile | prompts
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [detailTab, setDetailTab] = useState("overview");
+  const viewer = loadViewerProfile();
+  const dashboardMembers = [
+    { ...MEMBERS[0], name: viewer.name, initials: viewer.initials },
+    ...MEMBERS.slice(1),
+  ];
+
+  const flowNavItems = [
+    { id: "bucket-list", icon: "map", label: "Bucket List" },
+    { id: "wizard", icon: "home", label: "Trip Wizard" },
+    { id: "analytics", icon: "code", label: "Analytics" },
+    { id: "budget", icon: "dollar", label: "Budget" },
+    { id: "interest-health", icon: "shield", label: "Health Compatibility" },
+    { id: "interest-profiler", icon: "users", label: "Interest Profiler" },
+    { id: "timing", icon: "clock", label: "Best Time To Travel" },
+  ];
 
   const openTrip = (trip) => {
     setSelectedTrip(trip);
     if (trip.status === "active") setPage("active");
     else { setPage("detail"); setDetailTab("overview"); }
+  };
+
+  const openPlannerFlow = (flowId) => {
+    if (typeof onOpenFlow === "function") {
+      onOpenFlow(flowId);
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    params.set("entry", flowId);
+    const query = params.toString();
+    window.location.assign(`${window.location.pathname}${query ? `?${query}` : ""}`);
   };
 
   return (
@@ -144,7 +216,7 @@ export default function Dashboard() {
 
       {/* ── SIDEBAR ──────────────────────────────────────────────── */}
       <aside style={{ width:240, background:T.surface, borderRight:`1px solid ${T.borderLight}`,
-        padding:"20px 0", display:"flex", flexDirection:"column", position:"fixed", top:0, bottom:0, left:0, zIndex:50,
+        padding:"20px 0", display:"flex", flexDirection:"column", flexShrink:0,
         boxShadow:"1px 0 8px rgba(26,26,46,0.03)" }}>
 
         {/* Logo */}
@@ -170,7 +242,30 @@ export default function Dashboard() {
         </div>
 
         {/* Nav */}
-        <nav style={{ flex:1, display:"flex", flexDirection:"column", gap:2, padding:"0 10px" }}>
+        <nav style={{ flex:1, display:"flex", flexDirection:"column", gap:2, padding:"0 10px", overflowY:"auto" }}>
+          <p style={{ fontSize:11, fontWeight:700, letterSpacing:".06em", color:T.text3, margin:"0 10px 6px" }}>
+            PLANNING FLOWS
+          </p>
+          {flowNavItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => openPlannerFlow(item.id)}
+              style={{
+                display:"flex", alignItems:"center", gap:10, padding:"10px 12px", borderRadius:10,
+                border:"none", background:"transparent", color:T.text2, cursor:"pointer",
+                fontSize:14, fontWeight:500, minHeight:42, transition:"all .15s", textAlign:"left", width:"100%",
+              }}
+              onMouseEnter={(e)=>{ e.currentTarget.style.background = T.borderLight; }}
+              onMouseLeave={(e)=>{ e.currentTarget.style.background = "transparent"; }}
+            >
+              <Ic n={item.icon} s={18} c={T.text3}/>
+              {item.label}
+            </button>
+          ))}
+
+          <p style={{ fontSize:11, fontWeight:700, letterSpacing:".06em", color:T.text3, margin:"14px 10px 6px" }}>
+            DASHBOARD
+          </p>
           {[
             { id:"trips", icon:"home", label:"My Trips" },
             { id:"active", icon:"map", label:"Active Trip" },
@@ -199,17 +294,17 @@ export default function Dashboard() {
             <div style={{ width:36, height:36, borderRadius:999,
               background:`linear-gradient(135deg,${T.primary},${T.accent})`,
               display:"flex", alignItems:"center", justifyContent:"center",
-              color:"#fff", fontSize:13, fontWeight:700 }} className="hd">JW</div>
+              color:"#fff", fontSize:13, fontWeight:700 }} className="hd">{viewer.initials}</div>
             <div>
-              <p className="hd" style={{ fontWeight:600, fontSize:14 }}>James Wilson</p>
-              <p style={{ fontSize:12, color:T.text3 }}>Premium Plan</p>
+              <p className="hd" style={{ fontWeight:600, fontSize:14 }}>{viewer.name}</p>
+              <p style={{ fontSize:12, color:T.text3 }}>{viewer.planLabel}</p>
             </div>
           </div>
         </div>
       </aside>
 
       {/* ── MAIN CONTENT ─────────────────────────────────────────── */}
-      <main style={{ flex:1, marginLeft:240, minHeight:"100vh" }}>
+      <main style={{ flex:1, minHeight:"100vh" }}>
 
         {/* Top bar */}
         <header style={{ background:T.surface, borderBottom:`1px solid ${T.borderLight}`,
@@ -243,8 +338,8 @@ export default function Dashboard() {
         <div style={{ padding:"24px 28px 60px" }}>
           {page==="trips" && <TripsPage trips={TRIPS} onOpen={openTrip}/>}
           {page==="active" && <ActivePage trip={selectedTrip||TRIPS[0]} onDetail={()=>{setPage("detail");setDetailTab("overview");}}/>}
-          {page==="detail" && <DetailPage trip={selectedTrip||TRIPS[0]} tab={detailTab} setTab={setDetailTab}/>}
-          {page==="profile" && <ProfilePage/>}
+          {page==="detail" && <DetailPage trip={selectedTrip||TRIPS[0]} tab={detailTab} setTab={setDetailTab} members={dashboardMembers}/>}
+          {page==="profile" && <ProfilePage viewer={viewer}/>}
           {page==="prompts" && <PromptsPage/>}
         </div>
       </main>
@@ -413,7 +508,7 @@ function ActivePage({ trip, onDetail }) {
 /* ═══════════════════════════════════════════════════════════════════════════
    3) TRIP DETAIL — Tabbed View
    ═══════════════════════════════════════════════════════════════════════════ */
-function DetailPage({ trip, tab, setTab }) {
+function DetailPage({ trip, tab, setTab, members = MEMBERS }) {
   const tabs = [
     { id:"overview", label:"Overview", icon:"map" },
     { id:"itinerary", label:"Itinerary", icon:"clock" },
@@ -443,7 +538,7 @@ function DetailPage({ trip, tab, setTab }) {
         {tab==="overview" && <OverviewTab trip={trip}/>}
         {tab==="itinerary" && <ItineraryTab/>}
         {tab==="budget" && <BudgetTab trip={trip}/>}
-        {tab==="members" && <MembersTab/>}
+        {tab==="members" && <MembersTab members={members}/>}
         {tab==="storyboard" && <StoryboardTab/>}
       </div>
     </div>
@@ -621,10 +716,10 @@ function BudgetTab({ trip }) {
   );
 }
 
-function MembersTab() {
+function MembersTab({ members = MEMBERS }) {
   return (
     <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-      {MEMBERS.map((m,i)=>(
+      {members.map((m,i)=>(
         <div key={i} style={{ background:T.surface,borderRadius:16,padding:20,
           border:`1px solid ${T.borderLight}`,display:"flex",gap:16,alignItems:"flex-start",
           animation:`fadeUp .35s ease-out ${i*.06}s both` }}>
@@ -690,7 +785,7 @@ function StoryboardTab() {
 /* ═══════════════════════════════════════════════════════════════════════════
    4) PROFILE & SETTINGS
    ═══════════════════════════════════════════════════════════════════════════ */
-function ProfilePage() {
+function ProfilePage({ viewer }) {
   const [notifs, setNotifs] = useState({ trip:true, budget:true, members:true, marketing:false, digest:true });
 
   const Section = ({ title, children }) => (
@@ -727,9 +822,9 @@ function ProfilePage() {
     <div style={{ maxWidth:640,animation:"fadeUp .4s ease-out" }}>
       <Section title="Personal Information">
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px" }}>
-          <Field label="First Name" value="James"/>
-          <Field label="Last Name" value="Wilson"/>
-          <Field label="Email" value="james@example.com" type="email"/>
+          <Field label="First Name" value={viewer?.firstName || "Traveler"}/>
+          <Field label="Last Name" value={viewer?.lastName || ""}/>
+          <Field label="Email" value={viewer?.email || "traveler@example.com"} type="email"/>
           <Field label="Phone" value="+1 555-1234"/>
         </div>
       </Section>

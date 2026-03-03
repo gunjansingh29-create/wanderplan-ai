@@ -18,6 +18,7 @@ const T = {
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
 const LOCAL_AUTH_USERS_KEY = "wanderplan.auth.users";
 const LOCAL_AUTH_SESSION_KEY = "wanderplan.auth.session";
+const LOCAL_PROFILE_BY_EMAIL_KEY = "wanderplan.profile.byEmail";
 
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || "").trim());
@@ -47,6 +48,57 @@ function saveAuthSession(session) {
   } catch {
     // Ignore localStorage failures.
   }
+}
+
+function readAuthSession() {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_AUTH_SESSION_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readLocalProfiles() {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_PROFILE_BY_EMAIL_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalProfiles(profiles) {
+  try {
+    window.localStorage.setItem(LOCAL_PROFILE_BY_EMAIL_KEY, JSON.stringify(profiles));
+  } catch {
+    // Ignore localStorage failures.
+  }
+}
+
+function defaultProfileNameFromEmail(email) {
+  const localPart = (email || "").split("@")[0] || "";
+  const tokens = localPart
+    .split(/[._\-\s]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  if (tokens.length === 0) return "Traveler";
+  return tokens
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
+function initialsFromName(name) {
+  const tokens = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2);
+  if (tokens.length === 0) return "U";
+  return tokens.map((token) => token.charAt(0).toUpperCase()).join("");
 }
 
 async function loginViaApi(email, password) {
@@ -241,10 +293,13 @@ export default function WanderPlanHome({
   initialScreen = "landing",
   onScreenChange = () => {},
 }) {
-  const [screen, setScreen] = useState(initialScreen); // landing | auth | onboard-1 | onboard-2 | onboard-3 | dashboard
+  const [screen, setScreen] = useState(initialScreen); // landing | auth | profile-name | onboard-1 | onboard-2 | onboard-3 | dashboard
   const [authMode, setAuthMode] = useState("signup"); // signup | login
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [profileName, setProfileName] = useState("");
+  const [profileNameInput, setProfileNameInput] = useState("");
+  const [profileNameError, setProfileNameError] = useState("");
   const [travelStyle, setTravelStyle] = useState(null);
   const [interests, setInterests] = useState([]);
   const [budgetLevel, setBudgetLevel] = useState(1);
@@ -268,9 +323,57 @@ export default function WanderPlanHome({
     setAuthNotice("");
   }, [authMode]);
 
+  const launchDashboard = () => {
+    const hasDashboardFlow = flowTiles.some((flow) => flow.id === "dashboard");
+    if (hasDashboardFlow) {
+      onOpenFlow("dashboard");
+      return;
+    }
+    setScreen("dashboard");
+  };
+
+  const handleProfileBuild = ({ skipToDashboard = false } = {}) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    const requestedName = profileNameInput.trim();
+    const resolvedName = requestedName || defaultProfileNameFromEmail(normalizedEmail);
+
+    if (!resolvedName) {
+      setProfileNameError("Enter a name to continue.");
+      return;
+    }
+
+    const profiles = readLocalProfiles();
+    const existing = profiles[normalizedEmail] || {};
+    profiles[normalizedEmail] = {
+      ...existing,
+      name: resolvedName,
+      updated_at: new Date().toISOString(),
+      created_at: existing.created_at || new Date().toISOString(),
+    };
+    saveLocalProfiles(profiles);
+
+    const session = readAuthSession();
+    saveAuthSession({
+      ...session,
+      email: normalizedEmail,
+      profile_name: resolvedName,
+    });
+
+    setProfileName(resolvedName);
+    setProfileNameInput(resolvedName);
+    setProfileNameError("");
+
+    if (skipToDashboard) {
+      launchDashboard();
+      return;
+    }
+    setScreen("onboard-1");
+  };
+
   const handleAuthSubmit = async () => {
     const normalizedEmail = email.trim().toLowerCase();
     const rawPassword = password;
+    let sessionName = "";
 
     if (!isValidEmail(normalizedEmail)) {
       setAuthNotice("");
@@ -333,6 +436,7 @@ export default function WanderPlanHome({
           });
         } else {
           const login = await loginViaApi(normalizedEmail, rawPassword);
+          sessionName = login?.name || "";
           saveAuthSession({
             email: normalizedEmail,
             provider: "backend",
@@ -344,7 +448,20 @@ export default function WanderPlanHome({
         }
       }
 
-      setScreen("onboard-1");
+      const profiles = readLocalProfiles();
+      const existingProfileName = String(profiles[normalizedEmail]?.name || "").trim();
+      const suggestedProfileName =
+        existingProfileName || String(sessionName || "").trim() || defaultProfileNameFromEmail(normalizedEmail);
+
+      setProfileName(suggestedProfileName);
+      setProfileNameInput(suggestedProfileName);
+      setProfileNameError("");
+
+      if (existingProfileName) {
+        launchDashboard();
+      } else {
+        setScreen("profile-name");
+      }
     } catch (err) {
       setAuthError(err?.message || "Unable to sign in right now.");
     } finally {
@@ -428,36 +545,53 @@ export default function WanderPlanHome({
   );
 
   // ── Onboarding ───────────────────────────────────────────────────────
+  if (screen === "profile-name") return (
+    <OnboardProfileName
+      name={profileNameInput}
+      setName={(value) => {
+        setProfileNameInput(value);
+        if (profileNameError) setProfileNameError("");
+      }}
+      error={profileNameError}
+      onNext={() => handleProfileBuild({ skipToDashboard: false })}
+      onSkip={() => handleProfileBuild({ skipToDashboard: true })}
+      onBack={() => setScreen("auth")}
+      step={1}
+    />
+  );
+
   if (screen === "onboard-1") return (
     <OnboardTravel
       selected={travelStyle} setSelected={setTravelStyle}
       onNext={() => setScreen("onboard-2")}
-      onSkip={() => setScreen("onboard-2")}
-      step={1}
+      onSkip={launchDashboard}
+      onBack={() => setScreen("profile-name")}
+      step={2}
     />
   );
   if (screen === "onboard-2") return (
     <OnboardInterests
       selected={interests} setSelected={setInterests}
       onNext={() => setScreen("onboard-3")}
-      onSkip={() => setScreen("onboard-3")}
+      onSkip={launchDashboard}
       onBack={() => setScreen("onboard-1")}
-      step={2}
+      step={3}
     />
   );
   if (screen === "onboard-3") return (
     <OnboardBudget
       level={budgetLevel} setLevel={setBudgetLevel}
-      onNext={() => setScreen("dashboard")}
-      onSkip={() => setScreen("dashboard")}
+      onNext={launchDashboard}
+      onSkip={launchDashboard}
       onBack={() => setScreen("onboard-2")}
-      step={3}
+      step={4}
     />
   );
 
   // ── Dashboard placeholder ────────────────────────────────────────────
   return (
     <DashboardPlaceholder
+      profileName={profileName}
       travelStyle={travelStyle}
       interests={interests}
       budgetLevel={budgetLevel}
@@ -465,6 +599,9 @@ export default function WanderPlanHome({
       onOpenFlow={onOpenFlow}
       onReset={() => {
         setScreen("landing");
+        setProfileName("");
+        setProfileNameInput("");
+        setProfileNameError("");
         setTravelStyle(null);
         setInterests([]);
         setBudgetLevel(1);
@@ -1055,7 +1192,20 @@ function AuthScreen({
 // ONBOARDING WRAPPER
 // ════════════════════════════════════════════════════════════════════════════
 
-function OnboardShell({ step, title, subtitle, children, onNext, onSkip, onBack, canProceed = true }) {
+function OnboardShell({
+  step,
+  totalSteps = 4,
+  title,
+  subtitle,
+  children,
+  onNext,
+  onSkip,
+  onBack,
+  canProceed = true,
+  nextLabel = "",
+  skipLabel = "Skip for now",
+}) {
+  const resolvedNextLabel = nextLabel || (step >= totalSteps ? "Finish & Start Planning" : "Continue ->");
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column",
       background: T.bg, fontFamily: "'Inter',sans-serif" }}>
@@ -1073,19 +1223,21 @@ function OnboardShell({ step, title, subtitle, children, onNext, onSkip, onBack,
           <button onClick={onBack} style={{ background: "none", border: "none", color: T.text2,
             fontSize: 14, fontWeight: 500, cursor: "pointer", minHeight: 44, padding: "0 8px" }}>← Back</button>
         ) : <div />}
-        <button onClick={onSkip} style={{ background: "none", border: "none", color: T.text3,
-          fontSize: 14, cursor: "pointer", minHeight: 44, padding: "0 8px" }}>Skip for now</button>
+        {onSkip ? (
+          <button onClick={onSkip} style={{ background: "none", border: "none", color: T.text3,
+            fontSize: 14, cursor: "pointer", minHeight: 44, padding: "0 8px" }}>{skipLabel}</button>
+        ) : <div />}
       </div>
 
       {/* Progress bar */}
       <div style={{ padding: "0 24px", marginBottom: 8 }}>
         <div style={{ height: 4, background: T.borderLight, borderRadius: 9999 }}>
-          <div style={{ height: "100%", width: `${(step / 3) * 100}%`, background: `linear-gradient(90deg, ${T.primary}, ${T.accent})`,
+          <div style={{ height: "100%", width: `${(step / totalSteps) * 100}%`, background: `linear-gradient(90deg, ${T.primary}, ${T.accent})`,
             borderRadius: 9999, transition: "width 0.5s ease" }} />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-          <span style={{ fontSize: 12, color: T.text3 }}>Step {step} of 3</span>
-          <span style={{ fontSize: 12, color: T.text3 }}>{Math.round((step / 3) * 100)}%</span>
+          <span style={{ fontSize: 12, color: T.text3 }}>Step {step} of {totalSteps}</span>
+          <span style={{ fontSize: 12, color: T.text3 }}>{Math.round((step / totalSteps) * 100)}%</span>
         </div>
       </div>
 
@@ -1110,7 +1262,7 @@ function OnboardShell({ step, title, subtitle, children, onNext, onSkip, onBack,
             fontSize: 16, fontWeight: 700, fontFamily: "'DM Sans'", cursor: canProceed ? "pointer" : "default",
             minHeight: 54, marginTop: 32, transition: "all 0.3s",
             boxShadow: canProceed ? `0 4px 16px ${T.primary}30` : "none" }}>
-          {step === 3 ? "Finish & Start Planning" : "Continue →"}
+          {resolvedNextLabel}
         </button>
       </div>
     </div>
@@ -1121,7 +1273,57 @@ function OnboardShell({ step, title, subtitle, children, onNext, onSkip, onBack,
 // ONBOARD SCREEN A — Travel Style
 // ════════════════════════════════════════════════════════════════════════════
 
-function OnboardTravel({ selected, setSelected, onNext, onSkip, step }) {
+function OnboardProfileName({ name, setName, error, onNext, onSkip, onBack, step }) {
+  return (
+    <OnboardShell
+      step={step}
+      totalSteps={4}
+      title="What should we call you?"
+      subtitle="We will use this name to build and personalize your travel profile."
+      onNext={onNext}
+      onSkip={onSkip}
+      onBack={onBack}
+      canProceed={name.trim().length >= 2}
+      nextLabel="Build Profile ->"
+      skipLabel="Use default & launch dashboard"
+    >
+      <div style={{ maxWidth: 420, margin: "0 auto" }}>
+        <label htmlFor="profile-name" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 8 }}>
+          Profile name
+        </label>
+        <input
+          id="profile-name"
+          aria-label="Profile name"
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Enter your name"
+          style={{
+            width: "100%",
+            padding: "14px 16px",
+            borderRadius: 12,
+            border: `1.5px solid ${T.border}`,
+            fontSize: 16,
+            color: T.text,
+            background: T.surface,
+            minHeight: 52,
+            fontFamily: "'Inter'",
+          }}
+        />
+        <p style={{ fontSize: 12, color: T.text3, marginTop: 8 }}>
+          Tip: This can be your first name or the name you want trip collaborators to see.
+        </p>
+        {error ? (
+          <p role="alert" style={{ fontSize: 13, color: T.error, fontWeight: 600, marginTop: 10 }}>
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </OnboardShell>
+  );
+}
+
+function OnboardTravel({ selected, setSelected, onNext, onSkip, onBack, step }) {
   const styles = [
     { id: "solo", emoji: "🧳", label: "Solo", desc: "Just me, exploring freely" },
     { id: "couple", emoji: "💑", label: "Couple", desc: "Romantic adventures for two" },
@@ -1131,7 +1333,7 @@ function OnboardTravel({ selected, setSelected, onNext, onSkip, step }) {
 
   return (
     <OnboardShell step={step} title="How do you travel?" subtitle="This helps us tailor recommendations to your style."
-      onNext={onNext} onSkip={onSkip} canProceed={!!selected}>
+      onNext={onNext} onSkip={onSkip} onBack={onBack} canProceed={!!selected}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14 }}>
         {styles.map(s => {
           const isActive = selected === s.id;
@@ -1277,8 +1479,10 @@ function OnboardBudget({ level, setLevel, onNext, onSkip, onBack, step }) {
 // DASHBOARD PLACEHOLDER
 // ════════════════════════════════════════════════════════════════════════════
 
-function DashboardPlaceholder({ travelStyle, interests, budgetLevel, flowTiles, onOpenFlow, onReset }) {
+function DashboardPlaceholder({ profileName, travelStyle, interests, budgetLevel, flowTiles, onOpenFlow, onReset }) {
   const budgetLabels = ["Budget", "Moderate", "Premium", "Luxury"];
+  const displayName = String(profileName || "").trim() || "Traveler";
+  const initials = initialsFromName(displayName);
   return (
     <div style={{ minHeight: "100vh", background: T.bg, fontFamily: "'Inter',sans-serif" }}>
       <style>{`
@@ -1300,7 +1504,7 @@ function DashboardPlaceholder({ travelStyle, interests, budgetLevel, flowTiles, 
           </div>
           <div style={{ width: 36, height: 36, borderRadius: 9999, background: "rgba(255,255,255,0.2)",
             display: "flex", alignItems: "center", justifyContent: "center", color: "#fff",
-            fontFamily: "'DM Sans'", fontWeight: 700, fontSize: 14 }}>U</div>
+            fontFamily: "'DM Sans'", fontWeight: 700, fontSize: 14 }}>{initials}</div>
         </div>
       </div>
 
@@ -1320,6 +1524,10 @@ function DashboardPlaceholder({ travelStyle, interests, budgetLevel, flowTiles, 
           border: `1px solid ${T.borderLight}`, animation: "fadeUp 0.6s ease-out 0.15s both" }}>
           <h3 style={{ fontFamily: "'DM Sans'", fontWeight: 700, fontSize: 16, marginBottom: 16, color: T.text2 }}>Your Profile</h3>
           <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+            <div>
+              <span style={{ fontSize: 12, color: T.text3, fontWeight: 500 }}>Name</span>
+              <div style={{ fontFamily: "'DM Sans'", fontWeight: 600, fontSize: 15, marginTop: 4 }}>{displayName}</div>
+            </div>
             <div>
               <span style={{ fontSize: 12, color: T.text3, fontWeight: 500 }}>Travel Style</span>
               <div style={{ fontFamily: "'DM Sans'", fontWeight: 600, fontSize: 15, marginTop: 4,
