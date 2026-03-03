@@ -569,12 +569,12 @@ export default function TripWizard({
   useEffect(() => {
     if (backSignal <= handledBackSignalRef.current) return;
     handledBackSignalRef.current = backSignal;
-    setStep((current) => {
-      if (current > 0) return current - 1;
-      onBackBoundary();
-      return current;
-    });
-  }, [backSignal, onBackBoundary]);
+    if (step > 0) {
+      setStep((current) => Math.max(current - 1, 0));
+      return;
+    }
+    onBackBoundary();
+  }, [backSignal, step, onBackBoundary]);
 
   const voteCount = (destination) =>
     Object.values(destinationVotes?.[destination] || {}).filter(Boolean).length;
