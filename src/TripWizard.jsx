@@ -449,7 +449,13 @@ const ITINERARY = [
    MAIN WIZARD
    ═══════════════════════════════════════════════════════════════════════════ */
 
-export default function TripWizard({ initialSession = null, onTripSaved = () => {}, demoMode = false }) {
+export default function TripWizard({
+  initialSession = null,
+  onTripSaved = () => {},
+  demoMode = false,
+  backSignal = 0,
+  onStepChange = () => {},
+}) {
   const persistedSession = safeReadSession();
   const hydratedSession = demoMode ? {} : (initialSession || persistedSession || {});
 
@@ -550,10 +556,12 @@ export default function TripWizard({ initialSession = null, onTripSaved = () => 
   }, [destinations, members, isAutomation]);
 
   useEffect(() => {
-    const onWizardBack = () => back();
-    window.addEventListener("wanderplan-wizard-back", onWizardBack);
-    return () => window.removeEventListener("wanderplan-wizard-back", onWizardBack);
-  }, []);
+    onStepChange(step);
+  }, [step, onStepChange]);
+
+  useEffect(() => {
+    if (backSignal > 0) back();
+  }, [backSignal]);
 
   const voteCount = (destination) =>
     Object.values(destinationVotes?.[destination] || {}).filter(Boolean).length;

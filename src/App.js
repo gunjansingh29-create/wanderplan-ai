@@ -67,6 +67,8 @@ export default function App() {
   const [activeFlow, setActiveFlow] = useState(() => parseEntryFromUrl());
   const [demoMode, setDemoMode] = useState(() => isDemoModeFromUrl());
   const [lastHomeScreen, setLastHomeScreen] = useState('landing');
+  const [wizardBackSignal, setWizardBackSignal] = useState(0);
+  const [wizardStep, setWizardStep] = useState(0);
   const [tripSession, setTripSession] = useState(() => {
     try {
       const raw = window.localStorage.getItem(TRIP_SESSION_KEY);
@@ -110,7 +112,16 @@ export default function App() {
 
   const goBackOneStep = () => {
     if (selectedFlow?.id === 'wizard') {
-      window.dispatchEvent(new CustomEvent('wanderplan-wizard-back'));
+      if (wizardStep > 0) {
+        setWizardBackSignal((v) => v + 1);
+        return;
+      }
+      if (window.history.length > 1) {
+        window.history.back();
+        return;
+      }
+      window.history.replaceState(null, '', buildUrl('home', demoMode));
+      setActiveFlow('home');
       return;
     }
     if (window.history.length > 1) {
@@ -180,7 +191,13 @@ export default function App() {
         </button>
       </div>
       {selectedFlow.id === 'wizard' ? (
-        <TripWizard initialSession={demoMode ? null : tripSession} onTripSaved={handleTripSaved} demoMode={demoMode} />
+        <TripWizard
+          initialSession={demoMode ? null : tripSession}
+          onTripSaved={handleTripSaved}
+          demoMode={demoMode}
+          backSignal={wizardBackSignal}
+          onStepChange={setWizardStep}
+        />
       ) : (
         <ActiveComponent />
       )}
