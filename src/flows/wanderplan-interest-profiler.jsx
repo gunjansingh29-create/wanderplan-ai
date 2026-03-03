@@ -153,14 +153,6 @@ const INTENSITY = [
   { value:4, label:"Must-do!",        emoji:"🤩", color:T.secondary },
 ];
 
-/* Simulated answers for demo */
-const SIMULATED_ANSWERS = {
-  james: { adventure:{hike:4,water:2,thrill:1}, culture:{museum:2,temple:3,local:2}, food:{street:3,fine:2,cook:1}, relaxation:{spa:1,beach:2,slow:1}, photography:{land:4,arch:3,people:2}, nightlife:{bars:2,music:1,night:1}, shopping:{crafts:1,souvn:0,boutiq:0}, nature:{parks:3,marine:2,bird:1} },
-  sarah: { adventure:{hike:2,water:1,thrill:0}, culture:{museum:4,temple:3,local:4}, food:{street:4,fine:3,cook:4}, relaxation:{spa:3,beach:3,slow:2}, photography:{land:2,arch:3,people:1}, nightlife:{bars:1,music:2,night:2}, shopping:{crafts:3,souvn:2,boutiq:3}, nature:{parks:2,marine:1,bird:0} },
-  alex:  { adventure:{hike:4,water:3,thrill:3}, culture:{museum:1,temple:2,local:2}, food:{street:3,fine:1,cook:2}, relaxation:{spa:0,beach:1,slow:0}, photography:{land:4,arch:2,people:3}, nightlife:{bars:3,music:4,night:3}, shopping:{crafts:0,souvn:1,boutiq:0}, nature:{parks:4,marine:3,bird:2} },
-  priya: { adventure:{hike:1,water:1,thrill:0}, culture:{museum:3,temple:4,local:3}, food:{street:4,fine:4,cook:3}, relaxation:{spa:4,beach:4,slow:3}, photography:{land:2,arch:2,people:1}, nightlife:{bars:2,music:2,night:3}, shopping:{crafts:4,souvn:3,boutiq:4}, nature:{parks:2,marine:2,bird:1} },
-};
-
 /* ═══════════════════════════════════════════════════════════════════════════
    SCORING & MATCHING ENGINE
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -421,10 +413,6 @@ export default function InterestProfiler() {
     }
   };
 
-  const simulateAll = () => {
-    setAllAnswers(SIMULATED_ANSWERS);
-  };
-
   const startProcessing = () => {
     setPhase("processing");
     setProcessingStep(0);
@@ -574,12 +562,6 @@ export default function InterestProfiler() {
                   </button>
                 );
               })}
-              <button onClick={simulateAll} className="hd"
-                style={{ padding:"8px 14px",borderRadius:12,border:`1.5px solid ${T.border}`,
-                  background:T.surface,color:T.text3,fontSize:12,fontWeight:600,cursor:"pointer",
-                  flexShrink:0,display:"flex",alignItems:"center",gap:5 }}>
-                <Ic n="sparkle" s={13} c={T.accent}/> Simulate All
-              </button>
             </div>
 
             {/* Category tabs */}

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import WanderPlanHomepage from './flows/wanderplan-homepage';
-import TripWizard from './TripWizard';
+import TripWizard from './flows/wanderplan-trip-demo';
 import Dashboard from './flows/wanderplan-dashboard';
 import AnalyticsDashboard from './flows/wanderplan-analytics-dashboard';
 import BucketListAgent from './flows/wanderplan-bucket-list-agent';

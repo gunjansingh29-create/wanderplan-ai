@@ -20,6 +20,24 @@ const sh = {
   lg:"0 12px 40px rgba(26,26,46,0.1),0 4px 12px rgba(26,26,46,0.05)",
 };
 
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
+
+async function apiJson(path, options = {}) {
+  const res = await fetch(`${API_BASE}${path}`, options);
+  const text = await res.text();
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
+  if (!res.ok) {
+    const detail = typeof body === "string" ? body : JSON.stringify(body);
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return body;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    DESTINATION KNOWLEDGE BASE
    Complete alias → canonical mapping, enrichment data, and NLP patterns
@@ -217,6 +235,38 @@ function deduplicateDestinations(allExtractions) {
     .sort((a, b) => b.mentionedBy.length - a.mentionedBy.length || b.mentions - a.mentions);
 }
 
+function findDestinationByName(name) {
+  const normalized = (name || "").trim().toLowerCase();
+  if (!normalized) return null;
+  for (const [key, dest] of Object.entries(DEST_DB)) {
+    if (dest.canonical.toLowerCase() === normalized) {
+      return { key, ...dest, mentionedBy: [], mentions: 0 };
+    }
+    if ((dest.aliases || []).some((alias) => alias.toLowerCase() === normalized)) {
+      return { key, ...dest, mentionedBy: [], mentions: 0 };
+    }
+  }
+  const customKey = (normalized || "destination").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "destination";
+  return {
+    key: customKey,
+    canonical: name,
+    country: "Unknown",
+    continent: "Unknown",
+    aliases: [normalized],
+    bestMonths: [4, 5, 9, 10],
+    avgDailyCost: 150,
+    flightHrs: 8,
+    visa: { US: "Check requirements", IN: "Check requirements", UK: "Check requirements", AU: "Check requirements" },
+    photo: "https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=600&q=80",
+    highlights: ["Local culture", "Food", "Sightseeing"],
+    lat: 0,
+    lng: 0,
+    rating: 4.2,
+    mentionedBy: [],
+    mentions: 0,
+  };
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    TRIP MEMBERS
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -226,14 +276,6 @@ const MEMBERS = [
   { id: "alex",   name: "Alex C",   initials: "AC", nationality: "UK", home: "London" },
   { id: "priya",  name: "Priya S",  initials: "PS", nationality: "IN", home: "Mumbai" },
 ];
-
-/* Simulated member responses for demo */
-const SIMULATED_RESPONSES = {
-  james: "I've always wanted to visit Tokyo and Kyoto! Also the Maldives would be a dream",
-  sarah: "Paris is my #1, but Santorini and Bali are up there too. Oh and Rome!",
-  alex:  "Iceland for sure! And I'd love to do Machu Picchu. Tokyo sounds amazing too",
-  priya: "Santorini is a must! Also Barcelona and Tokyo. Maybe Marrakech?",
-};
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GLOBAL CSS
@@ -295,7 +337,7 @@ const Ic = ({n,s=18,c="currentColor"}) => {
 
 const PHASES = ["collect", "processing", "enriched", "voting", "selection", "complete"];
 
-export default function BucketListAgent() {
+export default function BucketListAgent({ tripSession = null, onTripSaved = () => {} }) {
   const [phase, setPhase] = useState("collect");
   const [activeMember, setActiveMember] = useState(0);
   const [memberInputs, setMemberInputs] = useState({});
@@ -308,11 +350,64 @@ export default function BucketListAgent() {
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [processingStep, setProcessingStep] = useState(0);
   const [dbRecords, setDbRecords] = useState(null);
+  const [authToken, setAuthToken] = useState(tripSession?.authToken || "");
+  const [tripId, setTripId] = useState(tripSession?.tripId || "");
+  const [tripName, setTripName] = useState(tripSession?.tripName || "WanderPlan Bucket List");
+  const [persistStatus, setPersistStatus] = useState("");
+  const [persistError, setPersistError] = useState("");
+  const [extractDebug, setExtractDebug] = useState(null);
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
+  const hydratedOnceRef = useRef(false);
 
   const member = MEMBERS[activeMember];
   const allSubmitted = Object.keys(memberInputs).length === MEMBERS.length;
+
+  const extractWithBackend = useCallback(async (text) => {
+    try {
+      const res = await apiJson("/nlp/extract-destinations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const candidates = Array.isArray(res?.destinations) ? res.destinations : [];
+      const mapped = candidates
+        .map((row) => {
+          const name = typeof row === "string" ? row : row?.name;
+          const country = typeof row === "string" ? "" : row?.country;
+          const base = findDestinationByName(name);
+          if (!base) return null;
+          if (country && base.country === "Unknown") {
+            return { ...base, country };
+          }
+          return base;
+        })
+        .filter(Boolean);
+
+      const deduped = [];
+      const seen = new Set();
+      mapped.forEach((item) => {
+        if (!item?.key || seen.has(item.key)) return;
+        seen.add(item.key);
+        deduped.push(item);
+      });
+      return {
+        extracted: deduped,
+        llmUsed: !!res?.llm_used,
+        llmRawText: String(res?.llm_raw_text || ""),
+        parseSource: String(res?.parse_source || ""),
+        llmError: String(res?.llm_error || ""),
+      };
+    } catch {
+      return {
+        extracted: extractDestinations(text),
+        llmUsed: false,
+        llmRawText: "",
+        parseSource: "frontend_fallback",
+        llmError: "frontend request failed",
+      };
+    }
+  }, []);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -331,92 +426,85 @@ export default function BucketListAgent() {
   }, [activeMember, phase]);
 
   // ── HANDLE USER INPUT ────────────────────────────────────────────────
-  const handleSubmit = () => {
+  // Handle user input
+  const handleSubmit = async () => {
     if (!currentInput.trim()) return;
     const text = currentInput.trim();
     setCurrentInput("");
 
-    // Add user message
-    setChatHistories(prev => ({
+    setChatHistories((prev) => ({
       ...prev,
       [member.id]: [...(prev[member.id] || []), { from: "user", text }],
     }));
 
-    // NLP extraction
-    setTimeout(() => {
-      const extracted = extractDestinations(text);
-
-      if (extracted.length === 0) {
-        setChatHistories(prev => ({
-          ...prev,
-          [member.id]: [...prev[member.id],
-            { from: "agent", text: `Hmm, I couldn't match specific destinations from that. Could you name some cities or countries? For example: "Tokyo, Paris, Bali"` }
-          ],
-        }));
-        return;
-      }
-
-      // Show extraction results
-      const names = extracted.map(d => `**${d.canonical}**, ${d.country}`);
-      const dedupeNotes = [];
-      extracted.forEach(d => {
-        const userWords = text.toLowerCase();
-        d.aliases.forEach(alias => {
-          if (userWords.includes(alias) && alias !== d.canonical.toLowerCase()) {
-            dedupeNotes.push(`"${alias}" → ${d.canonical}`);
-          }
-        });
-      });
-
-      let responseMsg = `Found ${extracted.length} destination${extracted.length > 1 ? "s" : ""}! 🎯\n\n${names.join("\n")}`;
-      if (dedupeNotes.length > 0) {
-        responseMsg += `\n\n_Resolved: ${dedupeNotes.join(", ")}_`;
-      }
-
-      setChatHistories(prev => ({
-        ...prev,
-        [member.id]: [...prev[member.id], { from: "agent", text: responseMsg, extracted }],
-      }));
-
-      // Store
-      setMemberInputs(prev => ({ ...prev, [member.id]: { text, destinations: extracted } }));
-
-      // Follow-up
-      setTimeout(() => {
-        setChatHistories(prev => ({
-          ...prev,
-          [member.id]: [...prev[member.id],
-            { from: "agent", text: extracted.length < 3
-              ? `Got it! Want to add more? You've listed ${extracted.length} so far.`
-              : `Great picks! I've locked in your ${extracted.length} dream destinations. ✅` }
-          ],
-        }));
-      }, 800);
-
-    }, 600);
-  };
-
-  // ── SIMULATE OTHER MEMBERS ───────────────────────────────────────────
-  const simulateOthers = () => {
-    const newInputs = { ...memberInputs };
-    const newHistories = { ...chatHistories };
-
-    MEMBERS.forEach(m => {
-      if (newInputs[m.id]) return;
-      const text = SIMULATED_RESPONSES[m.id];
-      const extracted = extractDestinations(text);
-      newInputs[m.id] = { text, destinations: extracted };
-      newHistories[m.id] = [
-        { from: "agent", text: `Hey ${m.name.split(" ")[0]}! 🌍` },
-        { from: "agent", text: "What 3–5 places have you always dreamed of visiting?" },
-        { from: "user", text },
-        { from: "agent", text: `Found ${extracted.length} destinations! 🎯`, extracted },
-        { from: "agent", text: `Great picks! Locked in. ✅` },
-      ];
+    setPersistStatus("Running LLM destination extraction...");
+    const { extracted, llmUsed, llmRawText, parseSource, llmError } = await extractWithBackend(text);
+    setPersistStatus(llmUsed ? "LLM extraction completed." : "");
+    setExtractDebug({
+      llmUsed,
+      count: extracted.length,
+      parseSource,
+      llmRawText,
+      llmError,
+      at: new Date().toISOString(),
     });
 
-    setMemberInputs(newInputs);
-    setChatHistories(newHistories);
+    if (extracted.length === 0) {
+      setChatHistories((prev) => ({
+        ...prev,
+        [member.id]: [
+          ...prev[member.id],
+          {
+            from: "agent",
+            text: `I couldn't extract destinations from that. Please include city or country names, for example: "Tokyo, Paris, Bali".`,
+          },
+        ],
+      }));
+      return;
+    }
+
+    const names = extracted.map((d) => `**${d.canonical}**, ${d.country}`);
+    const dedupeNotes = [];
+    extracted.forEach((d) => {
+      const userWords = text.toLowerCase();
+      (d.aliases || []).forEach((alias) => {
+        if (userWords.includes(alias) && alias !== d.canonical.toLowerCase()) {
+          dedupeNotes.push(`"${alias}" -> ${d.canonical}`);
+        }
+      });
+    });
+
+    let responseMsg = `Found ${extracted.length} destination${extracted.length > 1 ? "s" : ""}!`;
+    if (llmUsed) {
+      responseMsg += " (LLM extracted)";
+    }
+    responseMsg += `\n\n${names.join("\n")}`;
+    if (dedupeNotes.length > 0) {
+      responseMsg += `\n\n_Resolved: ${dedupeNotes.join(", ")}_`;
+    }
+
+    setChatHistories((prev) => ({
+      ...prev,
+      [member.id]: [...prev[member.id], { from: "agent", text: responseMsg, extracted }],
+    }));
+
+    setMemberInputs((prev) => ({ ...prev, [member.id]: { text, destinations: extracted } }));
+
+    setTimeout(() => {
+      setChatHistories((prev) => ({
+        ...prev,
+        [member.id]: [
+          ...prev[member.id],
+          {
+            from: "agent",
+            text:
+              extracted.length < 3
+                ? `Got it! Want to add more? You've listed ${extracted.length} so far.`
+                : `Great picks! I've locked in your ${extracted.length} dream destinations.`,
+          },
+        ],
+      }));
+    }, 800);
   };
 
   // ── PROCESS & ENRICH ─────────────────────────────────────────────────
@@ -475,23 +563,109 @@ export default function BucketListAgent() {
   const topDestinations = rankedDestinations.slice(0, topN);
   const alternativeDestinations = rankedDestinations.slice(topN);
 
-  // ── SIMULATE ALL VOTES ───────────────────────────────────────────────
-  const simulateVotes = () => {
-    const simVotes = {};
-    uniqueDestinations.forEach(d => {
-      simVotes[d.key] = {};
-      MEMBERS.forEach(m => {
-        const isPopular = d.mentionedBy.length >= 3;
-        const isMentioner = d.mentionedBy.includes(m.id);
-        const rand = Math.random();
-        simVotes[d.key][m.id] = isMentioner ? "up" : (isPopular && rand > 0.3 ? "up" : rand > 0.5 ? "up" : "down");
-      });
+  useEffect(() => {
+    setAuthToken(tripSession?.authToken || "");
+    setTripId(tripSession?.tripId || "");
+    if (tripSession?.tripName) {
+      setTripName(tripSession.tripName);
+    }
+  }, [tripSession?.authToken, tripSession?.tripId, tripSession?.tripName]);
+
+  const ensureAuth = useCallback(async (force = false) => {
+    if (!force && authToken) return authToken;
+    const login = await apiJson("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "alice@test.com", password: "Password1!" }),
     });
-    setVotes(simVotes);
-  };
+    const token = login?.accessToken || "";
+    setAuthToken(token);
+    return token;
+  }, [authToken]);
+
+  const ensureTrip = useCallback(async (token) => {
+    if (tripId) return tripId;
+    const created = await apiJson("/trips", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ name: tripName || "WanderPlan Bucket List", duration_days: 10 }),
+    });
+    const createdTripId = created?.trip?.id || "";
+    if (!createdTripId) throw new Error("Trip creation failed");
+    setTripId(createdTripId);
+    return createdTripId;
+  }, [tripId, tripName]);
+
+  useEffect(() => {
+    if (hydratedOnceRef.current) return;
+    hydratedOnceRef.current = true;
+    let cancelled = false;
+    async function hydrateSavedDestinations() {
+      setPersistError("");
+      try {
+        const token = await ensureAuth();
+        if (!token || cancelled) return;
+        const id = await ensureTrip(token);
+        if (!id || cancelled) return;
+        const payload = await apiJson(`/trips/${id}/destinations`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled) return;
+        const saved = Array.isArray(payload?.destinations) ? payload.destinations : [];
+        if (saved.length > 0) {
+          const found = saved
+            .map((item) => findDestinationByName(item?.name))
+            .filter(Boolean);
+          if (found.length > 0) {
+            const seen = new Set();
+            const dedupedFound = found.filter((d) => {
+              if (seen.has(d.key)) return false;
+              seen.add(d.key);
+              return true;
+            });
+            const seededVotes = {};
+            saved.forEach((item) => {
+              const mapped = findDestinationByName(item?.name);
+              if (!mapped) return;
+              const upCount = Math.max(0, Number(item?.votes || 0));
+              const memberVotes = {};
+              MEMBERS.forEach((m, idx) => {
+                memberVotes[m.id] = idx < upCount ? "up" : "down";
+              });
+              seededVotes[mapped.key] = memberVotes;
+            });
+            setUniqueDestinations(dedupedFound);
+            setVotes(seededVotes);
+            setTopN(Math.min(3, Math.max(1, dedupedFound.length)));
+            setPhase("selection");
+          }
+        }
+        onTripSaved({
+          tripId: id,
+          tripName,
+          authToken: token,
+          members: tripSession?.members || [],
+          destinations: saved.map((d) => d?.name).filter(Boolean),
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setPersistError(err?.message || "Failed to initialize backend session");
+        }
+      }
+    }
+    hydrateSavedDestinations();
+    return () => {
+      cancelled = true;
+    };
+  }, [ensureAuth, ensureTrip, onTripSaved, tripName, tripSession?.members]);
 
   // ── STORE TO DB ──────────────────────────────────────────────────────
-  const storeSelections = () => {
+  const storeSelections = async () => {
+    setPersistError("");
+    setPersistStatus("Saving bucket list to backend...");
     const records = {
       trip_plans: {
         bucket_list: topDestinations.map(d => d.key),
@@ -511,8 +685,40 @@ export default function BucketListAgent() {
         photo_url: d.photo,
       })),
     };
-    setDbRecords(records);
-    setPhase("complete");
+    try {
+      const token = await ensureAuth();
+      const id = await ensureTrip(token);
+      const destinationNames = topDestinations.map((d) => d.canonical);
+      const voteMap = {};
+      topDestinations.forEach((d) => {
+        const ups = Object.values(votes[d.key] || {}).filter((v) => v === "up").length;
+        voteMap[d.canonical] = ups;
+      });
+      await apiJson(`/trips/${id}/destinations`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          destinations: destinationNames,
+          votes: voteMap,
+        }),
+      });
+      onTripSaved({
+        tripId: id,
+        tripName,
+        authToken: token,
+        members: tripSession?.members || [],
+        destinations: destinationNames,
+      });
+      setPersistStatus("Bucket list saved to backend.");
+      setDbRecords(records);
+      setPhase("complete");
+    } catch (err) {
+      setPersistError(err?.message || "Failed to save bucket list");
+      setPersistStatus("");
+    }
   };
 
   /* ═════════════════════════════════════════════════════════════════════
@@ -557,7 +763,31 @@ export default function BucketListAgent() {
       </header>
 
       <div style={{ maxWidth:720,margin:"0 auto",padding:"20px 20px 80px" }}>
-
+        {persistStatus && (
+          <div style={{ marginBottom:10, color:T.success, fontSize:13, fontWeight:600 }}>
+            {persistStatus}
+          </div>
+        )}
+        {persistError && (
+          <div style={{ marginBottom:10, color:T.error, fontSize:13, fontWeight:600 }}>
+            {persistError}
+          </div>
+        )}
+        {extractDebug && (
+          <div style={{ marginBottom:10, color:T.text2, fontSize:12, fontWeight:600 }}>
+            Extraction debug: LLM used = {String(!!extractDebug.llmUsed)}, extracted = {extractDebug.count}, source = {extractDebug.parseSource || "unknown"}
+            {extractDebug.llmError ? (
+              <div style={{ marginTop:4, color:T.error, fontWeight:600 }}>
+                LLM error: {extractDebug.llmError}
+              </div>
+            ) : null}
+            {extractDebug.llmRawText ? (
+              <pre style={{ marginTop:6, padding:8, borderRadius:8, background:"#F8FAFC", border:`1px solid ${T.borderLight}`, whiteSpace:"pre-wrap", wordBreak:"break-word", fontWeight:500 }}>
+                {extractDebug.llmRawText}
+              </pre>
+            ) : null}
+          </div>
+        )}
         {/* ═══════════════════════════════════════════════════════════
            PHASE 1: COLLECT
            ═══════════════════════════════════════════════════════════ */}
@@ -623,12 +853,9 @@ export default function BucketListAgent() {
             {/* Actions */}
             <div style={{ display:"flex",gap:10,marginTop:16,flexWrap:"wrap" }}>
               {!allSubmitted && (
-                <button onClick={simulateOthers} className="hd"
-                  style={{ padding:"12px 20px",borderRadius:12,border:`1.5px solid ${T.border}`,
-                    background:T.surface,color:T.text2,fontSize:14,fontWeight:600,cursor:"pointer",
-                    minHeight:46,display:"flex",alignItems:"center",gap:8 }}>
-                  <Ic n="sparkle" s={16} c={T.accent}/> Simulate All Members
-                </button>
+                <p style={{ fontSize:13,color:T.text3 }}>
+                  Collect destination input from each member tab before processing.
+                </p>
               )}
               {allSubmitted && (
                 <button onClick={startProcessing} className="hd"
@@ -722,12 +949,6 @@ export default function BucketListAgent() {
                 <h2 className="hd" style={{ fontWeight:700,fontSize:20 }}>Group Vote</h2>
                 <p style={{ fontSize:13,color:T.text2 }}>Each member votes 👍 or 👎 on every destination</p>
               </div>
-              <button onClick={simulateVotes} className="hd"
-                style={{ padding:"10px 18px",borderRadius:10,border:`1.5px solid ${T.border}`,
-                  background:T.surface,color:T.text2,fontWeight:600,fontSize:13,cursor:"pointer",minHeight:40,
-                  display:"flex",alignItems:"center",gap:6 }}>
-                <Ic n="sparkle" s={14} c={T.accent}/> Simulate Votes
-              </button>
             </div>
 
             <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
@@ -1146,3 +1367,6 @@ function DestinationCard({ dest, index, expanded }) {
     </div>
   );
 }
+
+
+

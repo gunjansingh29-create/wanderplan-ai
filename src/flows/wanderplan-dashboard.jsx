@@ -174,7 +174,7 @@ function loadViewerProfile() {
    MAIN APP
    ═══════════════════════════════════════════════════════════════════════════ */
 export default function Dashboard({ onOpenFlow = () => {} }) {
-  const [page, setPage] = useState("trips"); // trips | active | detail | profile | prompts
+  const [page, setPage] = useState("trips"); // trips | active | detail | profile | crew | prompts
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [detailTab, setDetailTab] = useState("overview");
   const viewer = loadViewerProfile();
@@ -270,6 +270,7 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
             { id:"trips", icon:"home", label:"My Trips" },
             { id:"active", icon:"map", label:"Active Trip" },
             { id:"profile", icon:"user", label:"Profile" },
+            { id:"crew", icon:"users", label:"My Crew" },
             { id:"prompts", icon:"code", label:"Prompt Library" },
           ].map(item => {
             const active = page === item.id || (page === "detail" && item.id === "trips");
@@ -320,7 +321,8 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
             <h1 className="hd" style={{ fontWeight:700, fontSize:22, color:T.text }}>
               {page==="trips"?"My Trips":page==="active"?(selectedTrip?.name||"Active Trip"):
                page==="detail"?(selectedTrip?.name||"Trip Detail"):
-               page==="profile"?"Profile & Settings":"Prompt Library"}
+               page==="profile"?"Profile & Settings":
+               page==="crew"?"My Crew":"Prompt Library"}
             </h1>
           </div>
           <div style={{ display:"flex", gap:8, alignItems:"center" }}>
@@ -340,6 +342,7 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
           {page==="active" && <ActivePage trip={selectedTrip||TRIPS[0]} onDetail={()=>{setPage("detail");setDetailTab("overview");}}/>}
           {page==="detail" && <DetailPage trip={selectedTrip||TRIPS[0]} tab={detailTab} setTab={setDetailTab} members={dashboardMembers}/>}
           {page==="profile" && <ProfilePage viewer={viewer}/>}
+          {page==="crew" && <CrewPage members={dashboardMembers}/>}
           {page==="prompts" && <PromptsPage/>}
         </div>
       </main>
@@ -907,6 +910,52 @@ function ProfilePage({ viewer }) {
           </button>
         </div>
       </Section>
+    </div>
+  );
+}
+
+function CrewPage({ members = MEMBERS }) {
+  return (
+    <div style={{ maxWidth:640,animation:"fadeUp .4s ease-out" }}>
+      <p style={{ fontSize:14,color:T.text2,marginBottom:20 }}>
+        Your travel companions. Invite friends and track who has completed their preferences.
+      </p>
+      <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+        {members.map((m,i) => (
+          <div key={i} style={{ background:T.surface,borderRadius:14,padding:"16px 20px",
+            border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,display:"flex",alignItems:"center",gap:14,
+            animation:`fadeUp .35s ease-out ${i*.05}s both` }}>
+            <div style={{ width:44,height:44,borderRadius:999,
+              background:`linear-gradient(135deg,${T.primary},${T.accent})`,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              color:"#fff",fontSize:15,fontWeight:700 }} className="hd">{m.initials}</div>
+            <div style={{ flex:1 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+                <p className="hd" style={{ fontWeight:600,fontSize:15 }}>{m.name}</p>
+                <span style={{ fontSize:11,fontWeight:600,padding:"2px 10px",borderRadius:999,
+                  background:m.role==="Organizer"?`${T.primary}12`:T.borderLight,
+                  color:m.role==="Organizer"?T.primary:T.text3 }}>{m.role}</span>
+              </div>
+              <div style={{ display:"flex",gap:4,marginTop:4,flexWrap:"wrap" }}>
+                {(m.interests || []).map((tag) => (
+                  <span key={tag} style={{ fontSize:11,color:T.text3,background:T.bg,padding:"1px 8px",borderRadius:999 }}>
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={{ textAlign:"right" }}>
+              <p style={{ fontSize:12,color:T.text3 }}>{m.diet || "None"}</p>
+              <p style={{ fontSize:12,color:T.text3 }}>{m.fitness || "Moderate"}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button className="hd" style={{ marginTop:16,display:"flex",alignItems:"center",gap:8,
+        padding:"12px 20px",borderRadius:12,border:`2px dashed ${T.border}`,background:"transparent",
+        color:T.text2,fontSize:14,fontWeight:600,cursor:"pointer",width:"100%",justifyContent:"center",minHeight:48 }}>
+        <Ic n="plus" s={16} c={T.text3}/> Invite Member
+      </button>
     </div>
   );
 }

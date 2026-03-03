@@ -100,14 +100,6 @@ const HOBBY_CATS = [
     activities:["Bars & cocktails","Clubs & DJs","Live music","Pub crawls"] },
 ];
 
-/* Simulated member responses */
-const SIM_ANSWERS = {
-  james:  {Surfing:1,Snorkeling:0.5,["Scuba diving"]:1,Kayaking:0.5,Hiking:1,["Rock climbing"]:0.5,["Bungee jumping"]:0,Paragliding:0.5,Museums:0.5,["Temples & shrines"]:1,["Historical sites"]:0.5,["Local craft workshops"]:0,["Street food tours"]:1,["Cooking classes"]:0,["Fine dining"]:0.5,["Wine & beer tasting"]:1,["Wildlife safari"]:1,Birdwatching:0,["Botanical gardens"]:0,["National parks"]:1,["Spa treatments"]:0,["Beach lounging"]:0.5,["Yoga retreats"]:0,["Bars & cocktails"]:1,["Clubs & DJs"]:0.5,["Live music"]:1,["Pub crawls"]:0.5},
-  sarah:  {Surfing:0,Snorkeling:1,["Scuba diving"]:0,Kayaking:0.5,Hiking:0.5,["Rock climbing"]:0,["Bungee jumping"]:0,Paragliding:0,Museums:1,["Temples & shrines"]:1,["Historical sites"]:1,["Local craft workshops"]:1,["Street food tours"]:1,["Cooking classes"]:1,["Fine dining"]:1,["Wine & beer tasting"]:0.5,["Wildlife safari"]:0.5,Birdwatching:0,["Botanical gardens"]:0.5,["National parks"]:0.5,["Spa treatments"]:1,["Beach lounging"]:1,["Yoga retreats"]:0.5,["Bars & cocktails"]:0.5,["Clubs & DJs"]:0,["Live music"]:0.5,["Pub crawls"]:0},
-  alex:   {Surfing:1,Snorkeling:0.5,["Scuba diving"]:1,Kayaking:1,Hiking:1,["Rock climbing"]:1,["Bungee jumping"]:1,Paragliding:1,Museums:0,["Temples & shrines"]:0.5,["Historical sites"]:0,["Local craft workshops"]:0,["Street food tours"]:0.5,["Cooking classes"]:0,["Fine dining"]:0,["Wine & beer tasting"]:0.5,["Wildlife safari"]:1,Birdwatching:0.5,["Botanical gardens"]:0,["National parks"]:1,["Spa treatments"]:0,["Beach lounging"]:0.5,["Yoga retreats"]:0,["Bars & cocktails"]:1,["Clubs & DJs"]:1,["Live music"]:1,["Pub crawls"]:1},
-  priya:  {Surfing:0,Snorkeling:0.5,["Scuba diving"]:0,Kayaking:0,Hiking:0.5,["Rock climbing"]:0,["Bungee jumping"]:0,Paragliding:0,Museums:1,["Temples & shrines"]:1,["Historical sites"]:0.5,["Local craft workshops"]:1,["Street food tours"]:1,["Cooking classes"]:1,["Fine dining"]:1,["Wine & beer tasting"]:1,["Wildlife safari"]:0.5,Birdwatching:0,["Botanical gardens"]:1,["National parks"]:0.5,["Spa treatments"]:1,["Beach lounging"]:1,["Yoga retreats"]:1,["Bars & cocktails"]:0.5,["Clubs & DJs"]:0,["Live music"]:0.5,["Pub crawls"]:0},
-};
-
 /* ═══════════════════════════════════════════════════════════════════════════
    HEALTH & FITNESS REQUIREMENTS DATABASE
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -222,6 +214,20 @@ const DEST_HEALTH = {
   },
 };
 
+function parseDestinationList(value) {
+  const raw = String(value || "")
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const seen = new Set();
+  return raw.filter((item) => {
+    const key = item.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    SCORING ENGINE
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -295,6 +301,9 @@ export default function InterestHealthAgents() {
   const [alternatives, setAlternatives] = useState({}); // {activityName: alternativeName}
   const [healthStep, setHealthStep] = useState(0);
   const [dbRecords, setDbRecords] = useState(null);
+  const [destinationInput, setDestinationInput] = useState("");
+  const [tripDestinations, setTripDestinations] = useState([]);
+  const [destinationError, setDestinationError] = useState("");
 
   const chatEndRef = useRef(null);
   const member = MEMBERS[activeMember];
@@ -334,6 +343,17 @@ export default function InterestHealthAgents() {
     if (!a) return false;
     return quizQueue.every(q => a[q.activity] !== undefined);
   });
+
+  const startInterestQuiz = () => {
+    const parsed = parseDestinationList(destinationInput);
+    if (parsed.length === 0) {
+      setDestinationError("Enter at least one destination before starting.");
+      return;
+    }
+    setDestinationError("");
+    setTripDestinations(parsed);
+    setPhase("quiz");
+  };
 
   const answerQuestion = (weight) => {
     if (!currentQ || !member) return;
@@ -375,12 +395,6 @@ export default function InterestHealthAgents() {
         ]);
       }, 300);
     }
-  };
-
-  // ── SIMULATE ALL ANSWERS ─────────────────────────────────
-  const simulateAll = () => {
-    setAllAnswers(SIM_ANSWERS);
-    setChatLog(prev => [...prev, { from:"system", text:"All 4 members' answers simulated" }]);
   };
 
   // ── COMPUTE RESULTS ──────────────────────────────────────
@@ -476,7 +490,7 @@ export default function InterestHealthAgents() {
       });
 
       // Destination vaccinations
-      const dests = m.destinations || [];
+      const dests = tripDestinations;
       dests.forEach(dest => {
         const health = DEST_HEALTH[dest];
         if (health) {
@@ -591,7 +605,33 @@ export default function InterestHealthAgents() {
               </div>
             </div>
 
-            <button onClick={() => setPhase("quiz")} className="hd"
+            <div style={{ background:T.surface,borderRadius:16,padding:16,marginTop:16,
+              border:`1px solid ${destinationError ? T.error : T.borderLight}`,boxShadow:sh.sm }}>
+              <label className="hd" style={{ display:"block",fontWeight:700,fontSize:14,marginBottom:8 }}>
+                Trip destinations (required for health compatibility)
+              </label>
+              <textarea
+                value={destinationInput}
+                onChange={(e) => {
+                  setDestinationInput(e.target.value);
+                  if (destinationError) setDestinationError("");
+                }}
+                placeholder="Example: Bali, Kyoto"
+                style={{ width:"100%",minHeight:74,resize:"vertical",padding:"10px 12px",
+                  borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,color:T.text,
+                  background:T.bg,fontFamily:"'Source Sans 3',sans-serif" }}
+              />
+              <p style={{ fontSize:12,color:T.text3,marginTop:8 }}>
+                Separate destinations with commas or new lines.
+              </p>
+              {destinationError ? (
+                <p style={{ fontSize:12,color:T.error,fontWeight:600,marginTop:4 }}>
+                  {destinationError}
+                </p>
+              ) : null}
+            </div>
+
+            <button onClick={startInterestQuiz} className="hd"
               style={{ width:"100%",marginTop:16,padding:"14px",borderRadius:14,border:"none",
                 background:T.primary,color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",
                 minHeight:50,boxShadow:`0 4px 16px ${T.primary}30`,
@@ -628,12 +668,6 @@ export default function InterestHealthAgents() {
                   </button>
                 );
               })}
-              <button onClick={simulateAll} className="hd"
-                style={{ padding:"7px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,
-                  background:T.surface,color:T.text3,fontSize:11,fontWeight:600,cursor:"pointer",
-                  flexShrink:0,display:"flex",alignItems:"center",gap:4 }}>
-                <Ic n="sparkle" s={12} c={T.accent}/> Sim All
-              </button>
             </div>
 
             {/* Progress bar */}
@@ -1032,7 +1066,7 @@ export default function InterestHealthAgents() {
                 { label:"Activities Checked", value:healthQueue.length, icon:"shield", color:"#8B5CF6" },
                 { label:"All Cleared", value:healthQueue.filter(a=>!Object.values(reqDecisions[a]||{}).includes(false)).length, icon:"check", color:T.success },
                 { label:"Swapped", value:Object.keys(alternatives).length, icon:"swap", color:T.warning },
-                { label:"Vaccinations", value:MEMBERS[0].destinations.reduce((s,d)=>(DEST_HEALTH[d]?.recommended?.length||0)+s,0), icon:"alert", color:T.error },
+                { label:"Vaccinations", value:tripDestinations.reduce((s,d)=>(DEST_HEALTH[d]?.recommended?.length||0)+s,0), icon:"alert", color:T.error },
               ].map((s, i) => (
                 <div key={i} style={{ background:T.surface,borderRadius:12,padding:"14px 16px",
                   border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,textAlign:"center",
@@ -1045,9 +1079,21 @@ export default function InterestHealthAgents() {
             </div>
 
             {/* Destination health advisories */}
-            {MEMBERS[0].destinations.map(dest => {
+            {tripDestinations.map(dest => {
               const health = DEST_HEALTH[dest];
-              if (!health) return null;
+              if (!health) {
+                return (
+                  <div key={dest} style={{ background:T.surface,borderRadius:14,padding:"16px 18px",
+                    border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,marginBottom:12 }}>
+                    <h4 className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:8 }}>
+                      🏥 Health Advisory — {dest}
+                    </h4>
+                    <p style={{ fontSize:13,color:T.text2 }}>
+                      No destination-specific health advisory is preloaded for this location. Please consult local travel health guidance.
+                    </p>
+                  </div>
+                );
+              }
               return (
                 <div key={dest} style={{ background:T.surface,borderRadius:14,padding:"16px 18px",
                   border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,marginBottom:12 }}>
@@ -1175,6 +1221,7 @@ export default function InterestHealthAgents() {
                 setQuizQueue([]); setQIdx(0); setChatLog([]); setGroupVector({}); setRanked([]);
                 setCatScores([]); setHealthQueue([]); setHealthIdx(0); setReqDecisions({});
                 setAlternatives({}); setDbRecords(null);
+                setDestinationInput(""); setTripDestinations([]); setDestinationError("");
                 // Re-init quiz queue
                 const q = [];
                 HOBBY_CATS.forEach(cat => { cat.activities.forEach(act => {
