@@ -88,6 +88,7 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(() => isDemoModeFromUrl());
   const [lastHomeScreen, setLastHomeScreen] = useState('landing');
   const [wizardBackSignal, setWizardBackSignal] = useState(0);
+  const [wizardStep, setWizardStep] = useState(0);
   const [tripSession, setTripSession] = useState(() => {
     try {
       const raw = window.localStorage.getItem(TRIP_SESSION_KEY);
@@ -136,6 +137,10 @@ export default function App() {
 
   const goBackOneStep = () => {
     if (selectedFlow?.id === 'wizard') {
+      if (wizardStep <= 0) {
+        exitWizardFlow();
+        return;
+      }
       setWizardBackSignal((v) => v + 1);
       return;
     }
@@ -212,6 +217,7 @@ export default function App() {
           demoMode={demoMode}
           backSignal={wizardBackSignal}
           onBackBoundary={exitWizardFlow}
+          onStepChange={setWizardStep}
         />
       ) : (
         <ActiveComponent tripSession={tripSession} onTripSaved={handleTripSaved} />

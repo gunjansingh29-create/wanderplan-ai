@@ -456,6 +456,7 @@ export default function TripWizard({
   initialStageKey = "create",
   backSignal = 0,
   onBackBoundary = () => {},
+  onStepChange = () => {},
 }) {
   const persistedSession = safeReadSession();
   const hydratedSession = demoMode ? {} : (initialSession || persistedSession || {});
@@ -549,6 +550,11 @@ export default function TripWizard({
       setStep(0);
     }
   }, [initialStageKey]);
+
+  useEffect(() => {
+    onStepChange(step);
+  }, [step, onStepChange]);
+
   useEffect(() => {
     setDestinationVotes((prev) => {
       const nextVotes = {};
