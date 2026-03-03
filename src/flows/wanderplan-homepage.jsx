@@ -15,6 +15,65 @@ const T = {
   overlay: "rgba(26,26,46,0.55)",
 };
 
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
+const LOCAL_AUTH_USERS_KEY = "wanderplan.auth.users";
+const LOCAL_AUTH_SESSION_KEY = "wanderplan.auth.session";
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || "").trim());
+}
+
+function readLocalAuthUsers() {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_AUTH_USERS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalAuthUsers(users) {
+  try {
+    window.localStorage.setItem(LOCAL_AUTH_USERS_KEY, JSON.stringify(users));
+  } catch {
+    // Ignore localStorage failures.
+  }
+}
+
+function saveAuthSession(session) {
+  try {
+    window.localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // Ignore localStorage failures.
+  }
+}
+
+async function loginViaApi(email, password) {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const text = await res.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = text;
+  }
+  if (!res.ok) {
+    const detail =
+      typeof payload === "string"
+        ? payload
+        : payload?.detail || payload?.message || `HTTP ${res.status}`;
+    const err = new Error(String(detail || "Sign in failed"));
+    err.status = res.status;
+    throw err;
+  }
+  return payload || {};
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // ANIMATED GLOBE / MAP CANVAS
 // ════════════════════════════════════════════════════════════════════════════
@@ -164,6 +223,8 @@ export default function WanderPlanHome({
   const [travelStyle, setTravelStyle] = useState(null);
   const [interests, setInterests] = useState([]);
   const [budgetLevel, setBudgetLevel] = useState(1);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [scrollY, setScrollY] = useState(0);
 
   useEffect(() => {
@@ -176,6 +237,95 @@ export default function WanderPlanHome({
     onScreenChange(screen);
   }, [screen, onScreenChange]);
 
+  useEffect(() => {
+    setAuthError("");
+  }, [authMode]);
+
+  const handleAuthSubmit = async () => {
+    const normalizedEmail = email.trim().toLowerCase();
+    const rawPassword = password;
+
+    if (!isValidEmail(normalizedEmail)) {
+      setAuthError("Enter a valid email address.");
+      return;
+    }
+    if (!rawPassword || rawPassword.length < 8) {
+      setAuthError("Password must be at least 8 characters.");
+      return;
+    }
+
+    setAuthError("");
+    setAuthBusy(true);
+    try {
+      const localUsers = readLocalAuthUsers();
+      const localAccount = localUsers[normalizedEmail];
+
+      if (authMode === "signup") {
+        if (localAccount) {
+          setAuthError("An account with this email already exists. Sign in instead.");
+          return;
+        }
+
+        let backendExists = false;
+        try {
+          await loginViaApi(normalizedEmail, rawPassword);
+          backendExists = true;
+        } catch (err) {
+          if (err?.status && err.status !== 401) {
+            throw err;
+          }
+        }
+        if (backendExists) {
+          setAuthError("An account with this email already exists. Sign in instead.");
+          return;
+        }
+
+        localUsers[normalizedEmail] = {
+          password: rawPassword,
+          created_at: new Date().toISOString(),
+        };
+        saveLocalAuthUsers(localUsers);
+        saveAuthSession({
+          email: normalizedEmail,
+          provider: "local",
+          signed_in_at: new Date().toISOString(),
+        });
+      } else {
+        if (localAccount) {
+          if (localAccount.password !== rawPassword) {
+            setAuthError("Invalid email or password.");
+            return;
+          }
+          saveAuthSession({
+            email: normalizedEmail,
+            provider: "local",
+            signed_in_at: new Date().toISOString(),
+          });
+        } else {
+          const login = await loginViaApi(normalizedEmail, rawPassword);
+          saveAuthSession({
+            email: normalizedEmail,
+            provider: "backend",
+            accessToken: login?.accessToken || "",
+            user_id: login?.user_id || "",
+            name: login?.name || "",
+            signed_in_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      setScreen("onboard-1");
+    } catch (err) {
+      setAuthError(err?.message || "Unable to sign in right now.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSocialAuthClick = () => {
+    setAuthError("Social sign-in is not enabled yet. Use email and password.");
+  };
+
   // ── Landing Page ─────────────────────────────────────────────────────
   if (screen === "landing") return <LandingPage scrollY={scrollY} onCTA={() => setScreen("auth")} />;
 
@@ -186,8 +336,11 @@ export default function WanderPlanHome({
       setMode={setAuthMode}
       email={email} setEmail={setEmail}
       password={password} setPassword={setPassword}
-      onSubmit={() => setScreen("onboard-1")}
+      onSubmit={handleAuthSubmit}
+      onSocialSubmit={handleSocialAuthClick}
       onBack={() => setScreen("landing")}
+      busy={authBusy}
+      error={authError}
     />
   );
 
@@ -571,7 +724,19 @@ function LandingPage({ scrollY, onCTA }) {
 // AUTH SCREEN — Sign Up / Log In (single screen)
 // ════════════════════════════════════════════════════════════════════════════
 
-function AuthScreen({ mode, setMode, email, setEmail, password, setPassword, onSubmit, onBack }) {
+function AuthScreen({
+  mode,
+  setMode,
+  email,
+  setEmail,
+  password,
+  setPassword,
+  onSubmit,
+  onBack,
+  busy = false,
+  error = "",
+  onSocialSubmit = () => {},
+}) {
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
       background: `linear-gradient(165deg, ${T.primaryDark}, ${T.primary} 40%, ${T.primaryDark})`,
@@ -616,11 +781,12 @@ function AuthScreen({ mode, setMode, email, setEmail, password, setPassword, onS
                 <svg width="18" height="18" viewBox="0 0 18 18"><path d="M14.94 15.06c-.67.98-1.4 1.96-2.52 1.98-1.1.02-1.46-.65-2.72-.65s-1.66.63-2.7.67c-1.08.04-1.9-1.06-2.58-2.04C3.05 13.04 2 9.87 3.42 7.73A4.03 4.03 0 016.8 5.86c1.06-.02 2.06.71 2.7.71.65 0 1.87-.88 3.15-.75.54.02 2.04.22 3 1.63-.08.05-1.79 1.04-1.77 3.12.02 2.48 2.18 3.31 2.2 3.32-.02.06-.34 1.18-1.14 2.17zM11.5.5c.77-.94 2.04-1.63 3.1-1.67.15 1.21-.35 2.41-1.1 3.32-.74.9-1.96 1.6-3.15 1.51-.17-1.17.42-2.41 1.15-3.16z" fill="#000"/></svg>
               )},
             ].map((provider, i) => (
-              <button key={i} onClick={onSubmit}
+              <button key={i} onClick={() => onSocialSubmit(provider.label)} disabled={busy}
                 style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
                   padding: "12px 16px", borderRadius: 12, border: `1.5px solid ${T.border}`,
                   background: T.surface, cursor: "pointer", minHeight: 48, fontSize: 14,
-                  fontWeight: 600, color: T.text, fontFamily: "'Inter'", transition: "all 0.2s" }}
+                  fontWeight: 600, color: busy ? T.text3 : T.text, fontFamily: "'Inter'", transition: "all 0.2s",
+                  opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" }}
                 onMouseEnter={e => e.currentTarget.style.background = T.bg}
                 onMouseLeave={e => e.currentTarget.style.background = T.surface}>
                 {provider.icon} {provider.label}
@@ -636,10 +802,16 @@ function AuthScreen({ mode, setMode, email, setEmail, password, setPassword, onS
           </div>
 
           {/* Email / Password */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              onSubmit();
+            }}
+            style={{ display: "flex", flexDirection: "column", gap: 14 }}
+          >
             <div>
               <label htmlFor="auth-email" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Email</label>
-              <input id="auth-email" aria-label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)}
+              <input id="auth-email" aria-label="Email" type="email" value={email} disabled={busy} onChange={e => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
                   fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
@@ -647,21 +819,26 @@ function AuthScreen({ mode, setMode, email, setEmail, password, setPassword, onS
             </div>
             <div>
               <label htmlFor="auth-password" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Password</label>
-              <input id="auth-password" aria-label="Password" type="password" value={password} onChange={e => setPassword(e.target.value)}
+              <input id="auth-password" aria-label="Password" type="password" value={password} disabled={busy} onChange={e => setPassword(e.target.value)}
                 placeholder={mode === "signup" ? "Create a password (8+ chars)" : "Enter your password"}
                 style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
                   fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
                   fontFamily: "'Inter'" }} />
             </div>
+            {error && (
+              <p role="alert" style={{ fontSize: 13, color: T.error, fontWeight: 600 }}>
+                {error}
+              </p>
+            )}
 
-            <button onClick={onSubmit}
+            <button type="submit" disabled={busy}
               style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none",
-                background: T.primary, color: "#fff", fontSize: 16, fontWeight: 700,
-                fontFamily: "'DM Sans'", cursor: "pointer", minHeight: 52, marginTop: 4,
+                background: busy ? T.primaryLight : T.primary, color: "#fff", fontSize: 16, fontWeight: 700,
+                fontFamily: "'DM Sans'", cursor: busy ? "default" : "pointer", minHeight: 52, marginTop: 4,
                 boxShadow: `0 2px 12px ${T.primary}40`, transition: "all 0.2s" }}>
-              {mode === "signup" ? "Create Account" : "Sign In"}
+              {busy ? (mode === "signup" ? "Creating account..." : "Signing in...") : (mode === "signup" ? "Create Account" : "Sign In")}
             </button>
-          </div>
+          </form>
 
           {/* Toggle mode */}
           <p style={{ textAlign: "center", marginTop: 20, fontSize: 14, color: T.text2 }}>
