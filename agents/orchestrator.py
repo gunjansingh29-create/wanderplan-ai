@@ -58,10 +58,21 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+
+class PasswordResetRequest(BaseModel):
+    email: str
+    new_password: str
+
+
 class AuthResponse(BaseModel):
     accessToken: str
     user_id: str
     name: str
+
+
+class PasswordResetResponse(BaseModel):
+    ok: bool
+    message: str
 
 """
 WanderPlan AI - Orchestrator Agent
@@ -693,13 +704,35 @@ async def _shutdown_db():
 # Add /auth/login endpoint
 @app.post("/auth/login", response_model=AuthResponse)
 async def login(request: LoginRequest):
-    user = USERS.get(request.email)
+    normalized_email = (request.email or "").strip().lower()
+    user = USERS.get(normalized_email)
     if not user or user["password"] != request.password:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return AuthResponse(
         accessToken=f"test-token:{user['user_id']}",
         user_id=user["user_id"],
         name=user["name"]
+    )
+
+
+@app.post("/auth/password-reset", response_model=PasswordResetResponse)
+async def password_reset(request: PasswordResetRequest):
+    normalized_email = (request.email or "").strip().lower()
+    new_password = request.new_password or ""
+
+    if "@" not in normalized_email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    user = USERS.get(normalized_email)
+    if user:
+        user["password"] = new_password
+
+    # Return a generic success message to avoid email enumeration.
+    return PasswordResetResponse(
+        ok=True,
+        message="If an account exists for this email, the password has been updated",
     )
 
 

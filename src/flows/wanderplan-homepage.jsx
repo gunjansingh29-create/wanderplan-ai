@@ -74,6 +74,31 @@ async function loginViaApi(email, password) {
   return payload || {};
 }
 
+async function resetPasswordViaApi(email, newPassword) {
+  const res = await fetch(`${API_BASE}/auth/password-reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, new_password: newPassword }),
+  });
+  const text = await res.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = text;
+  }
+  if (!res.ok) {
+    const detail =
+      typeof payload === "string"
+        ? payload
+        : payload?.detail || payload?.message || `HTTP ${res.status}`;
+    const err = new Error(String(detail || "Password reset failed"));
+    err.status = res.status;
+    throw err;
+  }
+  return payload || {};
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // ANIMATED GLOBE / MAP CANVAS
 // ════════════════════════════════════════════════════════════════════════════
@@ -225,6 +250,7 @@ export default function WanderPlanHome({
   const [budgetLevel, setBudgetLevel] = useState(1);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
   const [scrollY, setScrollY] = useState(0);
 
   useEffect(() => {
@@ -239,6 +265,7 @@ export default function WanderPlanHome({
 
   useEffect(() => {
     setAuthError("");
+    setAuthNotice("");
   }, [authMode]);
 
   const handleAuthSubmit = async () => {
@@ -246,14 +273,17 @@ export default function WanderPlanHome({
     const rawPassword = password;
 
     if (!isValidEmail(normalizedEmail)) {
+      setAuthNotice("");
       setAuthError("Enter a valid email address.");
       return;
     }
     if (!rawPassword || rawPassword.length < 8) {
+      setAuthNotice("");
       setAuthError("Password must be at least 8 characters.");
       return;
     }
 
+    setAuthNotice("");
     setAuthError("");
     setAuthBusy(true);
     try {
@@ -323,7 +353,58 @@ export default function WanderPlanHome({
   };
 
   const handleSocialAuthClick = () => {
+    setAuthNotice("");
     setAuthError("Social sign-in is not enabled yet. Use email and password.");
+  };
+
+  const handleForgotPasswordSubmit = async ({ email: resetEmail, newPassword, confirmPassword }) => {
+    const normalizedEmail = (resetEmail || "").trim().toLowerCase();
+    const nextPassword = newPassword || "";
+    const confirmNextPassword = confirmPassword || "";
+
+    if (!isValidEmail(normalizedEmail)) {
+      setAuthNotice("");
+      setAuthError("Enter a valid email address.");
+      return;
+    }
+    if (!nextPassword || nextPassword.length < 8) {
+      setAuthNotice("");
+      setAuthError("Password must be at least 8 characters.");
+      return;
+    }
+    if (nextPassword !== confirmNextPassword) {
+      setAuthNotice("");
+      setAuthError("New password and confirm password do not match.");
+      return;
+    }
+
+    setAuthNotice("");
+    setAuthError("");
+    setAuthBusy(true);
+    try {
+      const localUsers = readLocalAuthUsers();
+      const localAccount = localUsers[normalizedEmail];
+      if (localAccount) {
+        localUsers[normalizedEmail] = {
+          ...localAccount,
+          password: nextPassword,
+          updated_at: new Date().toISOString(),
+        };
+        saveLocalAuthUsers(localUsers);
+      } else {
+        await resetPasswordViaApi(normalizedEmail, nextPassword);
+      }
+      setAuthMode("login");
+      setEmail(normalizedEmail);
+      setPassword("");
+      setAuthNotice("If an account exists for this email, the password has been updated.");
+      setAuthError("");
+    } catch (err) {
+      setAuthNotice("");
+      setAuthError(err?.message || "Unable to reset password right now.");
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   // ── Landing Page ─────────────────────────────────────────────────────
@@ -338,9 +419,11 @@ export default function WanderPlanHome({
       password={password} setPassword={setPassword}
       onSubmit={handleAuthSubmit}
       onSocialSubmit={handleSocialAuthClick}
+      onForgotPassword={handleForgotPasswordSubmit}
       onBack={() => setScreen("landing")}
       busy={authBusy}
       error={authError}
+      notice={authNotice}
     />
   );
 
@@ -735,8 +818,22 @@ function AuthScreen({
   onBack,
   busy = false,
   error = "",
+  notice = "",
   onSocialSubmit = () => {},
+  onForgotPassword = () => {},
 }) {
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [resetEmail, setResetEmail] = useState(email);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  useEffect(() => {
+    setShowResetPassword(false);
+    setResetEmail(email);
+    setNewPassword("");
+    setConfirmPassword("");
+  }, [mode, email]);
+
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
       background: `linear-gradient(165deg, ${T.primaryDark}, ${T.primary} 40%, ${T.primaryDark})`,
@@ -760,10 +857,12 @@ function AuthScreen({
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </div>
           <h1 style={{ fontFamily: "'DM Sans'", fontWeight: 700, fontSize: 28, color: "#fff" }}>
-            {mode === "signup" ? "Create your account" : "Welcome back"}
+            {showResetPassword ? "Reset your password" : (mode === "signup" ? "Create your account" : "Welcome back")}
           </h1>
           <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 15, marginTop: 8 }}>
-            {mode === "signup" ? "Start planning in under 2 minutes" : "Pick up where you left off"}
+            {showResetPassword
+              ? "Set a new password to access your account."
+              : (mode === "signup" ? "Start planning in under 2 minutes" : "Pick up where you left off")}
           </p>
         </div>
 
@@ -794,53 +893,158 @@ function AuthScreen({
           </div>
 
           {/* Email / Password */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              onSubmit();
-            }}
-            style={{ display: "flex", flexDirection: "column", gap: 14 }}
-          >
-            <div>
-              <label htmlFor="auth-email" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Email</label>
-              <input id="auth-email" aria-label="Email" type="email" value={email} disabled={busy} onChange={e => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
-                  fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
-                  fontFamily: "'Inter'" }} />
-            </div>
-            <div>
-              <label htmlFor="auth-password" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Password</label>
-              <input id="auth-password" aria-label="Password" type="password" value={password} disabled={busy} onChange={e => setPassword(e.target.value)}
-                placeholder={mode === "signup" ? "Create a password (8+ chars)" : "Enter your password"}
-                style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
-                  fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
-                  fontFamily: "'Inter'" }} />
-            </div>
-            {error && (
-              <p role="alert" style={{ fontSize: 13, color: T.error, fontWeight: 600 }}>
-                {error}
-              </p>
-            )}
+          {!showResetPassword ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                onSubmit();
+              }}
+              style={{ display: "flex", flexDirection: "column", gap: 14 }}
+            >
+              <div>
+                <label htmlFor="auth-email" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Email</label>
+                <input id="auth-email" aria-label="Email" type="email" value={email} disabled={busy} onChange={e => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
+                    fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
+                    fontFamily: "'Inter'" }} />
+              </div>
+              <div>
+                <label htmlFor="auth-password" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Password</label>
+                <input id="auth-password" aria-label="Password" type="password" value={password} disabled={busy} onChange={e => setPassword(e.target.value)}
+                  placeholder={mode === "signup" ? "Create a password (8+ chars)" : "Enter your password"}
+                  style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
+                    fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
+                    fontFamily: "'Inter'" }} />
+              </div>
+              {mode === "login" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowResetPassword(true);
+                    setResetEmail(email);
+                  }}
+                  disabled={busy}
+                  style={{
+                    alignSelf: "flex-end",
+                    background: "none",
+                    border: "none",
+                    color: T.primary,
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: busy ? "default" : "pointer",
+                    padding: 0,
+                  }}
+                >
+                  Forgot password?
+                </button>
+              )}
+              {notice && (
+                <p role="status" style={{ fontSize: 13, color: T.success, fontWeight: 600 }}>
+                  {notice}
+                </p>
+              )}
+              {error && (
+                <p role="alert" style={{ fontSize: 13, color: T.error, fontWeight: 600 }}>
+                  {error}
+                </p>
+              )}
 
-            <button type="submit" disabled={busy}
-              style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none",
-                background: busy ? T.primaryLight : T.primary, color: "#fff", fontSize: 16, fontWeight: 700,
-                fontFamily: "'DM Sans'", cursor: busy ? "default" : "pointer", minHeight: 52, marginTop: 4,
-                boxShadow: `0 2px 12px ${T.primary}40`, transition: "all 0.2s" }}>
-              {busy ? (mode === "signup" ? "Creating account..." : "Signing in...") : (mode === "signup" ? "Create Account" : "Sign In")}
-            </button>
-          </form>
+              <button type="submit" disabled={busy}
+                style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none",
+                  background: busy ? T.primaryLight : T.primary, color: "#fff", fontSize: 16, fontWeight: 700,
+                  fontFamily: "'DM Sans'", cursor: busy ? "default" : "pointer", minHeight: 52, marginTop: 4,
+                  boxShadow: `0 2px 12px ${T.primary}40`, transition: "all 0.2s" }}>
+                {busy ? (mode === "signup" ? "Creating account..." : "Signing in...") : (mode === "signup" ? "Create Account" : "Sign In")}
+              </button>
+            </form>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                onForgotPassword({
+                  email: resetEmail,
+                  newPassword,
+                  confirmPassword,
+                });
+              }}
+              style={{ display: "flex", flexDirection: "column", gap: 14 }}
+            >
+              <div>
+                <label htmlFor="reset-email" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Email</label>
+                <input id="reset-email" aria-label="Reset email" type="email" value={resetEmail} disabled={busy} onChange={e => setResetEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
+                    fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
+                    fontFamily: "'Inter'" }} />
+              </div>
+              <div>
+                <label htmlFor="reset-password" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>New password</label>
+                <input id="reset-password" aria-label="New password" type="password" value={newPassword} disabled={busy} onChange={e => setNewPassword(e.target.value)}
+                  placeholder="Create a new password (8+ chars)"
+                  style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
+                    fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
+                    fontFamily: "'Inter'" }} />
+              </div>
+              <div>
+                <label htmlFor="reset-confirm-password" style={{ fontSize: 13, fontWeight: 600, color: T.text2, display: "block", marginBottom: 6 }}>Confirm password</label>
+                <input id="reset-confirm-password" aria-label="Confirm password" type="password" value={confirmPassword} disabled={busy} onChange={e => setConfirmPassword(e.target.value)}
+                  placeholder="Re-enter your new password"
+                  style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${T.border}`,
+                    fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
+                    fontFamily: "'Inter'" }} />
+              </div>
+              {notice && (
+                <p role="status" style={{ fontSize: 13, color: T.success, fontWeight: 600 }}>
+                  {notice}
+                </p>
+              )}
+              {error && (
+                <p role="alert" style={{ fontSize: 13, color: T.error, fontWeight: 600 }}>
+                  {error}
+                </p>
+              )}
+              <button type="submit" disabled={busy}
+                style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none",
+                  background: busy ? T.primaryLight : T.primary, color: "#fff", fontSize: 16, fontWeight: 700,
+                  fontFamily: "'DM Sans'", cursor: busy ? "default" : "pointer", minHeight: 52, marginTop: 4,
+                  boxShadow: `0 2px 12px ${T.primary}40`, transition: "all 0.2s" }}>
+                {busy ? "Resetting password..." : "Reset Password"}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setShowResetPassword(false)}
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  borderRadius: 12,
+                  border: `1.5px solid ${T.border}`,
+                  background: T.surface,
+                  color: T.text2,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  fontFamily: "'Inter'",
+                  cursor: busy ? "default" : "pointer",
+                  minHeight: 48,
+                }}
+              >
+                Back to Sign In
+              </button>
+            </form>
+          )}
 
           {/* Toggle mode */}
-          <p style={{ textAlign: "center", marginTop: 20, fontSize: 14, color: T.text2 }}>
-            {mode === "signup" ? "Already have an account?" : "Don't have an account?"}{" "}
-            <button onClick={() => setMode(mode === "signup" ? "login" : "signup")}
-              style={{ background: "none", border: "none", color: T.primary, fontWeight: 600,
-                cursor: "pointer", fontSize: 14 }}>
-              {mode === "signup" ? "Sign in" : "Sign up"}
-            </button>
-          </p>
+          {!showResetPassword && (
+            <p style={{ textAlign: "center", marginTop: 20, fontSize: 14, color: T.text2 }}>
+              {mode === "signup" ? "Already have an account?" : "Don't have an account?"}{" "}
+              <button onClick={() => setMode(mode === "signup" ? "login" : "signup")}
+                style={{ background: "none", border: "none", color: T.primary, fontWeight: 600,
+                  cursor: "pointer", fontSize: 14 }}>
+                {mode === "signup" ? "Sign in" : "Sign up"}
+              </button>
+            </p>
+          )}
         </div>
       </div>
     </div>
