@@ -63,6 +63,26 @@ function buildUrl(flowId, demoMode) {
   return `${window.location.pathname}${query ? `?${query}` : ''}`;
 }
 
+function buildLaunchUrl(demoMode) {
+  const params = new URLSearchParams(window.location.search);
+  params.delete('entry');
+  if (demoMode) {
+    params.set('mode', 'demo');
+  } else {
+    params.delete('mode');
+  }
+  const query = params.toString();
+  const pathname = window.location.pathname.toLowerCase();
+  const launchPath =
+    pathname === '/wizard' ||
+    pathname.startsWith('/wizard/') ||
+    pathname === '/trip/new' ||
+    pathname.startsWith('/trip/new/')
+      ? '/'
+      : window.location.pathname;
+  return `${launchPath}${query ? `?${query}` : ''}`;
+}
+
 export default function App() {
   const [activeFlow, setActiveFlow] = useState(() => parseEntryFromUrl());
   const [demoMode, setDemoMode] = useState(() => isDemoModeFromUrl());
@@ -110,11 +130,7 @@ export default function App() {
   };
 
   const exitWizardFlow = () => {
-    if (window.history.length > 1) {
-      window.history.back();
-      return;
-    }
-    window.history.replaceState(null, '', buildUrl('home', demoMode));
+    window.history.pushState(null, '', buildLaunchUrl(demoMode));
     setActiveFlow('home');
   };
 

@@ -498,6 +498,7 @@ export default function TripWizard({
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState("");
   const [inviteStatus, setInviteStatus] = useState("");
+  const handledBackSignalRef = useRef(backSignal);
 
   const next = () => setStep(s => Math.min(s+1, STAGES.length-1));
   const back = () => setStep(s => Math.max(s-1, 0));
@@ -566,7 +567,8 @@ export default function TripWizard({
   }, [destinations, members, isAutomation]);
 
   useEffect(() => {
-    if (backSignal <= 0) return;
+    if (backSignal <= handledBackSignalRef.current) return;
+    handledBackSignalRef.current = backSignal;
     setStep((current) => {
       if (current > 0) return current - 1;
       onBackBoundary();
