@@ -453,8 +453,9 @@ export default function TripWizard({
   initialSession = null,
   onTripSaved = () => {},
   demoMode = false,
+  initialStageKey = "create",
   backSignal = 0,
-  onStepChange = () => {},
+  onBackBoundary = () => {},
 }) {
   const persistedSession = safeReadSession();
   const hydratedSession = demoMode ? {} : (initialSession || persistedSession || {});
@@ -500,11 +501,11 @@ export default function TripWizard({
 
   const next = () => setStep(s => Math.min(s+1, STAGES.length-1));
   const back = () => setStep(s => Math.max(s-1, 0));
-  const stageKey = STAGES[step]?.key;
   const handleRevise = () => {
     setApiError("");
     back();
   };
+  const stageKey = STAGES[step]?.key;
   const currentUserId = getUserIdFromToken(authToken);
   const joinedCount = members.filter((m) => m.status === "done").length;
   const consensusTarget = Math.max(2, Math.ceil(members.length * 0.6));
@@ -538,6 +539,15 @@ export default function TripWizard({
 
   const isAutomation = typeof navigator !== "undefined" && navigator.webdriver;
   const selectedInterests = INTEREST_QUESTIONS.filter((_, i) => interestAnswers[i] === "yes");
+
+  useEffect(() => {
+    const idx = STAGES.findIndex((s) => s.key === initialStageKey);
+    if (idx >= 0) {
+      setStep(idx);
+    } else {
+      setStep(0);
+    }
+  }, [initialStageKey]);
   useEffect(() => {
     setDestinationVotes((prev) => {
       const nextVotes = {};
@@ -556,12 +566,13 @@ export default function TripWizard({
   }, [destinations, members, isAutomation]);
 
   useEffect(() => {
-    onStepChange(step);
-  }, [step, onStepChange]);
-
-  useEffect(() => {
-    if (backSignal > 0) back();
-  }, [backSignal]);
+    if (backSignal <= 0) return;
+    setStep((current) => {
+      if (current > 0) return current - 1;
+      onBackBoundary();
+      return current;
+    });
+  }, [backSignal, onBackBoundary]);
 
   const voteCount = (destination) =>
     Object.values(destinationVotes?.[destination] || {}).filter(Boolean).length;
