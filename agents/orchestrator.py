@@ -244,6 +244,114 @@ def _smtp_settings() -> tuple[str, int, str, str, str]:
     return host.strip(), port, smtp_user, smtp_pass, smtp_from
 
 
+def _resend_settings() -> tuple[str, str]:
+    api_key = os.getenv("RESEND_API_KEY", "").strip()
+    api_base = os.getenv("RESEND_API_BASE", "https://api.resend.com").strip().rstrip("/")
+    return api_key, api_base
+
+
+def _send_email_via_smtp_sync(
+    *,
+    to_email: str,
+    subject: str,
+    text_body: str,
+    html_body: str,
+    reply_to: str | None = None,
+) -> None:
+    host, port, smtp_user, smtp_pass, smtp_from = _smtp_settings()
+    if not host or not smtp_user or not smtp_pass or not smtp_from:
+        raise RuntimeError("SMTP is not configured (SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_EMAIL_FROM)")
+
+    msg = EmailMessage()
+    msg["From"] = smtp_from
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
+
+    with smtplib.SMTP(host, port, timeout=15) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+
+
+def _send_email_via_resend_sync(
+    *,
+    to_email: str,
+    subject: str,
+    text_body: str,
+    html_body: str,
+    reply_to: str | None = None,
+) -> None:
+    api_key, api_base = _resend_settings()
+    if not api_key:
+        raise RuntimeError("RESEND_API_KEY is not configured")
+
+    _, _, _, _, smtp_from = _smtp_settings()
+    resend_from = os.getenv("RESEND_FROM", "").strip() or smtp_from
+    if not resend_from:
+        raise RuntimeError("RESEND_FROM or ALERT_EMAIL_FROM is not configured")
+
+    payload: dict[str, Any] = {
+        "from": resend_from,
+        "to": [to_email],
+        "subject": subject,
+        "text": text_body,
+        "html": html_body,
+    }
+    if reply_to:
+        payload["reply_to"] = reply_to
+
+    req = urllib_request.Request(
+        url=f"{api_base}/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=15) as response:
+            if response.status < 200 or response.status >= 300:
+                body = response.read().decode("utf-8", "ignore")
+                raise RuntimeError(f"Resend API error: HTTP {response.status} {body}")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", "ignore")
+        raise RuntimeError(f"Resend API error: HTTP {exc.code} {body}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Resend network error: {exc.reason}") from exc
+
+
+def _send_email_sync(
+    *,
+    to_email: str,
+    subject: str,
+    text_body: str,
+    html_body: str,
+    reply_to: str | None = None,
+) -> None:
+    api_key, _ = _resend_settings()
+    if api_key:
+        _send_email_via_resend_sync(
+            to_email=to_email,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+            reply_to=reply_to,
+        )
+        return
+    _send_email_via_smtp_sync(
+        to_email=to_email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+        reply_to=reply_to,
+    )
+
+
 def _send_trip_invite_email_sync(
     *,
     to_email: str,
@@ -251,10 +359,6 @@ def _send_trip_invite_email_sync(
     trip_name: str,
     trip_id: str,
 ) -> None:
-    host, port, smtp_user, smtp_pass, smtp_from = _smtp_settings()
-    if not host or not smtp_user or not smtp_pass or not smtp_from:
-        raise RuntimeError("SMTP is not configured (SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_EMAIL_FROM)")
-
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
     invite_link = f"{frontend_base}/#wizard?tripId={trip_id}"
     subject = f"WanderPlan invite: {trip_name}"
@@ -271,17 +375,12 @@ def _send_trip_invite_email_sync(
         "<p>If you were not expecting this invite, you can ignore this email.</p>"
     )
 
-    msg = EmailMessage()
-    msg["From"] = smtp_from
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.set_content(text_body)
-    msg.add_alternative(html_body, subtype="html")
-
-    with smtplib.SMTP(host, port, timeout=15) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.send_message(msg)
+    _send_email_sync(
+        to_email=to_email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+    )
 
 
 async def _send_trip_invite_email(
@@ -310,10 +409,6 @@ def _send_crew_invite_email_sync(
     inviter_name: str,
     invitee_email: str,
 ) -> None:
-    host, port, smtp_user, smtp_pass, smtp_from = _smtp_settings()
-    if not host or not smtp_user or not smtp_pass or not smtp_from:
-        raise RuntimeError("SMTP is not configured (SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_EMAIL_FROM)")
-
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
     invite_link = f"{frontend_base}/?entry=home"
     subject = f"{inviter_name} invited you to join WanderPlan crew"
@@ -328,17 +423,13 @@ def _send_crew_invite_email_sync(
         "<p>After signup and profile setup, you will be able to see each other's preferences.</p>"
     )
 
-    msg = EmailMessage()
-    msg["From"] = smtp_from
-    msg["To"] = invitee_email
-    msg["Subject"] = subject
-    msg.set_content(text_body)
-    msg.add_alternative(html_body, subtype="html")
-
-    with smtplib.SMTP(host, port, timeout=15) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.send_message(msg)
+    _send_email_sync(
+        to_email=invitee_email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+        reply_to=inviter_email,
+    )
 
 
 async def _send_crew_invite_email(
