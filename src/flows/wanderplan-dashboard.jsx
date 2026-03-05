@@ -124,8 +124,11 @@ const PROMPTS = [
   { id:8, agent:"Health Agent", emoji:"🏥", name:"Health Requirements Checker", prompt:"Destinations: {{destinations}}\nActivities: {{activities}}\n\nList all health requirements: vaccinations, certifications, fitness levels, travel insurance needs. Categorize as mandatory/recommended/optional.", uses:156 },
 ];
 
+const LOCAL_AUTH_USERS_KEY = "wanderplan.auth.users";
 const LOCAL_AUTH_SESSION_KEY = "wanderplan.auth.session";
 const LOCAL_PROFILE_BY_EMAIL_KEY = "wanderplan.profile.byEmail";
+const LOCAL_CREW_LINKS_KEY = "wanderplan.crew.links";
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
 
 function readJsonStorage(key) {
   if (typeof window === "undefined") return {};
@@ -136,6 +139,29 @@ function readJsonStorage(key) {
   } catch {
     return {};
   }
+}
+
+function writeJsonStorage(key, value) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function defaultNameFromEmail(email) {
+  const localPart = normalizeEmail(email).split("@")[0] || "";
+  if (!localPart) return "Traveler";
+  return localPart
+    .split(/[._\-\s]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
 }
 
 function splitName(name) {
@@ -153,7 +179,7 @@ function initialsFromName(name) {
 
 function loadViewerProfile() {
   const session = readJsonStorage(LOCAL_AUTH_SESSION_KEY);
-  const email = String(session?.email || "").trim().toLowerCase();
+  const email = normalizeEmail(session?.email || "traveler@example.com");
   const profilesByEmail = readJsonStorage(LOCAL_PROFILE_BY_EMAIL_KEY);
   const stored = email ? profilesByEmail[email] : null;
   const name =
@@ -164,10 +190,129 @@ function loadViewerProfile() {
     name,
     firstName,
     lastName,
-    email: email || "traveler@example.com",
+    email,
     initials: initialsFromName(name),
+    phone: String(stored?.phone || "").trim() || "+1 555-1234",
+    travelStyle: String(stored?.travel_style || "").trim() || "couple",
+    budgetPreference: String(stored?.budget_preference || "").trim() || "moderate",
+    interests:
+      Array.isArray(stored?.interests) && stored.interests.length > 0
+        ? stored.interests
+        : ["Photography", "Hiking", "Culture"],
+    dietary: String(stored?.dietary || "").trim() || "None",
+    fitness: String(stored?.fitness || "").trim() || "Moderate",
     planLabel: "Premium Plan",
   };
+}
+
+function saveViewerProfile(email, updates) {
+  const viewerEmail = normalizeEmail(email);
+  if (!viewerEmail) return;
+  const profilesByEmail = readJsonStorage(LOCAL_PROFILE_BY_EMAIL_KEY);
+  const existing = profilesByEmail[viewerEmail] || {};
+  const next = {
+    ...existing,
+    ...updates,
+    updated_at: new Date().toISOString(),
+    created_at: existing.created_at || new Date().toISOString(),
+  };
+  profilesByEmail[viewerEmail] = next;
+  writeJsonStorage(LOCAL_PROFILE_BY_EMAIL_KEY, profilesByEmail);
+
+  const session = readJsonStorage(LOCAL_AUTH_SESSION_KEY);
+  if (normalizeEmail(session?.email) === viewerEmail && next.name) {
+    writeJsonStorage(LOCAL_AUTH_SESSION_KEY, {
+      ...session,
+      name: next.name,
+      profile_name: next.name,
+    });
+  }
+}
+
+function loadCrewMembersForViewer(viewerEmail) {
+  const viewer = normalizeEmail(viewerEmail);
+  if (!viewer) return [];
+  const links = readJsonStorage(LOCAL_CREW_LINKS_KEY);
+  const profilesByEmail = readJsonStorage(LOCAL_PROFILE_BY_EMAIL_KEY);
+  const authUsers = readJsonStorage(LOCAL_AUTH_USERS_KEY);
+  const connected = Array.isArray(links[viewer]) ? links[viewer] : [];
+  const uniqueEmails = [...new Set(connected.map(normalizeEmail).filter(Boolean))];
+
+  return uniqueEmails.map((email) => {
+    const stored = profilesByEmail[email] || {};
+    const name = String(stored?.name || "").trim() || defaultNameFromEmail(email);
+    const interests =
+      Array.isArray(stored?.interests) && stored.interests.length > 0 ? stored.interests : [];
+    const hasAccount = Boolean(authUsers[email]) || Boolean(profilesByEmail[email]);
+    return {
+      email,
+      name,
+      initials: initialsFromName(name),
+      role: "Member",
+      interests,
+      diet: String(stored?.dietary || "").trim() || "Not shared yet",
+      fitness: String(stored?.fitness || "").trim() || "Not shared yet",
+      status: hasAccount ? "Joined" : "Invited",
+    };
+  });
+}
+
+async function sendCrewInviteEmail(ownerEmail, ownerName, invitedEmail) {
+  const response = await fetch(`${API_BASE}/crew/invite-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      inviter_email: ownerEmail,
+      inviter_name: ownerName,
+      invitee_email: invitedEmail,
+    }),
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { message: text || "" };
+  }
+  if (!response.ok) {
+    const detail = payload?.detail || payload?.message || `HTTP ${response.status}`;
+    throw new Error(String(detail || "Invite email failed"));
+  }
+  return payload;
+}
+
+async function connectCrewMembers(ownerEmail, invitedEmail, ownerName = "Traveler") {
+  const owner = normalizeEmail(ownerEmail);
+  const invitee = normalizeEmail(invitedEmail);
+  if (!owner || !invitee) {
+    return { ok: false, error: "Enter a valid email address." };
+  }
+  if (owner === invitee) {
+    return { ok: false, error: "You cannot invite your own email." };
+  }
+  const links = readJsonStorage(LOCAL_CREW_LINKS_KEY);
+  const ownerLinks = new Set(Array.isArray(links[owner]) ? links[owner].map(normalizeEmail) : []);
+  const inviteeLinks = new Set(Array.isArray(links[invitee]) ? links[invitee].map(normalizeEmail) : []);
+  ownerLinks.add(invitee);
+  inviteeLinks.add(owner);
+  links[owner] = [...ownerLinks];
+  links[invitee] = [...inviteeLinks];
+  writeJsonStorage(LOCAL_CREW_LINKS_KEY, links);
+  try {
+    const inviteResp = await sendCrewInviteEmail(owner, ownerName, invitee);
+    return {
+      ok: true,
+      emailSent: Boolean(inviteResp?.email_sent),
+      emailError: inviteResp?.email_error || "",
+      inviteLink: inviteResp?.invite_link || "",
+    };
+  } catch (error) {
+    return {
+      ok: true,
+      emailSent: false,
+      emailError: error?.message || "Invite saved but email could not be sent.",
+    };
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -177,10 +322,25 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
   const [page, setPage] = useState("trips"); // trips | active | detail | profile | crew | prompts
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [detailTab, setDetailTab] = useState("overview");
-  const viewer = loadViewerProfile();
+  const [viewer, setViewer] = useState(() => loadViewerProfile());
+  const [crewMembers, setCrewMembers] = useState(() => loadCrewMembersForViewer(loadViewerProfile().email));
   const dashboardMembers = [
-    { ...MEMBERS[0], name: viewer.name, initials: viewer.initials },
-    ...MEMBERS.slice(1),
+    {
+      name: viewer.name,
+      initials: viewer.initials,
+      role: "Organizer",
+      interests: viewer.interests || [],
+      diet: viewer.dietary || "None",
+      fitness: viewer.fitness || "Moderate",
+    },
+    ...crewMembers.map((member) => ({
+      name: member.name,
+      initials: member.initials,
+      role: "Member",
+      interests: member.interests,
+      diet: member.diet,
+      fitness: member.fitness,
+    })),
   ];
 
   const flowNavItems = [
@@ -209,6 +369,21 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
     params.set("entry", flowId);
     const query = params.toString();
     window.location.assign(`${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
+
+  const handleProfileSave = (updates) => {
+    saveViewerProfile(viewer.email, updates);
+    const nextViewer = loadViewerProfile();
+    setViewer(nextViewer);
+    setCrewMembers(loadCrewMembersForViewer(nextViewer.email));
+  };
+
+  const handleInviteMember = async (email) => {
+    const result = await connectCrewMembers(viewer.email, email, viewer.name || "Traveler");
+    if (result.ok) {
+      setCrewMembers(loadCrewMembersForViewer(viewer.email));
+    }
+    return result;
   };
 
   return (
@@ -356,8 +531,8 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
           {page==="trips" && <TripsPage trips={TRIPS} onOpen={openTrip}/>}
           {page==="active" && <ActivePage trip={selectedTrip||TRIPS[0]} onDetail={()=>{setPage("detail");setDetailTab("overview");}}/>}
           {page==="detail" && <DetailPage trip={selectedTrip||TRIPS[0]} tab={detailTab} setTab={setDetailTab} members={dashboardMembers}/>}
-          {page==="profile" && <ProfilePage viewer={viewer}/>}
-          {page==="crew" && <CrewPage members={dashboardMembers}/>}
+          {page==="profile" && <ProfilePage viewer={viewer} onSaveProfile={handleProfileSave}/>}
+          {page==="crew" && <CrewPage viewer={viewer} members={crewMembers} onInviteMember={handleInviteMember}/>}
           {page==="prompts" && <PromptsPage/>}
         </div>
       </main>
@@ -814,47 +989,133 @@ function StoryboardTab() {
 /* ═══════════════════════════════════════════════════════════════════════════
    4) PROFILE & SETTINGS
    ═══════════════════════════════════════════════════════════════════════════ */
-function ProfilePage({ viewer }) {
+function ProfilePage({ viewer, onSaveProfile = () => {} }) {
   const [notifs, setNotifs] = useState({ trip:true, budget:true, members:true, marketing:false, digest:true });
+  const [saveMessage, setSaveMessage] = useState("");
+  const [form, setForm] = useState(() => ({
+    firstName: viewer?.firstName || "Traveler",
+    lastName: viewer?.lastName || "",
+    email: viewer?.email || "traveler@example.com",
+    phone: viewer?.phone || "",
+    travelStyle: viewer?.travelStyle || "couple",
+    budgetPreference: viewer?.budgetPreference || "moderate",
+    interestsText: Array.isArray(viewer?.interests) ? viewer.interests.join(", ") : "",
+    dietary: viewer?.dietary || "None",
+    fitness: viewer?.fitness || "Moderate",
+  }));
+
+  useEffect(() => {
+    setForm({
+      firstName: viewer?.firstName || "Traveler",
+      lastName: viewer?.lastName || "",
+      email: viewer?.email || "traveler@example.com",
+      phone: viewer?.phone || "",
+      travelStyle: viewer?.travelStyle || "couple",
+      budgetPreference: viewer?.budgetPreference || "moderate",
+      interestsText: Array.isArray(viewer?.interests) ? viewer.interests.join(", ") : "",
+      dietary: viewer?.dietary || "None",
+      fitness: viewer?.fitness || "Moderate",
+    });
+  }, [viewer]);
 
   const Section = ({ title, children }) => (
-    <div style={{ background:T.surface,borderRadius:16,padding:"20px 22px",border:`1px solid ${T.borderLight}`,
-      marginBottom:16 }}>
+    <div style={{ background:T.surface,borderRadius:16,padding:"20px 22px",border:`1px solid ${T.borderLight}`,marginBottom:16 }}>
       <h3 className="hd" style={{ fontWeight:700,fontSize:16,marginBottom:16 }}>{title}</h3>
       {children}
     </div>
   );
 
-  const Field = ({ label, value, type="text" }) => (
+  const inputStyle = {
+    width:"100%",
+    padding:"11px 14px",
+    borderRadius:10,
+    border:`1.5px solid ${T.border}`,
+    fontSize:14,
+    color:T.text,
+    background:T.bg,
+    minHeight:44,
+  };
+
+  const Field = ({ label, value, type = "text", onChange, readOnly = false, disabled = false, placeholder = "" }) => (
     <div style={{ marginBottom:14 }}>
       <label style={{ fontSize:12.5,fontWeight:600,color:T.text2,display:"block",marginBottom:5 }}>{label}</label>
-      <input defaultValue={value} type={type} style={{ width:"100%",padding:"11px 14px",borderRadius:10,
-        border:`1.5px solid ${T.border}`,fontSize:14,color:T.text,background:T.bg,minHeight:44 }}/>
+      <input
+        value={value}
+        type={type}
+        onChange={onChange}
+        readOnly={readOnly}
+        disabled={disabled}
+        placeholder={placeholder}
+        style={{
+          ...inputStyle,
+          opacity: disabled ? 0.8 : 1,
+          cursor: readOnly ? "not-allowed" : "text",
+        }}
+      />
     </div>
   );
 
   const Toggle = ({ label, desc, checked, onChange }) => (
-    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",
-      borderBottom:`1px solid ${T.borderLight}` }}>
-      <div><p style={{ fontSize:14,fontWeight:500 }}>{label}</p>
-        {desc && <p style={{ fontSize:12.5,color:T.text3 }}>{desc}</p>}</div>
-      <button onClick={()=>onChange(!checked)} style={{ width:44,height:24,borderRadius:999,
-        background:checked?T.primary:T.border,border:"none",cursor:"pointer",position:"relative",
-        transition:"all .2s",padding:0 }}>
-        <div style={{ width:20,height:20,borderRadius:999,background:"#fff",position:"absolute",top:2,
-          left:checked?22:2,transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,.15)" }}/>
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:`1px solid ${T.borderLight}` }}>
+      <div>
+        <p style={{ fontSize:14,fontWeight:500 }}>{label}</p>
+        {desc && <p style={{ fontSize:12.5,color:T.text3 }}>{desc}</p>}
+      </div>
+      <button
+        onClick={() => onChange(!checked)}
+        style={{
+          width:44,
+          height:24,
+          borderRadius:999,
+          background:checked?T.primary:T.border,
+          border:"none",
+          cursor:"pointer",
+          position:"relative",
+          transition:"all .2s",
+          padding:0,
+        }}
+      >
+        <div style={{ width:20,height:20,borderRadius:999,background:"#fff",position:"absolute",top:2,left:checked?22:2,transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,.15)" }}/>
       </button>
     </div>
   );
+
+  const onField = (key) => (event) => {
+    const value = event?.target?.value ?? "";
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSave = () => {
+    const fullName = `${form.firstName || ""} ${form.lastName || ""}`.trim() || defaultNameFromEmail(form.email);
+    const interests = Array.from(
+      new Set(
+        String(form.interestsText || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      )
+    );
+    onSaveProfile({
+      name: fullName,
+      phone: String(form.phone || "").trim(),
+      travel_style: form.travelStyle,
+      budget_preference: form.budgetPreference,
+      interests,
+      dietary: String(form.dietary || "").trim() || "None",
+      fitness: String(form.fitness || "").trim() || "Moderate",
+    });
+    setSaveMessage("Profile saved.");
+    window.setTimeout(() => setSaveMessage(""), 2200);
+  };
 
   return (
     <div style={{ maxWidth:640,animation:"fadeUp .4s ease-out" }}>
       <Section title="Personal Information">
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px" }}>
-          <Field label="First Name" value={viewer?.firstName || "Traveler"}/>
-          <Field label="Last Name" value={viewer?.lastName || ""}/>
-          <Field label="Email" value={viewer?.email || "traveler@example.com"} type="email"/>
-          <Field label="Phone" value="+1 555-1234"/>
+          <Field label="First Name" value={form.firstName} onChange={onField("firstName")} />
+          <Field label="Last Name" value={form.lastName} onChange={onField("lastName")} />
+          <Field label="Email" value={form.email} type="email" readOnly />
+          <Field label="Phone" value={form.phone} onChange={onField("phone")} placeholder="+1 555 123 4567" />
         </div>
       </Section>
 
@@ -862,33 +1123,54 @@ function ProfilePage({ viewer }) {
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px" }}>
           <div style={{ marginBottom:14 }}>
             <label style={{ fontSize:12.5,fontWeight:600,color:T.text2,display:"block",marginBottom:5 }}>Travel Style</label>
-            <select defaultValue="couple" style={{ width:"100%",padding:"11px 14px",borderRadius:10,
-              border:`1.5px solid ${T.border}`,fontSize:14,color:T.text,background:T.bg,minHeight:44 }}>
-              <option value="solo">Solo</option><option value="couple">Couple</option>
-              <option value="family">Family</option><option value="group">Friends Group</option>
+            <select value={form.travelStyle} onChange={onField("travelStyle")} style={inputStyle}>
+              <option value="solo">Solo</option>
+              <option value="couple">Couple</option>
+              <option value="family">Family</option>
+              <option value="group">Friends Group</option>
             </select>
           </div>
           <div style={{ marginBottom:14 }}>
             <label style={{ fontSize:12.5,fontWeight:600,color:T.text2,display:"block",marginBottom:5 }}>Budget Preference</label>
-            <select defaultValue="moderate" style={{ width:"100%",padding:"11px 14px",borderRadius:10,
-              border:`1.5px solid ${T.border}`,fontSize:14,color:T.text,background:T.bg,minHeight:44 }}>
-              <option value="budget">Budget ($50-100/day)</option><option value="moderate">Moderate ($100-200/day)</option>
-              <option value="premium">Premium ($200-400/day)</option><option value="luxury">Luxury ($400+/day)</option>
+            <select value={form.budgetPreference} onChange={onField("budgetPreference")} style={inputStyle}>
+              <option value="budget">Budget ($50-100/day)</option>
+              <option value="moderate">Moderate ($100-200/day)</option>
+              <option value="premium">Premium ($200-400/day)</option>
+              <option value="luxury">Luxury ($400+/day)</option>
             </select>
           </div>
         </div>
         <div style={{ marginBottom:14 }}>
-          <label style={{ fontSize:12.5,fontWeight:600,color:T.text2,display:"block",marginBottom:5 }}>Interests</label>
-          <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
-            {["Photography","Hiking","Culture","Food","Wine","History","Nature"].map(i=>(
-              <span key={i} style={{ background:`${T.primary}10`,color:T.primary,padding:"5px 14px",borderRadius:999,
-                fontSize:13,fontWeight:500,cursor:"pointer" }}>{i} ✕</span>
-            ))}
-            <span style={{ background:T.bg,color:T.text3,padding:"5px 14px",borderRadius:999,
-              fontSize:13,cursor:"pointer",border:`1px dashed ${T.border}` }}>+ Add</span>
-          </div>
+          <label style={{ fontSize:12.5,fontWeight:600,color:T.text2,display:"block",marginBottom:5 }}>Interests (comma separated)</label>
+          <textarea
+            value={form.interestsText}
+            onChange={onField("interestsText")}
+            placeholder="Photography, Hiking, Food"
+            style={{ ...inputStyle, minHeight:84, resize:"vertical" }}
+          />
         </div>
-        <Field label="Dietary Restrictions" value="None"/>
+        <Field label="Dietary Restrictions" value={form.dietary} onChange={onField("dietary")} />
+        <Field label="Fitness Level" value={form.fitness} onChange={onField("fitness")} />
+        <div style={{ display:"flex",alignItems:"center",gap:10,marginTop:4 }}>
+          <button
+            className="hd"
+            onClick={handleSave}
+            style={{
+              padding:"10px 18px",
+              borderRadius:10,
+              border:"none",
+              background:`linear-gradient(135deg,${T.primary},${T.primaryLight})`,
+              color:"#fff",
+              fontSize:14,
+              fontWeight:700,
+              cursor:"pointer",
+              minHeight:40,
+            }}
+          >
+            Save Profile
+          </button>
+          {saveMessage ? <span style={{ fontSize:13,color:T.success,fontWeight:600 }}>{saveMessage}</span> : null}
+        </div>
       </Section>
 
       <Section title="Notifications">
@@ -898,97 +1180,113 @@ function ProfilePage({ viewer }) {
         <Toggle label="Weekly Digest" desc="Summary of upcoming trips" checked={notifs.digest} onChange={v=>setNotifs(p=>({...p,digest:v}))}/>
         <Toggle label="Marketing" desc="New features, promotions" checked={notifs.marketing} onChange={v=>setNotifs(p=>({...p,marketing:v}))}/>
       </Section>
-
-      <Section title="Connected Services">
-        {[
-          { name:"Google Calendar", icon:"📅", status:"Connected" },
-          { name:"Apple Calendar", icon:"🍎", status:"Not connected" },
-          { name:"Instagram", icon:"📸", status:"Connected" },
-          { name:"Stripe (Payments)", icon:"💳", status:"Connected" },
-        ].map((s,i)=>(
-          <div key={i} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",
-            padding:"10px 0",borderBottom:i<3?`1px solid ${T.borderLight}`:"none" }}>
-            <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-              <span style={{ fontSize:20 }}>{s.icon}</span>
-              <span style={{ fontSize:14,fontWeight:500 }}>{s.name}</span>
-            </div>
-            <button className="hd" style={{ padding:"6px 16px",borderRadius:8,
-              border:s.status==="Connected"?`1px solid ${T.success}`:`1px solid ${T.border}`,
-              background:s.status==="Connected"?T.successBg:"transparent",
-              color:s.status==="Connected"?T.success:T.text2,fontSize:13,fontWeight:600,cursor:"pointer",minHeight:34 }}>
-              {s.status==="Connected"?"✓ Connected":"Connect"}
-            </button>
-          </div>
-        ))}
-      </Section>
-
-      <Section title="Data & Privacy">
-        <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
-          <button className="hd" style={{ display:"flex",alignItems:"center",gap:10,padding:"12px 16px",
-            borderRadius:10,border:`1px solid ${T.border}`,background:T.surface,cursor:"pointer",
-            fontSize:14,fontWeight:500,color:T.text,minHeight:44,width:"100%",textAlign:"left" }}>
-            <Ic n="download" s={18} c={T.accent}/> Export My Data
-          </button>
-          <button className="hd" style={{ display:"flex",alignItems:"center",gap:10,padding:"12px 16px",
-            borderRadius:10,border:`1px solid ${T.error}40`,background:T.errorBg,cursor:"pointer",
-            fontSize:14,fontWeight:500,color:T.error,minHeight:44,width:"100%",textAlign:"left" }}>
-            <Ic n="trash" s={18} c={T.error}/> Delete My Account
-          </button>
-        </div>
-      </Section>
     </div>
   );
 }
 
-function CrewPage({ members = MEMBERS }) {
+function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, error:"Invite failed." }) }) {
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteFeedback, setInviteFeedback] = useState(null);
+
+  const submitInvite = async () => {
+    const result = await onInviteMember(inviteEmail);
+    if (result?.ok) {
+      if (result.emailSent) {
+        setInviteFeedback({ type:"success", message:"Invite linked and email sent." });
+      } else if (result.emailError) {
+        setInviteFeedback({ type:"error", message:`Invite linked, but email failed: ${result.emailError}` });
+      } else {
+        setInviteFeedback({ type:"success", message:"Invite linked. They will appear as joined after sign-up." });
+      }
+      setInviteEmail("");
+      return;
+    }
+    setInviteFeedback({ type:"error", message: result?.error || "Could not invite this email." });
+  };
+
   return (
     <div style={{ maxWidth:640,animation:"fadeUp .4s ease-out" }}>
-      <p style={{ fontSize:14,color:T.text2,marginBottom:20 }}>
-        Your travel companions. Invite friends and track who has completed their preferences.
+      <p style={{ fontSize:14,color:T.text2,marginBottom:14,lineHeight:1.6 }}>
+        Invite crew by email. Once they sign up and complete preferences, both of you can see each other.
       </p>
-      <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-        {members.map((m,i) => (
-          <div key={i} style={{ background:T.surface,borderRadius:14,padding:"16px 20px",
-            border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,display:"flex",alignItems:"center",gap:14,
-            animation:`fadeUp .35s ease-out ${i*.05}s both` }}>
-            <div style={{ width:44,height:44,borderRadius:999,
-              background:`linear-gradient(135deg,${T.primary},${T.accent})`,
-              display:"flex",alignItems:"center",justifyContent:"center",
-              color:"#fff",fontSize:15,fontWeight:700 }} className="hd">{m.initials}</div>
-            <div style={{ flex:1 }}>
-              <div style={{ display:"flex",alignItems:"center",gap:8 }}>
-                <p className="hd" style={{ fontWeight:600,fontSize:15 }}>{m.name}</p>
-                <span style={{ fontSize:11,fontWeight:600,padding:"2px 10px",borderRadius:999,
-                  background:m.role==="Organizer"?`${T.primary}12`:T.borderLight,
-                  color:m.role==="Organizer"?T.primary:T.text3 }}>{m.role}</span>
-              </div>
-              <div style={{ display:"flex",gap:4,marginTop:4,flexWrap:"wrap" }}>
-                {(m.interests || []).map((tag) => (
-                  <span key={tag} style={{ fontSize:11,color:T.text3,background:T.bg,padding:"1px 8px",borderRadius:999 }}>
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div style={{ textAlign:"right" }}>
-              <p style={{ fontSize:12,color:T.text3 }}>{m.diet || "None"}</p>
-              <p style={{ fontSize:12,color:T.text3 }}>{m.fitness || "Moderate"}</p>
-            </div>
-          </div>
-        ))}
+      <p style={{ fontSize:13,color:T.text3,marginBottom:18,lineHeight:1.5 }}>
+        Privacy: your crew links are one-to-one. Members you invite can see you, but cannot see each other.
+      </p>
+
+      <div style={{ background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:14,padding:14,marginBottom:14 }}>
+        <label style={{ fontSize:12.5,fontWeight:700,color:T.text2,display:"block",marginBottom:8 }}>Invite Member (email)</label>
+        <div style={{ display:"flex",gap:8,alignItems:"center" }}>
+          <input
+            value={inviteEmail}
+            onChange={(event) => setInviteEmail(event?.target?.value ?? "")}
+            placeholder="friend@example.com"
+            style={{ flex:1,minHeight:42,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.bg,color:T.text }}
+          />
+          <button
+            className="hd"
+            onClick={submitInvite}
+            style={{
+              minHeight:42,
+              padding:"0 16px",
+              borderRadius:10,
+              border:"none",
+              background:`linear-gradient(135deg,${T.primary},${T.primaryLight})`,
+              color:"#fff",
+              fontWeight:700,
+              cursor:"pointer",
+            }}
+          >
+            Invite
+          </button>
+        </div>
+        {inviteFeedback ? (
+          <p style={{ marginTop:8,fontSize:12.5,color:inviteFeedback.type === "success" ? T.success : T.error }}>
+            {inviteFeedback.message}
+          </p>
+        ) : null}
       </div>
-      <button className="hd" style={{ marginTop:16,display:"flex",alignItems:"center",gap:8,
-        padding:"12px 20px",borderRadius:12,border:`2px dashed ${T.border}`,background:"transparent",
-        color:T.text2,fontSize:14,fontWeight:600,cursor:"pointer",width:"100%",justifyContent:"center",minHeight:48 }}>
-        <Ic n="plus" s={16} c={T.text3}/> Invite Member
-      </button>
+
+      <div style={{ background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:14,padding:14,marginBottom:12 }}>
+        <p className="hd" style={{ fontSize:13,fontWeight:700,color:T.text2,marginBottom:6 }}>Your Shared Profile</p>
+        <p style={{ fontSize:14,fontWeight:600,color:T.text }}>{viewer?.name || "You"}</p>
+        <p style={{ fontSize:12.5,color:T.text3 }}>{viewer?.email || ""}</p>
+      </div>
+
+      {members.length === 0 ? (
+        <div style={{ background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:14,padding:18,color:T.text3,fontSize:13 }}>
+          No crew members yet. Invite someone by email to start sharing trip preferences.
+        </div>
+      ) : (
+        <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+          {members.map((m,i) => (
+            <div key={`${m.email}-${i}`} style={{ background:T.surface,borderRadius:14,padding:"16px 20px",border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,display:"flex",alignItems:"center",gap:14,animation:`fadeUp .35s ease-out ${i*.05}s both` }}>
+              <div style={{ width:44,height:44,borderRadius:999,background:`linear-gradient(135deg,${T.primary},${T.accent})`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:15,fontWeight:700 }} className="hd">{m.initials}</div>
+              <div style={{ flex:1 }}>
+                <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+                  <p className="hd" style={{ fontWeight:600,fontSize:15 }}>{m.name}</p>
+                  <span style={{ fontSize:11,fontWeight:600,padding:"2px 10px",borderRadius:999,background:T.borderLight,color:T.text3 }}>{m.role}</span>
+                  <span style={{ fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:999,background:m.status === "Joined" ? T.successBg : T.warningBg,color:m.status === "Joined" ? T.success : T.warning }}>
+                    {m.status}
+                  </span>
+                </div>
+                <p style={{ fontSize:12,color:T.text3,marginTop:4 }}>{m.email}</p>
+                <div style={{ display:"flex",gap:4,marginTop:6,flexWrap:"wrap" }}>
+                  {(m.interests || []).length > 0 ? (m.interests || []).map((tag) => (
+                    <span key={tag} style={{ fontSize:11,color:T.text3,background:T.bg,padding:"1px 8px",borderRadius:999 }}>{tag}</span>
+                  )) : <span style={{ fontSize:11,color:T.text3 }}>No interests shared yet</span>}
+                </div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <p style={{ fontSize:12,color:T.text3 }}>{m.diet || "Not shared yet"}</p>
+                <p style={{ fontSize:12,color:T.text3 }}>{m.fitness || "Not shared yet"}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   5) PROMPT LIBRARY
-   ═══════════════════════════════════════════════════════════════════════════ */
 function PromptsPage() {
   const [expanded, setExpanded] = useState(null);
   const [editValues, setEditValues] = useState({});
@@ -1061,3 +1359,4 @@ function PromptsPage() {
     </div>
   );
 }
+

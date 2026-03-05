@@ -24,10 +24,6 @@ x-agent-common: &agent-common
     KAFKA_BOOTSTRAP: kafka:9092
     LLM_MODEL: claude-sonnet-4-20250514
     LOG_LEVEL: INFO
-    SMTP_HOST: ${SMTP_HOST:-}
-    SMTP_USER: ${SMTP_USER:-}
-    SMTP_PASS: ${SMTP_PASS:-}
-    ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
     FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:3000}
     POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://wanderplan:${POSTGRES_PASSWORD:-wanderplan}@postgres:5432/wanderplan}
 

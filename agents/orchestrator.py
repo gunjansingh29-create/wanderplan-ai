@@ -108,6 +108,12 @@ class InviteMemberRequest(BaseModel):
     role: str = "member"
 
 
+class CrewInviteEmailRequest(BaseModel):
+    inviter_email: str
+    inviter_name: Optional[str] = None
+    invitee_email: str
+
+
 class UpdateMemberRequest(BaseModel):
     status: str
 
@@ -292,6 +298,61 @@ async def _send_trip_invite_email(
             inviter_name=inviter_name,
             trip_name=trip_name,
             trip_id=trip_id,
+        )
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _send_crew_invite_email_sync(
+    *,
+    inviter_email: str,
+    inviter_name: str,
+    invitee_email: str,
+) -> None:
+    host, port, smtp_user, smtp_pass, smtp_from = _smtp_settings()
+    if not host or not smtp_user or not smtp_pass or not smtp_from:
+        raise RuntimeError("SMTP is not configured (SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_EMAIL_FROM)")
+
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+    invite_link = f"{frontend_base}/?entry=home"
+    subject = f"{inviter_name} invited you to join WanderPlan crew"
+    text_body = (
+        f"{inviter_name} ({inviter_email}) invited you to join their WanderPlan crew.\n\n"
+        f"Sign up here: {invite_link}\n\n"
+        "After signup and profile setup, you will be able to see each other's preferences."
+    )
+    html_body = (
+        f"<p><strong>{inviter_name}</strong> ({inviter_email}) invited you to join their WanderPlan crew.</p>"
+        f"<p><a href=\"{invite_link}\">Sign up on WanderPlan</a></p>"
+        "<p>After signup and profile setup, you will be able to see each other's preferences.</p>"
+    )
+
+    msg = EmailMessage()
+    msg["From"] = smtp_from
+    msg["To"] = invitee_email
+    msg["Subject"] = subject
+    msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
+
+    with smtplib.SMTP(host, port, timeout=15) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+
+
+async def _send_crew_invite_email(
+    *,
+    inviter_email: str,
+    inviter_name: str,
+    invitee_email: str,
+) -> tuple[bool, str]:
+    try:
+        await asyncio.to_thread(
+            _send_crew_invite_email_sync,
+            inviter_email=inviter_email,
+            inviter_name=inviter_name,
+            invitee_email=invitee_email,
         )
         return True, ""
     except Exception as exc:
@@ -734,6 +795,34 @@ async def password_reset(request: PasswordResetRequest):
         ok=True,
         message="If an account exists for this email, the password has been updated",
     )
+
+
+@app.post("/crew/invite-email")
+async def crew_invite_email(request: CrewInviteEmailRequest):
+    inviter_email = (request.inviter_email or "").strip().lower()
+    invitee_email = (request.invitee_email or "").strip().lower()
+    inviter_name = (request.inviter_name or "").strip() or "A WanderPlan user"
+
+    if "@" not in inviter_email:
+        raise HTTPException(status_code=400, detail="Invalid inviter email")
+    if "@" not in invitee_email:
+        raise HTTPException(status_code=400, detail="Invalid invitee email")
+    if inviter_email == invitee_email:
+        raise HTTPException(status_code=400, detail="Cannot invite your own email")
+
+    email_sent, email_error = await _send_crew_invite_email(
+        inviter_email=inviter_email,
+        inviter_name=inviter_name,
+        invitee_email=invitee_email,
+    )
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+    return {
+        "ok": True,
+        "invitee_email": invitee_email,
+        "email_sent": email_sent,
+        "email_error": email_error or None,
+        "invite_link": f"{frontend_base}/?entry=home",
+    }
 
 
 @app.post("/nlp/extract-destinations")

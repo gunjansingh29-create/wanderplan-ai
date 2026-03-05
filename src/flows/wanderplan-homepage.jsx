@@ -297,6 +297,7 @@ export default function WanderPlanHome({
   const [authMode, setAuthMode] = useState("signup"); // signup | login
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [profileName, setProfileName] = useState("");
   const [profileNameInput, setProfileNameInput] = useState("");
   const [profileNameError, setProfileNameError] = useState("");
@@ -322,6 +323,33 @@ export default function WanderPlanHome({
     setAuthError("");
     setAuthNotice("");
   }, [authMode]);
+
+  useEffect(() => {
+    const session = readAuthSession();
+    const sessionEmail = String(session?.email || "").trim().toLowerCase();
+    const shouldRemember = session?.remember_me !== false;
+    if (!shouldRemember || !isValidEmail(sessionEmail)) return;
+
+    setRememberMe(true);
+    setEmail(sessionEmail);
+
+    const profiles = readLocalProfiles();
+    const storedProfileName = String(profiles[sessionEmail]?.name || "").trim();
+    const resolvedName =
+      storedProfileName ||
+      String(session?.profile_name || session?.name || "").trim() ||
+      defaultProfileNameFromEmail(sessionEmail);
+
+    setProfileName(resolvedName);
+    setProfileNameInput(resolvedName);
+    setProfileNameError("");
+
+    if (storedProfileName) {
+      launchDashboard();
+      return;
+    }
+    setScreen("profile-name");
+  }, []);
 
   const launchDashboard = () => {
     const hasDashboardFlow = flowTiles.some((flow) => flow.id === "dashboard");
@@ -421,6 +449,7 @@ export default function WanderPlanHome({
         saveAuthSession({
           email: normalizedEmail,
           provider: "local",
+          remember_me: rememberMe,
           signed_in_at: new Date().toISOString(),
         });
       } else {
@@ -432,6 +461,7 @@ export default function WanderPlanHome({
           saveAuthSession({
             email: normalizedEmail,
             provider: "local",
+            remember_me: rememberMe,
             signed_in_at: new Date().toISOString(),
           });
         } else {
@@ -440,6 +470,7 @@ export default function WanderPlanHome({
           saveAuthSession({
             email: normalizedEmail,
             provider: "backend",
+            remember_me: rememberMe,
             accessToken: login?.accessToken || "",
             user_id: login?.user_id || "",
             name: login?.name || "",
@@ -534,6 +565,8 @@ export default function WanderPlanHome({
       setMode={setAuthMode}
       email={email} setEmail={setEmail}
       password={password} setPassword={setPassword}
+      rememberMe={rememberMe}
+      setRememberMe={setRememberMe}
       onSubmit={handleAuthSubmit}
       onSocialSubmit={handleSocialAuthClick}
       onForgotPassword={handleForgotPasswordSubmit}
@@ -951,6 +984,8 @@ function AuthScreen({
   setEmail,
   password,
   setPassword,
+  rememberMe = true,
+  setRememberMe = () => {},
   onSubmit,
   onBack,
   busy = false,
@@ -1054,6 +1089,17 @@ function AuthScreen({
                     fontSize: 15, color: T.text, background: T.bg, minHeight: 48,
                     fontFamily: "'Inter'" }} />
               </div>
+              <label htmlFor="auth-remember" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.text2, fontWeight: 500, cursor: busy ? "default" : "pointer" }}>
+                <input
+                  id="auth-remember"
+                  type="checkbox"
+                  checked={rememberMe}
+                  disabled={busy}
+                  onChange={(e) => setRememberMe(Boolean(e.target.checked))}
+                  style={{ width: 16, height: 16, accentColor: T.primary, cursor: busy ? "default" : "pointer" }}
+                />
+                Remember me on this device
+              </label>
               {mode === "login" && (
                 <button
                   type="button"
