@@ -311,6 +311,7 @@ def _send_email_via_resend_sync(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "wanderplan-ai/1.0",
         },
     )
     try:
