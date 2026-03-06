@@ -300,9 +300,8 @@ async function connectCrewMembers(ownerEmail, invitedEmail, ownerName = "Travele
   writeJsonStorage(LOCAL_CREW_LINKS_KEY, links);
   try {
     const inviteResp = await sendCrewInviteEmail(owner, ownerName, invitee);
-    const fallbackLink =
-      inviteResp?.invite_link ||
-      (typeof window !== "undefined" ? `${window.location.origin}/?entry=home` : "");
+    const currentOriginLink = typeof window !== "undefined" ? `${window.location.origin}/?entry=home` : "";
+    const fallbackLink = currentOriginLink || inviteResp?.invite_link || "";
     return {
       ok: true,
       emailSent: Boolean(inviteResp?.email_sent),
@@ -1195,12 +1194,14 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
   const [inviteFeedback, setInviteFeedback] = useState(null);
   const [manualInviteLink, setManualInviteLink] = useState("");
   const [copyFeedback, setCopyFeedback] = useState("");
+  const visibleInviteLink =
+    manualInviteLink || (typeof window !== "undefined" ? `${window.location.origin}/?entry=home` : "");
 
   const copyInviteLink = async () => {
-    if (!manualInviteLink) return;
+    if (!visibleInviteLink) return;
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(manualInviteLink);
+        await navigator.clipboard.writeText(visibleInviteLink);
         setCopyFeedback("Invite link copied.");
       } else {
         setCopyFeedback("Copy this link manually.");
@@ -1294,10 +1295,10 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
             {inviteFeedback.detail ? ` (${inviteFeedback.detail})` : ""}
           </p>
         ) : null}
-        {manualInviteLink ? (
+        {visibleInviteLink ? (
           <div style={{ marginTop:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}>
             <input
-              value={manualInviteLink}
+              value={visibleInviteLink}
               readOnly
               style={{
                 flex:1,
