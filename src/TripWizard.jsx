@@ -77,6 +77,54 @@ function getUserIdFromToken(token) {
   return token.split(":", 2)[1] || "";
 }
 
+const AIRPORT_BY_DESTINATION = {
+  santorini: "JTR",
+  athens: "ATH",
+  tokyo: "NRT",
+  kyoto: "KIX",
+  osaka: "KIX",
+  paris: "CDG",
+  london: "LHR",
+  newyork: "JFK",
+  newyorkcity: "JFK",
+  delhi: "DEL",
+  mumbai: "BOM",
+  singapore: "SIN",
+  sydney: "SYD",
+  rome: "FCO",
+  barcelona: "BCN",
+};
+
+function normalizeAirportCode(value, fallback = "LAX") {
+  const code = String(value || "").toUpperCase().replace(/[^A-Z]/g, "");
+  if (code.length >= 3) return code.slice(0, 3);
+  return fallback;
+}
+
+function inferAirportCode(destinationName, fallback = "NRT") {
+  const normalized = String(destinationName || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (normalized && AIRPORT_BY_DESTINATION[normalized]) {
+    return AIRPORT_BY_DESTINATION[normalized];
+  }
+  const letters = String(destinationName || "").toUpperCase().replace(/[^A-Z]/g, "");
+  if (letters.length >= 3) return letters.slice(0, 3);
+  return fallback;
+}
+
+function isoDaysFromNow(offsetDays) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
+function shiftIsoDate(isoDate, daysToAdd) {
+  const seed = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(seed.getTime())) return isoDaysFromNow(daysToAdd);
+  seed.setDate(seed.getDate() + daysToAdd);
+  return seed.toISOString().slice(0, 10);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    GLOBAL STYLES
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -483,6 +531,13 @@ export default function TripWizard({
   const [diningApproved, setDiningApproved] = useState({});
   const [budgetPerDay, setBudgetPerDay] = useState(200);
   const [flightClass, setFlightClass] = useState("economy");
+  const [flightStartAirport, setFlightStartAirport] = useState("LAX");
+  const [flightArrivalAirport, setFlightArrivalAirport] = useState(() =>
+    inferAirportCode((hydratedSession.destinations || [])[0] || "Tokyo", "NRT")
+  );
+  const [flightSegmentDates, setFlightSegmentDates] = useState([isoDaysFromNow(30)]);
+  const [flightReturnDate, setFlightReturnDate] = useState(isoDaysFromNow(39));
+  const [flightSearchBusy, setFlightSearchBusy] = useState(false);
   const [authToken, setAuthToken] = useState(hydratedSession.authToken || "");
   const [tripId, setTripId] = useState(hydratedSession.tripId || "");
   const [timingRows, setTimingRows] = useState([]);
@@ -539,6 +594,80 @@ export default function TripWizard({
 
   const isAutomation = typeof navigator !== "undefined" && navigator.webdriver;
   const selectedInterests = INTEREST_QUESTIONS.filter((_, i) => interestAnswers[i] === "yes");
+  const forwardLegCount = Math.max(1, destinations.length);
+
+  useEffect(() => {
+    setFlightSegmentDates((prev) => {
+      const nextDates = [...prev];
+      while (nextDates.length < forwardLegCount) {
+        const seedDate = nextDates[nextDates.length - 1] || isoDaysFromNow(30);
+        nextDates.push(shiftIsoDate(seedDate, 3));
+      }
+      return nextDates.slice(0, forwardLegCount);
+    });
+  }, [forwardLegCount]);
+
+  useEffect(() => {
+    setFlightReturnDate((prev) => {
+      const lastOutbound = flightSegmentDates[Math.max(0, forwardLegCount - 1)] || isoDaysFromNow(35);
+      const candidate = prev || shiftIsoDate(lastOutbound, 3);
+      if (candidate <= lastOutbound) return shiftIsoDate(lastOutbound, 3);
+      return candidate;
+    });
+  }, [flightSegmentDates, forwardLegCount]);
+
+  const buildFlightSearchPlan = () => {
+    const startAirport = normalizeAirportCode(flightStartAirport, "LAX");
+    const arrivalAirport = normalizeAirportCode(
+      flightArrivalAirport,
+      inferAirportCode(destinations[0] || "Tokyo", "NRT")
+    );
+    const firstDepartDate = flightSegmentDates[0] || isoDaysFromNow(30);
+    const destinationCodes =
+      destinations.length > 0
+        ? destinations.map((dest, idx) =>
+            inferAirportCode(dest, idx === 0 ? arrivalAirport : "NRT")
+          )
+        : [arrivalAirport];
+
+    const segments = [
+      {
+        from_airport: startAirport,
+        to_airport: arrivalAirport,
+        depart_date: firstDepartDate,
+      },
+    ];
+
+    for (let idx = 1; idx < destinationCodes.length; idx += 1) {
+      const fromAirport = idx === 1 ? arrivalAirport : destinationCodes[idx - 1];
+      const toAirport = destinationCodes[idx];
+      if (fromAirport === toAirport) continue;
+      segments.push({
+        from_airport: fromAirport,
+        to_airport: toAirport,
+        depart_date: flightSegmentDates[idx] || shiftIsoDate(firstDepartDate, idx * 3),
+      });
+    }
+
+    const returnFrom = destinationCodes[destinationCodes.length - 1] || arrivalAirport;
+    const normalizedReturnDate = flightReturnDate || shiftIsoDate(firstDepartDate, 9);
+    if (returnFrom !== startAirport) {
+      segments.push({
+        from_airport: returnFrom,
+        to_airport: startAirport,
+        depart_date: normalizedReturnDate,
+      });
+    }
+
+    return {
+      startAirport,
+      arrivalAirport,
+      departDate: firstDepartDate,
+      returnDate: normalizedReturnDate,
+      segments,
+      routeSummary: [segments[0].from_airport, ...segments.map((seg) => seg.to_airport)].join(" -> "),
+    };
+  };
 
   useEffect(() => {
     const idx = STAGES.findIndex((s) => s.key === initialStageKey);
@@ -608,10 +737,13 @@ export default function TripWizard({
         dur: `${Math.round((Number(f.duration_minutes || 0)) / 60)}h`,
         stops: Number(f.stops || 0),
         price: Math.max(0, Math.min(Number(f.price_usd || 0), maxFlightDisplayPrice)),
-        cls: "Economy",
+        cls: f.cabin_class || "Economy",
+        route: f.route_summary || `${f.departure_airport} -> ${f.arrival_airport}`,
+        legsCount: Number(f.legs_count || (Array.isArray(f.legs) ? f.legs.length : 1)),
         flight_id: f.flight_id,
       }))
     : FLIGHTS;
+  const activeFlightPlan = buildFlightSearchPlan();
   const stayDisplay = stayRows.length > 0
     ? stayRows.map((s) => ({
         name: s.name,
@@ -713,6 +845,7 @@ export default function TripWizard({
           if (!cancelled) setPoiRows(res?.pois || []);
         }
         if (stageKey === "flights") {
+          const flightPlan = buildFlightSearchPlan();
           const res = await apiJson(`/trips/${tripId}/flights/search`, {
             method: "POST",
             headers: {
@@ -720,10 +853,13 @@ export default function TripWizard({
               Authorization: `Bearer ${authToken}`,
             },
             body: JSON.stringify({
-              origin: "LAX",
-              destination: "NRT",
-              depart_date: "2025-06-15",
-              return_date: "2025-06-25",
+              origin: flightPlan.startAirport,
+              destination: flightPlan.arrivalAirport,
+              depart_date: flightPlan.departDate,
+              return_date: flightPlan.returnDate,
+              round_trip: true,
+              cabin_class: flightClass,
+              multi_city_segments: flightPlan.segments,
             }),
           });
           if (!cancelled) setFlightRows(res?.flights || []);
@@ -1150,12 +1286,47 @@ export default function TripWizard({
     }
   };
 
+  const handleFlightSearch = async () => {
+    if (!tripId || !authToken) return;
+    setApiError("");
+    setFlightSearchBusy(true);
+    try {
+      const flightPlan = buildFlightSearchPlan();
+      const res = await apiJson(`/trips/${tripId}/flights/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          origin: flightPlan.startAirport,
+          destination: flightPlan.arrivalAirport,
+          depart_date: flightPlan.departDate,
+          return_date: flightPlan.returnDate,
+          round_trip: true,
+          cabin_class: flightClass,
+          multi_city_segments: flightPlan.segments,
+        }),
+      });
+      setFlightRows(res?.flights || []);
+      setFlightPick(null);
+    } catch (err) {
+      setApiError(err?.message || "Failed to search flights");
+    } finally {
+      setFlightSearchBusy(false);
+    }
+  };
+
   const handleFlightContinue = async () => {
     if (flightPick === null || !tripId || !authToken) {
       if (flightPick !== null) next();
       return;
     }
-    const selected = flightRows[flightPick];
+    const selected = flightRows[flightPick] || flightDisplay[flightPick];
+    if (!selected?.flight_id && !selected?.id) {
+      next();
+      return;
+    }
     try {
       await apiJson(`/trips/${tripId}/flights/select`, {
         method: "POST",
@@ -1743,7 +1914,85 @@ export default function TripWizard({
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <Chat agent="Flight Agent" emoji="✈️" msg="Do you need flight bookings?"/>
         <Chat isUser msg="Yes!" delay={100}/>
-        <Chat agent="Flight Agent" emoji="✈️" msg="Which class do you prefer?" delay={200}/>
+        <Chat agent="Flight Agent" emoji="✈️" msg="Share your starting airport, first arrival airport, and travel dates. I will assume round trip." delay={200}/>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,animation:"fadeUp .3s ease-out .25s both" }}>
+          <div>
+            <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text2,marginBottom:6 }}>Starting airport</label>
+            <input
+              value={flightStartAirport}
+              onChange={(e) => setFlightStartAirport(normalizeAirportCode(e.target.value, "LAX"))}
+              placeholder="LAX"
+              maxLength={3}
+              style={{ width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,color:T.text }}
+            />
+          </div>
+          <div>
+            <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text2,marginBottom:6 }}>First arrival airport</label>
+            <input
+              value={flightArrivalAirport}
+              onChange={(e) => setFlightArrivalAirport(normalizeAirportCode(e.target.value, "NRT"))}
+              placeholder="NRT"
+              maxLength={3}
+              style={{ width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,color:T.text }}
+            />
+          </div>
+        </div>
+        <div style={{ background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:12,padding:12,animation:"fadeUp .3s ease-out .3s both" }}>
+          <p className="hd" style={{ fontSize:12,fontWeight:700,color:T.text3,marginBottom:10 }}>Multi-city dates (round trip)</p>
+          <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+            <div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"center" }}>
+              <span style={{ fontSize:12.5,color:T.text2 }}>
+                {activeFlightPlan.startAirport} -> {activeFlightPlan.arrivalAirport}
+              </span>
+              <input
+                type="date"
+                value={flightSegmentDates[0] || ""}
+                onChange={(e) =>
+                  setFlightSegmentDates((prev) => {
+                    const nextDates = [...prev];
+                    nextDates[0] = e.target.value;
+                    return nextDates;
+                  })
+                }
+                style={{ minHeight:36,padding:"6px 8px",borderRadius:8,border:`1px solid ${T.border}`,fontSize:13,background:T.bg,color:T.text2 }}
+              />
+            </div>
+            {destinations.slice(1).map((dest, idx) => {
+              const legIndex = idx + 1;
+              const fromCode = legIndex === 1 ? activeFlightPlan.arrivalAirport : inferAirportCode(destinations[legIndex - 1], "NRT");
+              const toCode = inferAirportCode(dest, "NRT");
+              return (
+                <div key={`${dest}-${legIndex}`} style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"center" }}>
+                  <span style={{ fontSize:12.5,color:T.text2 }}>{fromCode} -> {toCode}</span>
+                  <input
+                    type="date"
+                    value={flightSegmentDates[legIndex] || ""}
+                    onChange={(e) =>
+                      setFlightSegmentDates((prev) => {
+                        const nextDates = [...prev];
+                        nextDates[legIndex] = e.target.value;
+                        return nextDates;
+                      })
+                    }
+                    style={{ minHeight:36,padding:"6px 8px",borderRadius:8,border:`1px solid ${T.border}`,fontSize:13,background:T.bg,color:T.text2 }}
+                  />
+                </div>
+              );
+            })}
+            <div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"center" }}>
+              <span style={{ fontSize:12.5,color:T.text2 }}>
+                {(destinations.length > 0 ? inferAirportCode(destinations[destinations.length - 1], activeFlightPlan.arrivalAirport) : activeFlightPlan.arrivalAirport)} -> {activeFlightPlan.startAirport}
+              </span>
+              <input
+                type="date"
+                value={flightReturnDate}
+                onChange={(e) => setFlightReturnDate(e.target.value)}
+                style={{ minHeight:36,padding:"6px 8px",borderRadius:8,border:`1px solid ${T.border}`,fontSize:13,background:T.bg,color:T.text2 }}
+              />
+            </div>
+          </div>
+        </div>
+        <Chat agent="Flight Agent" emoji="✈️" msg="Which class do you prefer?" delay={300}/>
         <div style={{ display:"flex",gap:8,animation:"fadeUp .3s ease-out .3s both" }}>
           {["Economy","Business","First"].map(cls=>(
             <button key={cls} onClick={()=>setFlightClass(cls.toLowerCase())}
@@ -1756,7 +2005,13 @@ export default function TripWizard({
             </button>
           ))}
         </div>
-        <Chat agent="Flight Agent" emoji="✈️" msg="Here are the top 3 options:" delay={400}/>
+        <div style={{ display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",animation:"fadeUp .3s ease-out .35s both" }}>
+          <Btn onClick={handleFlightSearch} disabled={flightSearchBusy || !tripId || !authToken}>
+            {flightSearchBusy ? "Searching..." : "Search flight options"}
+          </Btn>
+          <span style={{ fontSize:12,color:T.text3 }}>Route: {activeFlightPlan.routeSummary}</span>
+        </div>
+        <Chat agent="Flight Agent" emoji="✈️" msg="Here are round-trip options from different airlines:" delay={400}/>
         {flightDisplay.map((f,i)=>(
           <div key={i} onClick={()=>setFlightPick(i)}
             style={{ background:T.surface,borderRadius:14,padding:"14px 18px",
@@ -1772,6 +2027,8 @@ export default function TripWizard({
                 <div>
                   <p className="hd" style={{ fontWeight:600,fontSize:14 }}>{f.airline}</p>
                   <span style={{ fontSize:11,color:T.text3 }}>{f.cls}</span>
+                  {f.route ? <p style={{ fontSize:11,color:T.text3,marginTop:2 }}>{f.route}</p> : null}
+                  {f.legsCount ? <p style={{ fontSize:10.5,color:T.text3 }}>{f.legsCount} legs</p> : null}
                 </div>
               </div>
               <div style={{ textAlign:"right" }}>

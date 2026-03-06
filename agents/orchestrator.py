@@ -147,11 +147,20 @@ class BudgetIncreaseRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class FlightSegmentRequest(BaseModel):
+    from_airport: str
+    to_airport: str
+    depart_date: str
+
+
 class FlightSearchRequest(BaseModel):
     origin: str
     destination: str
     depart_date: str
     return_date: Optional[str] = None
+    round_trip: bool = False
+    cabin_class: str = "economy"
+    multi_city_segments: list[FlightSegmentRequest] = []
 
 
 class FlightSelectRequest(BaseModel):
@@ -1629,16 +1638,113 @@ async def search_flights(
         max_price = float(budget_breakdown.get("flights", 500))
         await conn.execute("DELETE FROM flight_options WHERE trip_id = $1", trip_id)
 
-        dep_base = datetime.fromisoformat(body.depart_date).replace(tzinfo=timezone.utc)
-        options = [
-            ("Japan Airlines", 0, max(80.0, round(max_price * 0.78, 2)), 660),
-            ("ANA", 0, max(90.0, round(max_price * 0.86, 2)), 690),
-            ("Emirates", 1, max(70.0, round(max_price * 0.62, 2)), 820),
+        def _airport_code(value: str, fallback: str) -> str:
+            cleaned = re.sub(r"[^A-Za-z]", "", str(value or "").upper())
+            if len(cleaned) >= 3:
+                return cleaned[:3]
+            return fallback
+
+        def _parse_departure(raw_date: str, fallback_offset_days: int) -> datetime:
+            try:
+                parsed = date.fromisoformat(str(raw_date)[:10])
+                return datetime.combine(parsed, time(8, 0), tzinfo=timezone.utc)
+            except Exception:
+                return datetime.now(timezone.utc) + timedelta(days=max(1, fallback_offset_days))
+
+        start_airport = _airport_code(body.origin, "LAX")
+        first_arrival = _airport_code(body.destination, "NRT")
+        route_segments: list[dict[str, Any]] = []
+
+        for idx, seg in enumerate(body.multi_city_segments):
+            seg_from = _airport_code(seg.from_airport, start_airport)
+            seg_to = _airport_code(seg.to_airport, first_arrival)
+            if seg_from == seg_to:
+                continue
+            route_segments.append(
+                {
+                    "from_airport": seg_from,
+                    "to_airport": seg_to,
+                    "depart_time": _parse_departure(seg.depart_date, idx + 1),
+                }
+            )
+
+        if not route_segments:
+            route_segments.append(
+                {
+                    "from_airport": start_airport,
+                    "to_airport": first_arrival,
+                    "depart_time": _parse_departure(body.depart_date, 1),
+                }
+            )
+
+        if body.round_trip and route_segments:
+            last_to = route_segments[-1]["to_airport"]
+            last_dep = route_segments[-1]["depart_time"]
+            if last_to != start_airport:
+                return_dep = _parse_departure(body.return_date or body.depart_date, len(route_segments) + 1)
+                if return_dep <= last_dep:
+                    return_dep = last_dep + timedelta(days=2)
+                route_segments.append(
+                    {
+                        "from_airport": last_to,
+                        "to_airport": start_airport,
+                        "depart_time": return_dep,
+                    }
+                )
+
+        route_points = [route_segments[0]["from_airport"]] + [seg["to_airport"] for seg in route_segments]
+        route_summary = " -> ".join(route_points)
+        segment_count = len(route_segments)
+        per_segment_budget = max_price / max(segment_count, 1)
+
+        airline_profiles = [
+            {"airline": "Japan Airlines", "stops": 0, "price_mult": 0.86, "duration_mult": 0.94},
+            {"airline": "ANA", "stops": 0, "price_mult": 0.92, "duration_mult": 0.90},
+            {"airline": "Emirates", "stops": 1, "price_mult": 0.78, "duration_mult": 1.12},
         ]
+
         flights = []
-        for airline, stops, price, duration_min in options:
-            dep_time = dep_base + timedelta(hours=stops * 2 + len(flights) * 3)
-            arr_time = dep_time + timedelta(minutes=duration_min)
+        for profile_idx, profile in enumerate(airline_profiles):
+            legs = []
+            total_price = 0.0
+            total_stops = 0
+            total_duration_min = 0
+            first_dep_time = None
+            last_arr_time = None
+
+            for seg_idx, seg in enumerate(route_segments):
+                route_seed = sum(ord(ch) for ch in f"{seg['from_airport']}{seg['to_airport']}")
+                base_duration = 210 + (route_seed % 190)
+                seg_stops = profile["stops"] + (1 if profile["stops"] == 0 and route_seed % 11 == 0 else 0)
+                dep_time = seg["depart_time"] + timedelta(hours=profile_idx)
+                duration_min = int(base_duration * profile["duration_mult"]) + (seg_stops * 55)
+                arr_time = dep_time + timedelta(minutes=duration_min)
+                seg_price = max(
+                    65.0,
+                    round(
+                        per_segment_budget
+                        * profile["price_mult"]
+                        * (0.94 + (seg_idx * 0.05)),
+                        2,
+                    ),
+                )
+
+                total_price += seg_price
+                total_stops += seg_stops
+                total_duration_min += duration_min
+                first_dep_time = first_dep_time or dep_time
+                last_arr_time = arr_time
+                legs.append(
+                    {
+                        "from_airport": seg["from_airport"],
+                        "to_airport": seg["to_airport"],
+                        "departure_time": dep_time.isoformat(),
+                        "arrival_time": arr_time.isoformat(),
+                        "duration_minutes": duration_min,
+                        "stops": seg_stops,
+                    }
+                )
+
             row = await conn.fetchrow(
                 """
                 INSERT INTO flight_options (trip_id, airline, departure_airport, arrival_airport, departure_time, arrival_time, price_usd, stops, duration_min, selected)
@@ -1646,14 +1752,14 @@ async def search_flights(
                 RETURNING id, airline, departure_airport, arrival_airport, departure_time, arrival_time, price_usd, stops, duration_min
                 """,
                 trip_id,
-                airline,
-                body.origin,
-                body.destination,
-                dep_time,
-                arr_time,
-                price,
-                stops,
-                duration_min,
+                profile["airline"],
+                route_segments[0]["from_airport"],
+                route_segments[-1]["to_airport"],
+                first_dep_time,
+                last_arr_time,
+                round(total_price, 2),
+                total_stops,
+                total_duration_min,
             )
             flights.append(
                 {
@@ -1666,9 +1772,20 @@ async def search_flights(
                     "price_usd": float(row["price_usd"]),
                     "stops": int(row["stops"] or 0),
                     "duration_minutes": int(row["duration_min"] or 0),
+                    "cabin_class": (body.cabin_class or "economy").title(),
+                    "route_summary": route_summary,
+                    "legs_count": segment_count,
+                    "legs": legs,
                 }
             )
-    return {"flights": flights, "search_params": {"max_price": max_price}}
+    return {
+        "flights": flights,
+        "search_params": {
+            "max_price": max_price,
+            "round_trip": bool(body.round_trip),
+            "segments": segment_count,
+        },
+    }
 
 
 @app.post("/trips/{trip_id}/flights/select")
