@@ -244,6 +244,15 @@ def _smtp_settings() -> tuple[str, int, str, str, str]:
     return host.strip(), port, smtp_user, smtp_pass, smtp_from
 
 
+def _crew_invite_delivery_mode() -> str:
+    mode = os.getenv("CREW_INVITE_DELIVERY_MODE", "email").strip().lower()
+    if mode in {"link", "manual"}:
+        return "link_only"
+    if mode not in {"email", "link_only"}:
+        return "email"
+    return mode
+
+
 def _send_trip_invite_email_sync(
     *,
     to_email: str,
@@ -810,17 +819,23 @@ async def crew_invite_email(request: CrewInviteEmailRequest):
     if inviter_email == invitee_email:
         raise HTTPException(status_code=400, detail="Cannot invite your own email")
 
-    email_sent, email_error = await _send_crew_invite_email(
-        inviter_email=inviter_email,
-        inviter_name=inviter_name,
-        invitee_email=invitee_email,
-    )
+    delivery_mode = _crew_invite_delivery_mode()
+    email_sent = False
+    email_error = ""
+    if delivery_mode == "email":
+        email_sent, email_error = await _send_crew_invite_email(
+            inviter_email=inviter_email,
+            inviter_name=inviter_name,
+            invitee_email=invitee_email,
+        )
+
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
     return {
         "ok": True,
         "invitee_email": invitee_email,
         "email_sent": email_sent,
         "email_error": email_error or None,
+        "delivery_mode": "email" if email_sent else "link_only",
         "invite_link": f"{frontend_base}/?entry=home",
     }
 

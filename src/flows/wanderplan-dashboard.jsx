@@ -300,17 +300,23 @@ async function connectCrewMembers(ownerEmail, invitedEmail, ownerName = "Travele
   writeJsonStorage(LOCAL_CREW_LINKS_KEY, links);
   try {
     const inviteResp = await sendCrewInviteEmail(owner, ownerName, invitee);
+    const fallbackLink =
+      inviteResp?.invite_link ||
+      (typeof window !== "undefined" ? `${window.location.origin}/?entry=home` : "");
     return {
       ok: true,
       emailSent: Boolean(inviteResp?.email_sent),
       emailError: inviteResp?.email_error || "",
-      inviteLink: inviteResp?.invite_link || "",
+      deliveryMode: String(inviteResp?.delivery_mode || "").trim().toLowerCase() || "link_only",
+      inviteLink: fallbackLink,
     };
   } catch (error) {
     return {
       ok: true,
       emailSent: false,
       emailError: error?.message || "Invite saved but email could not be sent.",
+      deliveryMode: "link_only",
+      inviteLink: typeof window !== "undefined" ? `${window.location.origin}/?entry=home` : "",
     };
   }
 }
@@ -1187,20 +1193,52 @@ function ProfilePage({ viewer, onSaveProfile = () => {} }) {
 function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, error:"Invite failed." }) }) {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteFeedback, setInviteFeedback] = useState(null);
+  const [manualInviteLink, setManualInviteLink] = useState("");
+  const [copyFeedback, setCopyFeedback] = useState("");
+
+  const copyInviteLink = async () => {
+    if (!manualInviteLink) return;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(manualInviteLink);
+        setCopyFeedback("Invite link copied.");
+      } else {
+        setCopyFeedback("Copy this link manually.");
+      }
+    } catch {
+      setCopyFeedback("Copy this link manually.");
+    }
+  };
 
   const submitInvite = async () => {
+    setCopyFeedback("");
     const result = await onInviteMember(inviteEmail);
     if (result?.ok) {
+      const link = result?.inviteLink || "";
+      const deliveryMode = String(result?.deliveryMode || "").trim().toLowerCase();
+      setManualInviteLink(link);
+
       if (result.emailSent) {
         setInviteFeedback({ type:"success", message:"Invite linked and email sent." });
+      } else if (deliveryMode === "link_only") {
+        setInviteFeedback({
+          type:"info",
+          message:"Invite linked. Copy and share the invite link manually.",
+          detail: result.emailError || "",
+        });
       } else if (result.emailError) {
-        setInviteFeedback({ type:"error", message:`Invite linked, but email failed: ${result.emailError}` });
+        setInviteFeedback({
+          type:"info",
+          message:"Invite linked. Email was not delivered, so share the invite link manually.",
+          detail: result.emailError,
+        });
       } else {
-        setInviteFeedback({ type:"success", message:"Invite linked. They will appear as joined after sign-up." });
+        setInviteFeedback({ type:"info", message:"Invite linked. Copy and share the invite link manually." });
       }
       setInviteEmail("");
       return;
     }
+    setManualInviteLink("");
     setInviteFeedback({ type:"error", message: result?.error || "Could not invite this email." });
   };
 
@@ -1240,10 +1278,58 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
           </button>
         </div>
         {inviteFeedback ? (
-          <p style={{ marginTop:8,fontSize:12.5,color:inviteFeedback.type === "success" ? T.success : T.error }}>
+          <p
+            style={{
+              marginTop:8,
+              fontSize:12.5,
+              color:
+                inviteFeedback.type === "success"
+                  ? T.success
+                  : inviteFeedback.type === "error"
+                    ? T.error
+                    : T.warning,
+            }}
+          >
             {inviteFeedback.message}
+            {inviteFeedback.detail ? ` (${inviteFeedback.detail})` : ""}
           </p>
         ) : null}
+        {manualInviteLink ? (
+          <div style={{ marginTop:10,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}>
+            <input
+              value={manualInviteLink}
+              readOnly
+              style={{
+                flex:1,
+                minHeight:36,
+                padding:"8px 10px",
+                borderRadius:8,
+                border:`1px solid ${T.border}`,
+                background:T.bg,
+                color:T.text2,
+                fontSize:12.5,
+              }}
+            />
+            <button
+              className="hd"
+              onClick={copyInviteLink}
+              style={{
+                minHeight:36,
+                padding:"0 12px",
+                borderRadius:8,
+                border:`1px solid ${T.border}`,
+                background:T.surface,
+                color:T.text2,
+                fontSize:12.5,
+                fontWeight:700,
+                cursor:"pointer",
+              }}
+            >
+              Copy link
+            </button>
+          </div>
+        ) : null}
+        {copyFeedback ? <p style={{ marginTop:6,fontSize:12,color:T.text3 }}>{copyFeedback}</p> : null}
       </div>
 
       <div style={{ background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:14,padding:14,marginBottom:12 }}>
