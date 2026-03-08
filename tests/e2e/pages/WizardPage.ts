@@ -274,24 +274,34 @@ export class WizardPage {
     await this.page.getByRole('button', { name: flightClass, exact: true }).click();
     await this.page.waitForTimeout(300);
 
+    const searchBtn = this.page.getByRole('button', { name: /search flight options/i });
+    if (await searchBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await searchBtn.click();
+      await this.page.waitForTimeout(600);
+    }
+
     // Wait for flight cards
     await this.page.waitForSelector('text=/airlines|nonstop|stop/i', { timeout: 8000 });
 
-    // Click the n-th flight card (look for price $xxx pattern)
-    const flightCards = this.page.locator('[style*="cursor:pointer"]').filter({ hasText: /\\$\\d+|nonstop|stop/i });
+    // Click the n-th flight card (look for price  pattern)
+    const flightCards = this.page.locator('[style*="cursor:pointer"]').filter({ hasText: /\$\d+|nonstop|stop/i });
     if ((await flightCards.count()) > flightIndex) {
       await flightCards.nth(flightIndex).click();
     } else {
       // Fallback: click any element containing a price and airline name
-      await this.page.locator('text=/\\$\\d{3,4}/').first().click();
+      await this.page.locator('text=/\$\d{3,4}/').first().click();
     }
 
     await this.page.waitForTimeout(300);
 
-    // Click "Book [Airline] — Continue →"
-    const bookBtn = this.page.getByRole('button', { name: /book.*continue/i });
-    await bookBtn.waitFor({ state: 'visible', timeout: 5000 });
-    await bookBtn.click();
+    const saveBtn = this.page.getByRole('button', { name: /save selected flights/i });
+    await saveBtn.waitFor({ state: 'visible', timeout: 5000 });
+    await saveBtn.click();
+    await this.page.waitForTimeout(300);
+
+    const confirmBtn = this.page.getByRole('button', { name: /confirm and (open airline websites|continue)/i });
+    await confirmBtn.waitFor({ state: 'visible', timeout: 5000 });
+    await confirmBtn.click();
   }
 
   // ── Stage 10: Stays ───────────────────────────────────────────────────────
@@ -428,3 +438,4 @@ export class WizardPage {
     return stagesCompleted;
   }
 }
+

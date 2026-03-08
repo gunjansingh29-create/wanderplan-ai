@@ -112,6 +112,7 @@ describe('04 — Budget → Flight Integration', () => {
         destination: 'NRT',
         depart_date: '2025-03-20',
         return_date: '2025-03-27',
+        round_trip:  true,
       })
       .expect(200);
 
@@ -119,6 +120,12 @@ describe('04 — Budget → Flight Integration', () => {
     expect(flightResults).toHaveProperty('flights');
     expect(Array.isArray(flightResults.flights)).toBe(true);
     expect(flightResults.flights.length).toBeGreaterThan(0);
+    expect(Array.isArray(flightResults.legs)).toBe(true);
+    expect(flightResults.legs.length).toBeGreaterThanOrEqual(1);
+    for (const leg of flightResults.legs) {
+      expect(Array.isArray(leg.options)).toBe(true);
+      expect(leg.options.length).toBeGreaterThan(0);
+    }
   });
 
   // ── Step 3a: No flight exceeds flights_allocation ────────────────────────
@@ -145,10 +152,10 @@ describe('04 — Budget → Flight Integration', () => {
 
   // ── Step 3c: Correct airports in results ─────────────────────────────────
 
-  test('Flight results reference the trip origin (LAX) and destination (NRT)', () => {
+  test('Flight results reference expected route legs (LAX↔NRT)', () => {
     for (const flight of flightResults.flights) {
-      expect(flight.departure_airport).toBe('LAX');
-      expect(flight.arrival_airport).toBe('NRT');
+      const route = `${flight.departure_airport}->${flight.arrival_airport}`;
+      expect(['LAX->NRT', 'NRT->LAX']).toContain(route);
     }
   });
 
@@ -165,22 +172,30 @@ describe('04 — Budget → Flight Integration', () => {
 
   // ── Step 3d: Selecting a flight updates budget ────────────────────────────
 
-  test('POST /trips/:id/flights/select → 200 and budget.spent increases', async () => {
-    const cheapestFlight = [...flightResults.flights].sort(
-      (a, b) => a.price_usd - b.price_usd
-    )[0];
+  test('POST /trips/:id/flights/select with leg_selections → 200 and budget.spent increases', async () => {
+    const firstLeg = flightResults.legs[0];
+    const cheapestLegOption = [...firstLeg.options].sort((a, b) => a.price_usd - b.price_usd)[0];
+    const selectedPrice = cheapestLegOption.price_usd;
 
     const selRes = await request(API_V1)
       .post(`/trips/${trip.id}/flights/select`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ flight_id: cheapestFlight.flight_id || cheapestFlight.id })
+      .send({
+        leg_selections: [
+          {
+            leg_id: firstLeg.leg_id,
+            flight_id: cheapestLegOption.flight_id || cheapestLegOption.id,
+          },
+        ],
+      })
       .expect(200);
 
     const updatedBudget = selRes.body.budget;
-    expect(updatedBudget.spent).toBeCloseTo(cheapestFlight.price_usd, 2);
+    expect(updatedBudget.spent).toBeCloseTo(selectedPrice, 2);
     expect(updatedBudget.remaining).toBeCloseTo(
-      TOTAL_BUDGET - cheapestFlight.price_usd, 2
+      TOTAL_BUDGET - selectedPrice, 2
     );
+    expect(selRes.body.selected_count).toBe(1);
   });
 
   test('Selected flight is marked selected=true in flight_options table', async () => {

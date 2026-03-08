@@ -242,7 +242,7 @@ test.describe('01 — Happy Path: Solo Traveler', () => {
     }
   });
 
-  test('1.10 Economy flight is selected and book button appears', async ({ page }) => {
+  test('1.10 Economy flight is selected and save/confirm buttons appear', async ({ page }) => {
     const wizard = new WizardPage(page);
     await page.goto('/trip/new');
 
@@ -267,8 +267,8 @@ test.describe('01 — Happy Path: Solo Traveler', () => {
     await page.locator('text=/Japan Airlines|Emirates|ANA/').first().click();
     await page.waitForTimeout(300);
 
-    // Book button should now be visible
-    await expect(page.getByRole('button', { name: /book.*continue/i })).toBeVisible({ timeout: 5000 });
+    // Save/confirm actions should now be visible
+    await expect(page.getByRole('button', { name: /save selected flights/i })).toBeVisible({ timeout: 5000 });
   });
 
   // ── 3. Full happy path + calendar sync verification ────────────────────────

@@ -101,6 +101,10 @@ function normalizeAirportCode(value, fallback = "LAX") {
   return fallback;
 }
 
+function sanitizeAirportInput(value) {
+  return String(value || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3);
+}
+
 function inferAirportCode(destinationName, fallback = "NRT") {
   const normalized = String(destinationName || "").toLowerCase().replace(/[^a-z]/g, "");
   if (normalized && AIRPORT_BY_DESTINATION[normalized]) {
@@ -123,6 +127,83 @@ function shiftIsoDate(isoDate, daysToAdd) {
   if (Number.isNaN(seed.getTime())) return isoDaysFromNow(daysToAdd);
   seed.setDate(seed.getDate() + daysToAdd);
   return seed.toISOString().slice(0, 10);
+}
+
+function formatClock(value) {
+  if (!value) return "--:--";
+  try {
+    return new Date(value).toISOString().slice(11, 16);
+  } catch {
+    return "--:--";
+  }
+}
+
+function formatDurationLabel(minutesValue) {
+  const minutes = Number(minutesValue || 0);
+  if (!Number.isFinite(minutes) || minutes <= 0) return "--";
+  const hours = Math.floor(minutes / 60);
+  const rem = minutes % 60;
+  if (rem === 0) return `${hours}h`;
+  return `${hours}h ${rem}m`;
+}
+
+function normalizeFlightOption(option, legId, index) {
+  const optionId = option?.flight_id || option?.option_id || `${legId}-opt-${index + 1}`;
+  return {
+    option_id: optionId,
+    flight_id: option?.flight_id || "",
+    leg_id: legId,
+    airline: option?.airline || "Airline",
+    dep: option?.dep || formatClock(option?.departure_time),
+    arr: option?.arr || formatClock(option?.arrival_time),
+    dur: option?.dur || formatDurationLabel(option?.duration_minutes),
+    stops: Number(option?.stops || 0),
+    price: Number(option?.price_usd ?? option?.price ?? 0),
+    cls: option?.cabin_class || option?.cls || "Economy",
+    booking_url: option?.booking_url || "",
+    source: option?.source || "",
+  };
+}
+
+function normalizeFlightLegRows(rawLegs = [], rawFlights = []) {
+  if (Array.isArray(rawLegs) && rawLegs.length > 0) {
+    return rawLegs.map((leg, legIdx) => {
+      const legId = leg?.leg_id || `leg-${legIdx + 1}`;
+      const options = Array.isArray(leg?.options) ? leg.options : [];
+      return {
+        leg_id: legId,
+        from_airport: leg?.from_airport || "",
+        to_airport: leg?.to_airport || "",
+        depart_date: leg?.depart_date || "",
+        options: options.map((option, idx) => normalizeFlightOption(option, legId, idx)),
+      };
+    });
+  }
+  if (Array.isArray(rawFlights) && rawFlights.length > 0) {
+    const grouped = new Map();
+    rawFlights.forEach((option) => {
+      const depAirport = option?.departure_airport || "";
+      const arrAirport = option?.arrival_airport || "";
+      const depDate = String(option?.departure_time || "").slice(0, 10);
+      const derivedLegId = option?.leg_id || `${depAirport}-${arrAirport}-${depDate || "tbd"}`;
+      if (!grouped.has(derivedLegId)) {
+        grouped.set(derivedLegId, {
+          leg_id: derivedLegId,
+          from_airport: depAirport,
+          to_airport: arrAirport,
+          depart_date: depDate,
+          _first_departure_time: option?.departure_time || "",
+          options: [],
+        });
+      }
+      const leg = grouped.get(derivedLegId);
+      leg.options.push(normalizeFlightOption(option, derivedLegId, leg.options.length));
+    });
+    return [...grouped.values()]
+      .sort((a, b) => String(a._first_departure_time || "").localeCompare(String(b._first_departure_time || "")))
+      .map(({ _first_departure_time, ...leg }) => leg);
+  }
+  return [];
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -526,7 +607,7 @@ export default function TripWizard({
   );
   const [poiApproved, setPoiApproved] = useState({});
   const [interestAnswers, setInterestAnswers] = useState({});
-  const [flightPick, setFlightPick] = useState(null);
+  const [selectedFlightsByLeg, setSelectedFlightsByLeg] = useState({});
   const [stayPicks, setStayPicks] = useState({});
   const [diningApproved, setDiningApproved] = useState({});
   const [budgetPerDay, setBudgetPerDay] = useState(200);
@@ -538,12 +619,15 @@ export default function TripWizard({
   const [flightSegmentDates, setFlightSegmentDates] = useState([isoDaysFromNow(30)]);
   const [flightReturnDate, setFlightReturnDate] = useState(isoDaysFromNow(39));
   const [flightSearchBusy, setFlightSearchBusy] = useState(false);
+  const [flightSaveBusy, setFlightSaveBusy] = useState(false);
+  const [flightSelectionReview, setFlightSelectionReview] = useState(null);
   const [authToken, setAuthToken] = useState(hydratedSession.authToken || "");
   const [tripId, setTripId] = useState(hydratedSession.tripId || "");
   const [timingRows, setTimingRows] = useState([]);
   const [healthRequirements, setHealthRequirements] = useState([]);
   const [poiRows, setPoiRows] = useState([]);
   const [flightRows, setFlightRows] = useState([]);
+  const [flightLegRows, setFlightLegRows] = useState([]);
   const [stayRows, setStayRows] = useState([]);
   const [diningRows, setDiningRows] = useState([]);
   const [itineraryRows, setItineraryRows] = useState([]);
@@ -740,10 +824,48 @@ export default function TripWizard({
         cls: f.cabin_class || "Economy",
         route: f.route_summary || `${f.departure_airport} -> ${f.arrival_airport}`,
         legsCount: Number(f.legs_count || (Array.isArray(f.legs) ? f.legs.length : 1)),
+        booking_url: f.booking_url || "",
+        source: f.source || "",
         flight_id: f.flight_id,
       }))
-    : FLIGHTS;
+    : (demoMode ? FLIGHTS : []);
   const activeFlightPlan = buildFlightSearchPlan();
+  const fallbackLegId = "leg-1";
+  const flightLegDisplay = flightLegRows.length > 0
+    ? flightLegRows
+    : flightDisplay.length > 0 ? [
+        {
+          leg_id: fallbackLegId,
+          from_airport: activeFlightPlan.startAirport,
+          to_airport: activeFlightPlan.arrivalAirport,
+          depart_date: activeFlightPlan.departDate,
+          options: flightDisplay.map((option, idx) =>
+            normalizeFlightOption(
+              {
+                ...option,
+                price_usd: option.price,
+                cabin_class: option.cls,
+                option_id: option.flight_id || `fallback-${idx + 1}`,
+                source: option.source || "mock",
+              },
+              fallbackLegId,
+              idx
+            )
+          ),
+        },
+      ] : [];
+  const allFlightLegsSelected =
+    flightLegDisplay.length > 0 &&
+    flightLegDisplay.every((leg) => Boolean(selectedFlightsByLeg[leg.leg_id]));
+  const selectedFlightOptions = flightLegDisplay
+    .map((leg) => {
+      const selectedOptionId = selectedFlightsByLeg[leg.leg_id];
+      return (leg.options || []).find((option) => option.option_id === selectedOptionId);
+    })
+    .filter(Boolean);
+  const selectedFlightBookingUrls = [
+    ...new Set(selectedFlightOptions.map((option) => option.booking_url).filter(Boolean)),
+  ];
   const stayDisplay = stayRows.length > 0
     ? stayRows.map((s) => ({
         name: s.name,
@@ -862,7 +984,12 @@ export default function TripWizard({
               multi_city_segments: flightPlan.segments,
             }),
           });
-          if (!cancelled) setFlightRows(res?.flights || []);
+          if (!cancelled) {
+            setFlightRows(res?.flights || []);
+            setFlightLegRows(normalizeFlightLegRows(res?.legs || [], res?.flights || []));
+            setSelectedFlightsByLeg({});
+            setFlightSelectionReview(null);
+          }
         }
         if (stageKey === "stays") {
           const res = await apiJson(`/trips/${tripId}/stays/search`, {
@@ -936,6 +1063,32 @@ export default function TripWizard({
     });
     setAuthToken(login.accessToken);
     return login.accessToken;
+  };
+
+  const ensureTripContext = async () => {
+    if (demoMode) return { token: "", tripId: "" };
+    const token = await ensureAuth();
+    let activeTripId = tripId;
+    if (!activeTripId) {
+      const created = await apiJson("/trips", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: tripName?.trim() || `Trip ${new Date().toISOString().slice(0, 10)}`,
+          duration_days: 10,
+        }),
+      });
+      activeTripId = created?.trip?.id || "";
+      if (!activeTripId) {
+        throw new Error("Failed to create trip session");
+      }
+      setTripId(activeTripId);
+      await refreshTripFromBackend(token, activeTripId);
+    }
+    return { token, tripId: activeTripId };
   };
 
   const trackAnalytics = async (eventType, properties = {}) => {
@@ -1287,16 +1440,17 @@ export default function TripWizard({
   };
 
   const handleFlightSearch = async () => {
-    if (!tripId || !authToken) return;
     setApiError("");
     setFlightSearchBusy(true);
+    setFlightSelectionReview(null);
     try {
+      const ctx = await ensureTripContext();
       const flightPlan = buildFlightSearchPlan();
-      const res = await apiJson(`/trips/${tripId}/flights/search`, {
+      const res = await apiJson(`/trips/${ctx.tripId}/flights/search`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
+          Authorization: `Bearer ${ctx.token}`,
         },
         body: JSON.stringify({
           origin: flightPlan.startAirport,
@@ -1309,7 +1463,13 @@ export default function TripWizard({
         }),
       });
       setFlightRows(res?.flights || []);
-      setFlightPick(null);
+      setFlightLegRows(normalizeFlightLegRows(res?.legs || [], res?.flights || []));
+      setSelectedFlightsByLeg({});
+      if ((res?.search_params?.source || "") !== "amadeus" && res?.search_params?.live_error) {
+        setApiError(`Live fares unavailable: ${res.search_params.live_error}. Showing fallback options.`);
+      } else {
+        setApiError("");
+      }
     } catch (err) {
       setApiError(err?.message || "Failed to search flights");
     } finally {
@@ -1318,29 +1478,56 @@ export default function TripWizard({
   };
 
   const handleFlightContinue = async () => {
-    if (flightPick === null || !tripId || !authToken) {
-      if (flightPick !== null) next();
-      return;
-    }
-    const selected = flightRows[flightPick] || flightDisplay[flightPick];
-    if (!selected?.flight_id && !selected?.id) {
+    if (flightLegDisplay.length === 0) {
       next();
       return;
     }
+    if (selectedFlightOptions.length !== flightLegDisplay.length) {
+      setApiError("Select one flight option for each leg.");
+      return;
+    }
+
+    const selectionPayload = selectedFlightOptions
+      .filter((option) => option.flight_id)
+      .map((option) => ({
+        leg_id: option.leg_id,
+        flight_id: option.flight_id,
+      }));
+
     try {
-      await apiJson(`/trips/${tripId}/flights/select`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({ flight_id: selected?.flight_id || selected?.id }),
+      const ctx = await ensureTripContext();
+      setFlightSaveBusy(true);
+      if (selectionPayload.length > 0) {
+        await apiJson(`/trips/${ctx.tripId}/flights/select`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${ctx.token}`,
+          },
+          body: JSON.stringify({ leg_selections: selectionPayload }),
+        });
+      }
+      setFlightSelectionReview({
+        options: selectedFlightOptions,
+        bookingUrls: selectedFlightBookingUrls,
       });
-      next();
+      setApiError("");
     } catch (err) {
       setApiError(err?.message || "Failed to select flight");
-      next();
+    } finally {
+      setFlightSaveBusy(false);
     }
+  };
+
+  const handleFlightConfirmAndContinue = () => {
+    const review = flightSelectionReview;
+    if (!review) return;
+    const bookingUrls = Array.isArray(review.bookingUrls) ? review.bookingUrls : [];
+    bookingUrls.forEach((url) => {
+      window.open(url, "_blank", "noopener,noreferrer");
+    });
+    setFlightSelectionReview(null);
+    next();
   };
 
   const handleStaysContinue = async () => {
@@ -1920,7 +2107,7 @@ export default function TripWizard({
             <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text2,marginBottom:6 }}>Starting airport</label>
             <input
               value={flightStartAirport}
-              onChange={(e) => setFlightStartAirport(normalizeAirportCode(e.target.value, "LAX"))}
+              onChange={(e) => setFlightStartAirport(sanitizeAirportInput(e.target.value))}
               placeholder="LAX"
               maxLength={3}
               style={{ width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,color:T.text }}
@@ -1930,7 +2117,7 @@ export default function TripWizard({
             <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text2,marginBottom:6 }}>First arrival airport</label>
             <input
               value={flightArrivalAirport}
-              onChange={(e) => setFlightArrivalAirport(normalizeAirportCode(e.target.value, "NRT"))}
+              onChange={(e) => setFlightArrivalAirport(sanitizeAirportInput(e.target.value))}
               placeholder="NRT"
               maxLength={3}
               style={{ width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,color:T.text }}
@@ -2006,56 +2193,124 @@ export default function TripWizard({
           ))}
         </div>
         <div style={{ display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",animation:"fadeUp .3s ease-out .35s both" }}>
-          <Btn onClick={handleFlightSearch} disabled={flightSearchBusy || !tripId || !authToken}>
+          <Btn onClick={handleFlightSearch} disabled={flightSearchBusy}>
             {flightSearchBusy ? "Searching..." : "Search flight options"}
           </Btn>
           <span style={{ fontSize:12,color:T.text3 }}>Route: {activeFlightPlan.routeSummary}</span>
         </div>
-        <Chat agent="Flight Agent" emoji="✈️" msg="Here are round-trip options from different airlines:" delay={400}/>
-        {flightDisplay.map((f,i)=>(
-          <div key={i} onClick={()=>setFlightPick(i)}
-            style={{ background:T.surface,borderRadius:14,padding:"14px 18px",
-            boxShadow:shadow.sm,border:`2px solid ${flightPick===i?T.primary:T.borderLight}`,
-            cursor:"pointer",transition:"all .2s",animation:`fadeUp .35s ease-out ${.4+i*.1}s both`,
-            ...(flightPick===i?{boxShadow:shadow.glow}:{}) }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10 }}>
-              <div style={{ display:"flex",alignItems:"center",gap:8 }}>
-                <div style={{ width:32,height:32,borderRadius:8,background:T.bg,
-                  display:"flex",alignItems:"center",justifyContent:"center" }}>
-                  <I n="plane" s={16} c={T.primary}/>
-                </div>
-                <div>
-                  <p className="hd" style={{ fontWeight:600,fontSize:14 }}>{f.airline}</p>
-                  <span style={{ fontSize:11,color:T.text3 }}>{f.cls}</span>
-                  {f.route ? <p style={{ fontSize:11,color:T.text3,marginTop:2 }}>{f.route}</p> : null}
-                  {f.legsCount ? <p style={{ fontSize:10.5,color:T.text3 }}>{f.legsCount} legs</p> : null}
-                </div>
+        {apiError && (
+          <p style={{ fontSize:12,color:T.error }}>
+            {apiError}
+          </p>
+        )}
+        {!demoMode && !flightSearchBusy && flightLegDisplay.length === 0 && !apiError && (
+          <p style={{ fontSize:12,color:T.text3 }}>
+            No flight results loaded yet. Click "Search flight options" to fetch live fares.
+          </p>
+        )}
+        <Chat agent="Flight Agent" emoji="✈️" msg="Here are options for each leg. Pick what works best for each leg." delay={400}/>
+        {flightLegDisplay.map((leg, legIdx) => {
+          const selectedOptionId = selectedFlightsByLeg[leg.leg_id];
+          return (
+            <div
+              key={leg.leg_id}
+              style={{
+                background:T.surface,
+                borderRadius:14,
+                padding:"14px 14px 10px",
+                border:`1px solid ${T.borderLight}`,
+                boxShadow:shadow.sm,
+                animation:`fadeUp .35s ease-out ${.4 + legIdx*.08}s both`,
+              }}
+            >
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8 }}>
+                <p className="hd" style={{ fontWeight:700,fontSize:14 }}>
+                  Leg {legIdx + 1}: {leg.from_airport} -> {leg.to_airport}
+                </p>
+                <span style={{ fontSize:11,color:T.text3 }}>{leg.depart_date || "Date TBD"}</span>
               </div>
-              <div style={{ textAlign:"right" }}>
-                <p className="hd" style={{ fontWeight:700,fontSize:18,color:T.primary }}>${f.price.toLocaleString()}</p>
+              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                {(leg.options || []).map((option, optionIdx) => {
+                  const picked = selectedOptionId === option.option_id;
+                  return (
+                    <div
+                      key={option.option_id || `${leg.leg_id}-${optionIdx}`}
+                      onClick={() => {
+                        setSelectedFlightsByLeg((prev) => ({ ...prev, [leg.leg_id]: option.option_id }));
+                        setFlightSelectionReview(null);
+                      }}
+                      style={{
+                        background:T.bg,
+                        borderRadius:12,
+                        padding:"10px 12px",
+                        border:`2px solid ${picked ? T.primary : T.borderLight}`,
+                        cursor:"pointer",
+                        transition:"all .2s",
+                      }}
+                    >
+                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8 }}>
+                        <div style={{ minWidth:0 }}>
+                          <p className="hd" style={{ fontWeight:600,fontSize:13 }}>{option.airline}</p>
+                          <p style={{ fontSize:11,color:T.text3 }}>
+                            {option.cls} • {option.dur} • {option.stops===0 ? "Nonstop" : `${option.stops} stop${option.stops > 1 ? "s" : ""}`}
+                          </p>
+                          <p style={{ fontSize:11,color:T.text3 }}>{option.dep} -> {option.arr}</p>
+                          {option.source === "amadeus" ? <p style={{ fontSize:10.5,color:T.success }}>Live fare</p> : null}
+                        </div>
+                        <div style={{ textAlign:"right",flexShrink:0 }}>
+                          <p className="hd" style={{ fontWeight:700,fontSize:16,color:T.primary }}>
+                            ${Math.round(option.price).toLocaleString()}
+                          </p>
+                          {picked ? <span className="hd" style={{ fontSize:11,color:T.success,fontWeight:700 }}>Selected</span> : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-            <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-              <p className="hd" style={{ fontWeight:700,fontSize:15 }}>{f.dep}</p>
-              <div style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3 }}>
-                <span style={{ fontSize:11,color:T.text3 }}>{f.dur}</span>
-                <div style={{ width:"100%",height:2,background:T.borderLight,borderRadius:1,position:"relative" }}>
-                  <div style={{ position:"absolute",left:0,top:-3,width:7,height:7,borderRadius:999,background:T.primary }}/>
-                  {f.stops>0 && <div style={{ position:"absolute",left:"50%",top:-2,width:5,height:5,borderRadius:999,background:T.warning,transform:"translateX(-50%)" }}/>}
-                  <div style={{ position:"absolute",right:0,top:-3,width:7,height:7,borderRadius:999,background:T.secondary }}/>
+          );
+        })}
+        {allFlightLegsSelected ? (
+          <div style={{ animation:"scaleIn .3s ease-out" }}>
+            {!flightSelectionReview ? (
+              <Btn onClick={handleFlightContinue} full disabled={flightSaveBusy}>
+                {flightSaveBusy ? "Saving selected flights..." : "Save selected flights for confirmation →"}
+              </Btn>
+            ) : (
+              <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+                <div style={{ background:T.successBg,border:`1px solid ${T.success}33`,borderRadius:12,padding:12 }}>
+                  <p className="hd" style={{ fontWeight:700,fontSize:13,color:T.text,marginBottom:8 }}>
+                    Confirm selected flights
+                  </p>
+                  <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
+                    {flightSelectionReview.options.map((option, idx) => (
+                      <div key={`${option.leg_id}-${idx}`} style={{ display:"flex",justifyContent:"space-between",gap:10,fontSize:12,color:T.text2 }}>
+                        <span>{option.leg_id}: {option.airline} {option.dep} -> {option.arr}</span>
+                        <span className="hd" style={{ fontWeight:700,color:T.text }}>${Math.round(option.price).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p style={{ fontSize:11,color:T.text3,marginTop:8 }}>
+                    {flightSelectionReview.bookingUrls.length > 0
+                      ? "On confirmation, airline websites will open in new tabs."
+                      : "No direct booking URLs were returned; confirm to continue."}
+                  </p>
                 </div>
-                <span style={{ fontSize:11,color:f.stops===0?T.success:T.text3,fontWeight:500 }}>
-                  {f.stops===0?"Nonstop":`${f.stops} stop`}</span>
+                <Btn onClick={handleFlightConfirmAndContinue} full>
+                  {flightSelectionReview.bookingUrls.length > 0
+                    ? "Confirm and open airline websites →"
+                    : "Confirm and continue →"}
+                </Btn>
+                <Btn onClick={() => setFlightSelectionReview(null)} primary={false} full>
+                  Change flight selections
+                </Btn>
               </div>
-              <p className="hd" style={{ fontWeight:700,fontSize:15 }}>{f.arr}</p>
-            </div>
-            {flightPick===i && <div style={{ marginTop:10,padding:"6px",borderRadius:8,background:T.successBg,
-              color:T.success,fontSize:12,fontWeight:600,textAlign:"center" }} className="hd">✓ Selected</div>}
+            )}
           </div>
-        ))}
-        {flightPick!==null && <div style={{ animation:"scaleIn .3s ease-out" }}>
-          <Btn onClick={handleFlightContinue} full>Book {flightDisplay[flightPick].airline} — Continue →</Btn>
-        </div>}
+        ) : (
+          <p style={{ fontSize:12,color:T.text3 }}>Select one option for each leg to continue.</p>
+        )}
       </div>
     </Shell>
   );
@@ -2309,6 +2564,6 @@ export default function TripWizard({
   return null;
 }
 
-export { getUserIdFromToken };
+export { getUserIdFromToken, normalizeFlightLegRows };
 
 

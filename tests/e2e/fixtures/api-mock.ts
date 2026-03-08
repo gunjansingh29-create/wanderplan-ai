@@ -52,13 +52,13 @@ const MOCK_BUDGET = {
 };
 
 const MOCK_FLIGHTS = [
-  { flight_id: 'FL-001', airline: 'Japan Airlines',  departure_airport: 'LAX', arrival_airport: 'NRT',
+  { flight_id: 'FL-001', leg_id: 'leg-1-LAX-NRT-2025-06-15', airline: 'Japan Airlines',  departure_airport: 'LAX', arrival_airport: 'NRT',
     departure_time: '2025-06-15T10:30:00Z', arrival_time: '2025-06-16T14:45:00Z',
     price_usd: 248, stops: 0, duration_minutes: 660, selected: false },
-  { flight_id: 'FL-002', airline: 'Emirates',         departure_airport: 'LAX', arrival_airport: 'NRT',
+  { flight_id: 'FL-002', leg_id: 'leg-1-LAX-NRT-2025-06-15', airline: 'Emirates',         departure_airport: 'LAX', arrival_airport: 'NRT',
     departure_time: '2025-06-15T22:15:00Z', arrival_time: '2025-06-17T07:30:00Z',
     price_usd: 195, stops: 1, duration_minutes: 780, selected: false },
-  { flight_id: 'FL-003', airline: 'ANA',              departure_airport: 'LAX', arrival_airport: 'NRT',
+  { flight_id: 'FL-003', leg_id: 'leg-1-LAX-NRT-2025-06-15', airline: 'ANA',              departure_airport: 'LAX', arrival_airport: 'NRT',
     departure_time: '2025-06-16T11:00:00Z', arrival_time: '2025-06-17T15:20:00Z',
     price_usd: 275, stops: 0, duration_minutes: 720, selected: false },
 ];
@@ -155,7 +155,19 @@ export async function setupApiMocks(page: Page): Promise<void> {
   await page.route(`**/${MOCK_TRIP.id}/budget/increase`,    r => fulfill(r, { budget: { ...MOCK_BUDGET, daily_target: 200, total_budget: 1400, remaining: 1400, breakdown: { flights: 420, accommodation: 420, dining: 280, activities: 140, transport: 70, misc: 70 } } }));
 
   // Flights
-  await page.route(`**/${MOCK_TRIP.id}/flights/search`, r => fulfill(r, { flights: MOCK_FLIGHTS, search_params: { max_price: 315 } }));
+  await page.route(`**/${MOCK_TRIP.id}/flights/search`, r => fulfill(r, {
+    flights: MOCK_FLIGHTS,
+    legs: [
+      {
+        leg_id: 'leg-1-LAX-NRT-2025-06-15',
+        from_airport: 'LAX',
+        to_airport: 'NRT',
+        depart_date: '2025-06-15',
+        options: MOCK_FLIGHTS,
+      },
+    ],
+    search_params: { max_price: 315, source: 'amadeus', total_options: MOCK_FLIGHTS.length, segments: 1 },
+  }));
   await page.route(`**/${MOCK_TRIP.id}/flights/select`, r => fulfill(r, { selected: true, budget: { ...MOCK_BUDGET, spent: 248, remaining: 802 } }));
 
   // Stays

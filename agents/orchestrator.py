@@ -5,8 +5,10 @@ import json
 import os
 import re
 import smtplib
+import time as pytime
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote_plus, urlencode
 from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
 from email.message import EmailMessage
@@ -53,6 +55,9 @@ USERS = {
         "name": "Frank Lee",
     },
 }
+
+_AMADEUS_TOKEN = ""
+_AMADEUS_TOKEN_EXPIRES_AT = 0.0
 
 class LoginRequest(BaseModel):
     email: str
@@ -163,8 +168,14 @@ class FlightSearchRequest(BaseModel):
     multi_city_segments: list[FlightSegmentRequest] = []
 
 
-class FlightSelectRequest(BaseModel):
+class FlightLegSelectionRequest(BaseModel):
+    leg_id: Optional[str] = None
     flight_id: str
+
+
+class FlightSelectRequest(BaseModel):
+    flight_id: Optional[str] = None
+    leg_selections: list[FlightLegSelectionRequest] = []
     price_usd: Optional[float] = None
     force: bool = False
 
@@ -437,6 +448,649 @@ def _json_obj(value: Any) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def _amadeus_settings() -> tuple[str, str, str]:
+    base_url = os.getenv("AMADEUS_BASE_URL", "https://api.amadeus.com").strip().rstrip("/")
+    client_id = os.getenv("AMADEUS_CLIENT_ID", os.getenv("AMADEUS_API_KEY", "")).strip()
+    client_secret = os.getenv("AMADEUS_CLIENT_SECRET", os.getenv("AMADEUS_API_SECRET", "")).strip()
+    return base_url, client_id, client_secret
+
+
+def _amadeus_credentials_configured() -> bool:
+    _, client_id, client_secret = _amadeus_settings()
+    return bool(client_id and client_secret)
+
+
+def _parse_iso_duration_minutes(value: str) -> int:
+    text = str(value or "").strip().upper()
+    match = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?", text)
+    if not match:
+        return 0
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    return (hours * 60) + minutes
+
+
+def _safe_parse_datetime(value: str) -> datetime:
+    text = str(value or "").strip()
+    if not text:
+        return datetime.now(timezone.utc)
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _airline_booking_url(
+    carrier_code: str,
+    *,
+    origin: str,
+    destination: str,
+    depart_date: str,
+    return_date: str | None = None,
+) -> str:
+    carrier = str(carrier_code or "").upper()
+    origin_code = re.sub(r"[^A-Z]", "", str(origin or "").upper())[:3]
+    destination_code = re.sub(r"[^A-Z]", "", str(destination or "").upper())[:3]
+    depart = str(depart_date or "")[:10]
+    ret = str(return_date or "")[:10]
+
+    airline_sites = {
+        "AA": "https://www.aa.com",
+        "AF": "https://wwws.airfrance.us",
+        "AS": "https://www.alaskaair.com",
+        "BA": "https://www.britishairways.com",
+        "B6": "https://www.jetblue.com",
+        "DL": "https://www.delta.com",
+        "EK": "https://www.emirates.com",
+        "LH": "https://www.lufthansa.com",
+        "NH": "https://www.ana.co.jp",
+        "QF": "https://www.qantas.com",
+        "QR": "https://www.qatarairways.com",
+        "SQ": "https://www.singaporeair.com",
+        "UA": "https://www.united.com",
+        "WN": "https://www.southwest.com",
+        "JL": "https://www.jal.com",
+    }
+    base = airline_sites.get(carrier)
+    if base:
+        query = urlencode(
+            {
+                "origin": origin_code,
+                "destination": destination_code,
+                "departureDate": depart,
+                "returnDate": ret or "",
+            }
+        )
+        return f"{base}/?{query}"
+
+    phrase = f"Flights from {origin_code} to {destination_code} on {depart}"
+    if ret:
+        phrase += f" returning {ret}"
+    return f"https://www.google.com/travel/flights?q={quote_plus(phrase)}"
+
+
+def _amadeus_get_access_token(force_refresh: bool = False) -> str:
+    global _AMADEUS_TOKEN, _AMADEUS_TOKEN_EXPIRES_AT
+    now = pytime.time()
+    if not force_refresh and _AMADEUS_TOKEN and now < (_AMADEUS_TOKEN_EXPIRES_AT - 30):
+        return _AMADEUS_TOKEN
+
+    base_url, client_id, client_secret = _amadeus_settings()
+    if not client_id or not client_secret:
+        raise RuntimeError("Amadeus credentials are not configured")
+
+    payload = urlencode(
+        {
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+    ).encode("utf-8")
+    req = urllib_request.Request(
+        f"{base_url}/v1/security/oauth2/token",
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib_request.urlopen(req, timeout=15) as resp:  # nosec B310
+        body = json.loads(resp.read().decode("utf-8"))
+    token = str(body.get("access_token") or "").strip()
+    expires_in = int(body.get("expires_in") or 1799)
+    if not token:
+        raise RuntimeError("Amadeus token response missing access_token")
+    _AMADEUS_TOKEN = token
+    _AMADEUS_TOKEN_EXPIRES_AT = now + max(expires_in, 60)
+    return token
+
+
+def _amadeus_request_json(path: str, params: dict[str, Any], retry: bool = True) -> dict[str, Any]:
+    base_url, _, _ = _amadeus_settings()
+    token = _amadeus_get_access_token(force_refresh=False)
+    query = urlencode(params)
+    url = f"{base_url}{path}?{query}"
+    req = urllib_request.Request(
+        url,
+        method="GET",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=20) as resp:  # nosec B310
+            return json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        if exc.code == 401 and retry:
+            _amadeus_get_access_token(force_refresh=True)
+            return _amadeus_request_json(path, params, retry=False)
+        body = exc.read().decode("utf-8", "ignore")
+        raise RuntimeError(f"Amadeus API error HTTP {exc.code}: {body}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Amadeus network error: {exc.reason}") from exc
+
+
+def _segment_departure_date(segment: dict[str, Any], fallback_days: int) -> str:
+    dep_time = segment.get("depart_time")
+    if isinstance(dep_time, datetime):
+        return dep_time.date().isoformat()
+    try:
+        return date.fromisoformat(str(dep_time)[:10]).isoformat()
+    except Exception:
+        return (datetime.now(timezone.utc) + timedelta(days=max(1, fallback_days))).date().isoformat()
+
+
+def _search_amadeus_segment(
+    *,
+    from_airport: str,
+    to_airport: str,
+    depart_date: str,
+    cabin_class: str,
+    max_price: float,
+    max_results: int = 12,
+) -> list[dict[str, Any]]:
+    cabin = str(cabin_class or "economy").strip().upper().replace("-", "_")
+    if cabin not in {"ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"}:
+        cabin = "ECONOMY"
+
+    params: dict[str, Any] = {
+        "originLocationCode": from_airport,
+        "destinationLocationCode": to_airport,
+        "departureDate": depart_date,
+        "adults": 1,
+        "travelClass": cabin,
+        "currencyCode": "USD",
+        "max": max_results,
+    }
+    if max_price > 0:
+        params["maxPrice"] = int(max(50, round(max_price)))
+
+    data = _amadeus_request_json("/v2/shopping/flight-offers", params=params)
+    offers = data.get("data", [])
+    carriers = _json_obj(data.get("dictionaries", {}).get("carriers"))
+
+    parsed: list[dict[str, Any]] = []
+    for offer in offers:
+        itineraries = offer.get("itineraries") or []
+        if not itineraries:
+            continue
+        first_itinerary = itineraries[0]
+        segments = first_itinerary.get("segments") or []
+        if not segments:
+            continue
+
+        first_segment = segments[0]
+        last_segment = segments[-1]
+        dep_at = str(first_segment.get("departure", {}).get("at", ""))
+        arr_at = str(last_segment.get("arrival", {}).get("at", ""))
+        dep_airport = str(first_segment.get("departure", {}).get("iataCode", from_airport))
+        arr_airport = str(last_segment.get("arrival", {}).get("iataCode", to_airport))
+        carrier_code = str(
+            first_segment.get("carrierCode")
+            or first_segment.get("operating", {}).get("carrierCode")
+            or ""
+        ).upper()
+        airline_name = str(carriers.get(carrier_code) or carrier_code or "Airline")
+        raw_price = offer.get("price", {}).get("grandTotal")
+        try:
+            price_total = float(raw_price)
+        except Exception:
+            continue
+        duration_min = _parse_iso_duration_minutes(first_itinerary.get("duration", ""))
+        stops = max(0, len(segments) - 1)
+
+        booking_url = (
+            str(offer.get("links", {}).get("flightOffers") or "").strip()
+            or _airline_booking_url(
+                carrier_code,
+                origin=dep_airport,
+                destination=arr_airport,
+                depart_date=depart_date,
+            )
+        )
+        parsed.append(
+            {
+                "offer_id": str(offer.get("id") or ""),
+                "carrier_code": carrier_code,
+                "airline_name": airline_name,
+                "price_usd": price_total,
+                "currency": str(offer.get("price", {}).get("currency") or "USD"),
+                "departure_airport": dep_airport,
+                "arrival_airport": arr_airport,
+                "departure_time": _safe_parse_datetime(dep_at),
+                "arrival_time": _safe_parse_datetime(arr_at),
+                "duration_minutes": duration_min,
+                "stops": stops,
+                "booking_url": booking_url,
+            }
+        )
+    parsed.sort(key=lambda item: (item["price_usd"], item["duration_minutes"], item["stops"]))
+    return parsed
+
+
+def _build_mock_flight_options(
+    *,
+    route_segments: list[dict[str, Any]],
+    max_price: float,
+    cabin_class: str,
+) -> list[dict[str, Any]]:
+    route_points = [route_segments[0]["from_airport"]] + [seg["to_airport"] for seg in route_segments]
+    route_summary = " -> ".join(route_points)
+    segment_count = len(route_segments)
+    per_segment_budget = max_price / max(segment_count, 1)
+    cabin_label = str(cabin_class or "economy").replace("_", " ").title()
+
+    airline_profiles = [
+        {"code": "JL", "airline": "Japan Airlines", "stops": 0, "price_mult": 0.86, "duration_mult": 0.94},
+        {"code": "NH", "airline": "ANA", "stops": 0, "price_mult": 0.92, "duration_mult": 0.90},
+        {"code": "EK", "airline": "Emirates", "stops": 1, "price_mult": 0.78, "duration_mult": 1.12},
+    ]
+
+    options: list[dict[str, Any]] = []
+    for profile_idx, profile in enumerate(airline_profiles):
+        legs = []
+        total_price = 0.0
+        total_stops = 0
+        total_duration_min = 0
+        first_dep_time = None
+        last_arr_time = None
+
+        for seg_idx, seg in enumerate(route_segments):
+            route_seed = sum(ord(ch) for ch in f"{seg['from_airport']}{seg['to_airport']}")
+            base_duration = 210 + (route_seed % 190)
+            seg_stops = profile["stops"] + (1 if profile["stops"] == 0 and route_seed % 11 == 0 else 0)
+            dep_time = seg["depart_time"] + timedelta(hours=profile_idx)
+            duration_min = int(base_duration * profile["duration_mult"]) + (seg_stops * 55)
+            arr_time = dep_time + timedelta(minutes=duration_min)
+            seg_price = max(
+                65.0,
+                round(per_segment_budget * profile["price_mult"] * (0.94 + (seg_idx * 0.05)), 2),
+            )
+
+            total_price += seg_price
+            total_stops += seg_stops
+            total_duration_min += duration_min
+            first_dep_time = first_dep_time or dep_time
+            last_arr_time = arr_time
+            legs.append(
+                {
+                    "from_airport": seg["from_airport"],
+                    "to_airport": seg["to_airport"],
+                    "departure_time": dep_time.isoformat(),
+                    "arrival_time": arr_time.isoformat(),
+                    "duration_minutes": duration_min,
+                    "stops": seg_stops,
+                }
+            )
+
+        options.append(
+            {
+                "source": "mock",
+                "airline": profile["airline"],
+                "departure_airport": route_segments[0]["from_airport"],
+                "arrival_airport": route_segments[-1]["to_airport"],
+                "departure_time": first_dep_time,
+                "arrival_time": last_arr_time,
+                "price_usd": round(total_price, 2),
+                "stops": total_stops,
+                "duration_minutes": total_duration_min,
+                "cabin_class": cabin_label,
+                "route_summary": route_summary,
+                "legs_count": segment_count,
+                "legs": legs,
+                "booking_url": _airline_booking_url(
+                    profile["code"],
+                    origin=route_segments[0]["from_airport"],
+                    destination=route_segments[-1]["to_airport"],
+                    depart_date=_segment_departure_date(route_segments[0], 1),
+                    return_date=_segment_departure_date(route_segments[-1], segment_count + 1),
+                ),
+            }
+        )
+    return options
+
+
+def _build_live_flight_options(
+    *,
+    route_segments: list[dict[str, Any]],
+    max_price: float,
+    cabin_class: str,
+) -> tuple[list[dict[str, Any]], str]:
+    if not _amadeus_credentials_configured():
+        return [], "amadeus_credentials_missing"
+
+    if not route_segments:
+        return [], "missing_route_segments"
+
+    segment_budget_cap = max(80.0, (max_price / max(len(route_segments), 1)) * 1.2)
+    segment_results: list[list[dict[str, Any]]] = []
+    for idx, seg in enumerate(route_segments):
+        dep_date = _segment_departure_date(seg, idx + 1)
+        offers = _search_amadeus_segment(
+            from_airport=seg["from_airport"],
+            to_airport=seg["to_airport"],
+            depart_date=dep_date,
+            cabin_class=cabin_class,
+            max_price=segment_budget_cap,
+            max_results=12,
+        )
+        if not offers:
+            return [], f"amadeus_no_results_segment_{idx + 1}"
+        segment_results.append(offers)
+
+    lead_segment = segment_results[0]
+    carrier_candidates: list[str] = []
+    for offer in lead_segment:
+        carrier_code = str(offer.get("carrier_code") or "")
+        if carrier_code and carrier_code not in carrier_candidates:
+            carrier_candidates.append(carrier_code)
+        if len(carrier_candidates) >= 4:
+            break
+
+    if not carrier_candidates:
+        for offers in segment_results:
+            for offer in offers:
+                carrier_code = str(offer.get("carrier_code") or "")
+                if carrier_code and carrier_code not in carrier_candidates:
+                    carrier_candidates.append(carrier_code)
+                if len(carrier_candidates) >= 4:
+                    break
+            if len(carrier_candidates) >= 4:
+                break
+
+    route_points = [route_segments[0]["from_airport"]] + [seg["to_airport"] for seg in route_segments]
+    route_summary = " -> ".join(route_points)
+    cabin_label = str(cabin_class or "economy").replace("_", " ").title()
+    options: list[dict[str, Any]] = []
+
+    for carrier_code in carrier_candidates[:3]:
+        option_legs = []
+        total_price = 0.0
+        total_stops = 0
+        total_duration = 0
+        first_dep = None
+        last_arr = None
+        airline_name = ""
+        booking_url = ""
+
+        for seg_idx, offers in enumerate(segment_results):
+            preferred = [item for item in offers if item.get("carrier_code") == carrier_code]
+            chosen = preferred[0] if preferred else offers[0]
+            total_price += float(chosen.get("price_usd") or 0.0)
+            total_stops += int(chosen.get("stops") or 0)
+            total_duration += int(chosen.get("duration_minutes") or 0)
+            if first_dep is None:
+                first_dep = chosen["departure_time"]
+            last_arr = chosen["arrival_time"]
+            if not airline_name:
+                airline_name = str(chosen.get("airline_name") or carrier_code)
+            if not booking_url:
+                booking_url = str(chosen.get("booking_url") or "")
+
+            option_legs.append(
+                {
+                    "from_airport": route_segments[seg_idx]["from_airport"],
+                    "to_airport": route_segments[seg_idx]["to_airport"],
+                    "departure_time": chosen["departure_time"].isoformat(),
+                    "arrival_time": chosen["arrival_time"].isoformat(),
+                    "duration_minutes": int(chosen.get("duration_minutes") or 0),
+                    "stops": int(chosen.get("stops") or 0),
+                }
+            )
+
+        if not booking_url:
+            booking_url = _airline_booking_url(
+                carrier_code,
+                origin=route_segments[0]["from_airport"],
+                destination=route_segments[-1]["to_airport"],
+                depart_date=_segment_departure_date(route_segments[0], 1),
+                return_date=_segment_departure_date(route_segments[-1], len(route_segments) + 1),
+            )
+
+        options.append(
+            {
+                "source": "amadeus",
+                "airline": airline_name or carrier_code or "Airline",
+                "departure_airport": route_segments[0]["from_airport"],
+                "arrival_airport": route_segments[-1]["to_airport"],
+                "departure_time": first_dep or route_segments[0]["depart_time"],
+                "arrival_time": last_arr or route_segments[-1]["depart_time"],
+                "price_usd": round(total_price, 2),
+                "stops": total_stops,
+                "duration_minutes": total_duration,
+                "cabin_class": cabin_label,
+                "route_summary": route_summary,
+                "legs_count": len(route_segments),
+                "legs": option_legs,
+                "booking_url": booking_url,
+            }
+        )
+
+    options.sort(key=lambda item: (item["price_usd"], item["duration_minutes"], item["stops"]))
+    return options[:3], ""
+
+
+def _make_leg_id(segment: dict[str, Any], idx: int) -> str:
+    depart_date = _segment_departure_date(segment, idx + 1)
+    return f"leg-{idx + 1}-{segment['from_airport']}-{segment['to_airport']}-{depart_date}"
+
+
+def _build_mock_leg_option_groups(
+    *,
+    route_segments: list[dict[str, Any]],
+    max_price: float,
+    cabin_class: str,
+) -> list[dict[str, Any]]:
+    carriers = [
+        ("DL", "Delta"),
+        ("UA", "United"),
+        ("AA", "American Airlines"),
+        ("AS", "Alaska Airlines"),
+        ("B6", "JetBlue"),
+        ("NH", "ANA"),
+        ("JL", "Japan Airlines"),
+        ("BA", "British Airways"),
+        ("AF", "Air France"),
+        ("EK", "Emirates"),
+    ]
+    cabin_label = str(cabin_class or "economy").replace("_", " ").title()
+    per_segment_budget = max_price / max(len(route_segments), 1)
+    leg_groups: list[dict[str, Any]] = []
+
+    for idx, segment in enumerate(route_segments):
+        base_dep = segment["depart_time"]
+        route_seed = sum(ord(ch) for ch in f"{segment['from_airport']}{segment['to_airport']}")
+        leg_id = _make_leg_id(segment, idx)
+        options: list[dict[str, Any]] = []
+        for opt_idx, (carrier_code, airline_name) in enumerate(carriers):
+            dep_time = base_dep + timedelta(minutes=opt_idx * 55)
+            base_duration = 120 + (route_seed % 260) + (opt_idx * 9)
+            stops = 0 if opt_idx < 3 else (1 if opt_idx < 8 else 2)
+            duration_min = base_duration + (stops * 60)
+            arr_time = dep_time + timedelta(minutes=duration_min)
+            price_factor = 0.58 + (opt_idx * 0.047)
+            price = min(
+                max_price,
+                max(45.0, round(per_segment_budget * price_factor + (idx * 6.5), 2)),
+            )
+            options.append(
+                {
+                    "leg_id": leg_id,
+                    "airline": airline_name,
+                    "carrier_code": carrier_code,
+                    "departure_airport": segment["from_airport"],
+                    "arrival_airport": segment["to_airport"],
+                    "departure_time": dep_time,
+                    "arrival_time": arr_time,
+                    "price_usd": price,
+                    "stops": stops,
+                    "duration_minutes": duration_min,
+                    "cabin_class": cabin_label,
+                    "booking_url": _airline_booking_url(
+                        carrier_code,
+                        origin=segment["from_airport"],
+                        destination=segment["to_airport"],
+                        depart_date=_segment_departure_date(segment, idx + 1),
+                    ),
+                    "source": "mock",
+                }
+            )
+        leg_groups.append(
+            {
+                "leg_id": leg_id,
+                "from_airport": segment["from_airport"],
+                "to_airport": segment["to_airport"],
+                "depart_date": _segment_departure_date(segment, idx + 1),
+                "options": options,
+            }
+        )
+    return leg_groups
+
+
+def _build_live_leg_option_groups(
+    *,
+    route_segments: list[dict[str, Any]],
+    max_price: float,
+    cabin_class: str,
+) -> tuple[list[dict[str, Any]], str]:
+    if not _amadeus_credentials_configured():
+        return [], "amadeus_credentials_missing"
+    if not route_segments:
+        return [], "missing_route_segments"
+
+    per_segment_budget = max(80.0, (max_price / max(len(route_segments), 1)) * 1.35)
+    leg_groups: list[dict[str, Any]] = []
+    for idx, segment in enumerate(route_segments):
+        depart_date = _segment_departure_date(segment, idx + 1)
+        offers: list[dict[str, Any]] = []
+        # Try strict budget first, then relax pricing and date constraints if inventory is sparse.
+        date_candidates: list[str] = [depart_date]
+        try:
+            dep = date.fromisoformat(depart_date)
+            date_candidates.extend(
+                [
+                    (dep + timedelta(days=1)).isoformat(),
+                    (dep - timedelta(days=1)).isoformat(),
+                    (dep + timedelta(days=2)).isoformat(),
+                    (dep - timedelta(days=2)).isoformat(),
+                ]
+            )
+        except Exception:
+            pass
+        dedup_dates: list[str] = []
+        for cand in date_candidates:
+            if cand not in dedup_dates:
+                dedup_dates.append(cand)
+
+        last_error = ""
+        merged_offers: dict[str, dict[str, Any]] = {}
+        for dep_candidate in dedup_dates:
+            for price_cap in (per_segment_budget, 0.0):
+                try:
+                    attempt_offers = _search_amadeus_segment(
+                        from_airport=segment["from_airport"],
+                        to_airport=segment["to_airport"],
+                        depart_date=dep_candidate,
+                        cabin_class=cabin_class,
+                        max_price=price_cap,
+                        max_results=30,
+                    )
+                except Exception as exc:
+                    last_error = str(exc)
+                    continue
+                for offer in attempt_offers:
+                    dep_val = offer.get("departure_time")
+                    arr_val = offer.get("arrival_time")
+                    dep_iso = dep_val.isoformat() if isinstance(dep_val, datetime) else str(dep_val or "")
+                    arr_iso = arr_val.isoformat() if isinstance(arr_val, datetime) else str(arr_val or "")
+                    key = "|".join(
+                        [
+                            str(offer.get("carrier_code") or ""),
+                            str(offer.get("departure_airport") or ""),
+                            str(offer.get("arrival_airport") or ""),
+                            dep_iso,
+                            arr_iso,
+                            f"{float(offer.get('price_usd') or 0.0):.2f}",
+                        ]
+                    )
+                    merged_offers[key] = offer
+                # Keep expanding if inventory is sparse on the requested date.
+                if dep_candidate == depart_date and len(merged_offers) >= 8:
+                    break
+                if len(merged_offers) >= 20:
+                    break
+            if dep_candidate == depart_date and len(merged_offers) >= 8:
+                break
+            if len(merged_offers) >= 20:
+                break
+        offers = sorted(
+            merged_offers.values(),
+            key=lambda item: (float(item.get("price_usd") or 0.0), int(item.get("duration_minutes") or 0), int(item.get("stops") or 0)),
+        )
+
+        if not offers:
+            if last_error:
+                return [], last_error
+            return [], f"amadeus_no_results_segment_{idx + 1}"
+
+        leg_id = _make_leg_id(segment, idx)
+        options: list[dict[str, Any]] = []
+        for offer in offers[:20]:
+            options.append(
+                {
+                    "leg_id": leg_id,
+                    "airline": offer.get("airline_name") or offer.get("carrier_code") or "Airline",
+                    "carrier_code": offer.get("carrier_code") or "",
+                    "departure_airport": offer.get("departure_airport") or segment["from_airport"],
+                    "arrival_airport": offer.get("arrival_airport") or segment["to_airport"],
+                    "departure_time": offer.get("departure_time") or segment["depart_time"],
+                    "arrival_time": offer.get("arrival_time") or (segment["depart_time"] + timedelta(hours=4)),
+                    "price_usd": float(offer.get("price_usd") or 0),
+                    "stops": int(offer.get("stops") or 0),
+                    "duration_minutes": int(offer.get("duration_minutes") or 0),
+                    "cabin_class": str(cabin_class or "economy").replace("_", " ").title(),
+                    "booking_url": offer.get("booking_url") or _airline_booking_url(
+                        offer.get("carrier_code") or "",
+                        origin=segment["from_airport"],
+                        destination=segment["to_airport"],
+                        depart_date=depart_date,
+                    ),
+                    "source": "amadeus",
+                }
+            )
+        leg_groups.append(
+            {
+                "leg_id": leg_id,
+                "from_airport": segment["from_airport"],
+                "to_airport": segment["to_airport"],
+                "depart_date": depart_date,
+                "options": options,
+            }
+        )
+    return leg_groups, ""
 
 
 def _extract_json_block(raw: str) -> dict[str, Any]:
@@ -1631,139 +2285,116 @@ async def search_flights(
 ):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
+
+    def _airport_code(value: str, fallback: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z]", "", str(value or "").upper())
+        if len(cleaned) >= 3:
+            return cleaned[:3]
+        return fallback
+
+    def _parse_departure(raw_date: str, fallback_offset_days: int) -> datetime:
+        try:
+            parsed = date.fromisoformat(str(raw_date)[:10])
+            return datetime.combine(parsed, time(8, 0), tzinfo=timezone.utc)
+        except Exception:
+            return datetime.now(timezone.utc) + timedelta(days=max(1, fallback_offset_days))
+
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
         budget = await conn.fetchrow("SELECT breakdown FROM budgets WHERE trip_id = $1", trip_id)
         budget_breakdown = _json_obj(budget["breakdown"]) if budget else {}
         max_price = float(budget_breakdown.get("flights", 500))
+
+    start_airport = _airport_code(body.origin, "LAX")
+    first_arrival = _airport_code(body.destination, "NRT")
+    route_segments: list[dict[str, Any]] = []
+    for idx, seg in enumerate(body.multi_city_segments):
+        seg_from = _airport_code(seg.from_airport, start_airport)
+        seg_to = _airport_code(seg.to_airport, first_arrival)
+        if seg_from == seg_to:
+            continue
+        route_segments.append(
+            {
+                "from_airport": seg_from,
+                "to_airport": seg_to,
+                "depart_time": _parse_departure(seg.depart_date, idx + 1),
+            }
+        )
+
+    if not route_segments:
+        route_segments.append(
+            {
+                "from_airport": start_airport,
+                "to_airport": first_arrival,
+                "depart_time": _parse_departure(body.depart_date, 1),
+            }
+        )
+
+    if body.round_trip and route_segments:
+        last_to = route_segments[-1]["to_airport"]
+        last_dep = route_segments[-1]["depart_time"]
+        if last_to != start_airport:
+            return_dep = _parse_departure(body.return_date or body.depart_date, len(route_segments) + 1)
+            if return_dep <= last_dep:
+                return_dep = last_dep + timedelta(days=2)
+            route_segments.append(
+                {
+                    "from_airport": last_to,
+                    "to_airport": start_airport,
+                    "depart_time": return_dep,
+                }
+            )
+
+    live_error = ""
+    leg_groups: list[dict[str, Any]] = []
+    option_source = "amadeus"
+    try:
+        live_leg_groups, live_error = await asyncio.to_thread(
+            _build_live_leg_option_groups,
+            route_segments=route_segments,
+            max_price=max_price,
+            cabin_class=body.cabin_class or "economy",
+        )
+        leg_groups = live_leg_groups
+    except Exception as exc:
+        live_error = str(exc)
+        leg_groups = []
+
+    if not leg_groups:
+        option_source = "mock"
+        leg_groups = _build_mock_leg_option_groups(
+            route_segments=route_segments,
+            max_price=max_price,
+            cabin_class=body.cabin_class or "economy",
+        )
+
+    flights: list[dict[str, Any]] = []
+    legs_response: list[dict[str, Any]] = []
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
         await conn.execute("DELETE FROM flight_options WHERE trip_id = $1", trip_id)
-
-        def _airport_code(value: str, fallback: str) -> str:
-            cleaned = re.sub(r"[^A-Za-z]", "", str(value or "").upper())
-            if len(cleaned) >= 3:
-                return cleaned[:3]
-            return fallback
-
-        def _parse_departure(raw_date: str, fallback_offset_days: int) -> datetime:
-            try:
-                parsed = date.fromisoformat(str(raw_date)[:10])
-                return datetime.combine(parsed, time(8, 0), tzinfo=timezone.utc)
-            except Exception:
-                return datetime.now(timezone.utc) + timedelta(days=max(1, fallback_offset_days))
-
-        start_airport = _airport_code(body.origin, "LAX")
-        first_arrival = _airport_code(body.destination, "NRT")
-        route_segments: list[dict[str, Any]] = []
-
-        for idx, seg in enumerate(body.multi_city_segments):
-            seg_from = _airport_code(seg.from_airport, start_airport)
-            seg_to = _airport_code(seg.to_airport, first_arrival)
-            if seg_from == seg_to:
-                continue
-            route_segments.append(
-                {
-                    "from_airport": seg_from,
-                    "to_airport": seg_to,
-                    "depart_time": _parse_departure(seg.depart_date, idx + 1),
-                }
-            )
-
-        if not route_segments:
-            route_segments.append(
-                {
-                    "from_airport": start_airport,
-                    "to_airport": first_arrival,
-                    "depart_time": _parse_departure(body.depart_date, 1),
-                }
-            )
-
-        if body.round_trip and route_segments:
-            last_to = route_segments[-1]["to_airport"]
-            last_dep = route_segments[-1]["depart_time"]
-            if last_to != start_airport:
-                return_dep = _parse_departure(body.return_date or body.depart_date, len(route_segments) + 1)
-                if return_dep <= last_dep:
-                    return_dep = last_dep + timedelta(days=2)
-                route_segments.append(
-                    {
-                        "from_airport": last_to,
-                        "to_airport": start_airport,
-                        "depart_time": return_dep,
-                    }
+        for leg in leg_groups:
+            leg_options_response: list[dict[str, Any]] = []
+            for option in leg.get("options", []):
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO flight_options (trip_id, airline, departure_airport, arrival_airport, departure_time, arrival_time, price_usd, stops, duration_min, selected)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)
+                    RETURNING id, airline, departure_airport, arrival_airport, departure_time, arrival_time, price_usd, stops, duration_min
+                    """,
+                    trip_id,
+                    option["airline"],
+                    option["departure_airport"],
+                    option["arrival_airport"],
+                    option["departure_time"],
+                    option["arrival_time"],
+                    option["price_usd"],
+                    option["stops"],
+                    option["duration_minutes"],
                 )
-
-        route_points = [route_segments[0]["from_airport"]] + [seg["to_airport"] for seg in route_segments]
-        route_summary = " -> ".join(route_points)
-        segment_count = len(route_segments)
-        per_segment_budget = max_price / max(segment_count, 1)
-
-        airline_profiles = [
-            {"airline": "Japan Airlines", "stops": 0, "price_mult": 0.86, "duration_mult": 0.94},
-            {"airline": "ANA", "stops": 0, "price_mult": 0.92, "duration_mult": 0.90},
-            {"airline": "Emirates", "stops": 1, "price_mult": 0.78, "duration_mult": 1.12},
-        ]
-
-        flights = []
-        for profile_idx, profile in enumerate(airline_profiles):
-            legs = []
-            total_price = 0.0
-            total_stops = 0
-            total_duration_min = 0
-            first_dep_time = None
-            last_arr_time = None
-
-            for seg_idx, seg in enumerate(route_segments):
-                route_seed = sum(ord(ch) for ch in f"{seg['from_airport']}{seg['to_airport']}")
-                base_duration = 210 + (route_seed % 190)
-                seg_stops = profile["stops"] + (1 if profile["stops"] == 0 and route_seed % 11 == 0 else 0)
-                dep_time = seg["depart_time"] + timedelta(hours=profile_idx)
-                duration_min = int(base_duration * profile["duration_mult"]) + (seg_stops * 55)
-                arr_time = dep_time + timedelta(minutes=duration_min)
-                seg_price = max(
-                    65.0,
-                    round(
-                        per_segment_budget
-                        * profile["price_mult"]
-                        * (0.94 + (seg_idx * 0.05)),
-                        2,
-                    ),
-                )
-
-                total_price += seg_price
-                total_stops += seg_stops
-                total_duration_min += duration_min
-                first_dep_time = first_dep_time or dep_time
-                last_arr_time = arr_time
-                legs.append(
-                    {
-                        "from_airport": seg["from_airport"],
-                        "to_airport": seg["to_airport"],
-                        "departure_time": dep_time.isoformat(),
-                        "arrival_time": arr_time.isoformat(),
-                        "duration_minutes": duration_min,
-                        "stops": seg_stops,
-                    }
-                )
-
-            row = await conn.fetchrow(
-                """
-                INSERT INTO flight_options (trip_id, airline, departure_airport, arrival_airport, departure_time, arrival_time, price_usd, stops, duration_min, selected)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)
-                RETURNING id, airline, departure_airport, arrival_airport, departure_time, arrival_time, price_usd, stops, duration_min
-                """,
-                trip_id,
-                profile["airline"],
-                route_segments[0]["from_airport"],
-                route_segments[-1]["to_airport"],
-                first_dep_time,
-                last_arr_time,
-                round(total_price, 2),
-                total_stops,
-                total_duration_min,
-            )
-            flights.append(
-                {
+                option_payload = {
                     "flight_id": str(row["id"]),
+                    "leg_id": leg.get("leg_id", ""),
                     "airline": row["airline"],
                     "departure_airport": row["departure_airport"],
                     "arrival_airport": row["arrival_airport"],
@@ -1772,18 +2403,37 @@ async def search_flights(
                     "price_usd": float(row["price_usd"]),
                     "stops": int(row["stops"] or 0),
                     "duration_minutes": int(row["duration_min"] or 0),
-                    "cabin_class": (body.cabin_class or "economy").title(),
-                    "route_summary": route_summary,
-                    "legs_count": segment_count,
-                    "legs": legs,
+                    "cabin_class": option.get("cabin_class", (body.cabin_class or "economy").title()),
+                    "route_summary": f"{row['departure_airport']} -> {row['arrival_airport']}",
+                    "legs_count": 1,
+                    "legs": [],
+                    "booking_url": option.get("booking_url", ""),
+                    "source": option_source,
+                }
+                flights.append(option_payload)
+                leg_options_response.append(option_payload)
+            legs_response.append(
+                {
+                    "leg_id": leg.get("leg_id", ""),
+                    "from_airport": leg.get("from_airport", ""),
+                    "to_airport": leg.get("to_airport", ""),
+                    "depart_date": leg.get("depart_date", ""),
+                    "options": leg_options_response,
                 }
             )
+
+    segment_count = len(route_segments)
+    total_options = sum(len(leg.get("options", [])) for leg in legs_response)
     return {
         "flights": flights,
+        "legs": legs_response,
         "search_params": {
             "max_price": max_price,
             "round_trip": bool(body.round_trip),
             "segments": segment_count,
+            "total_options": total_options,
+            "source": option_source,
+            "live_error": live_error or None,
         },
     }
 
@@ -1800,38 +2450,99 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
         budget_breakdown = _json_obj(budget["breakdown"])
         allocation = float(budget_breakdown.get("flights", 0))
 
-        row = None
-        try:
-            UUID(str(body.flight_id))
-            row = await conn.fetchrow(
-                "SELECT id, price_usd FROM flight_options WHERE id = $1 AND trip_id = $2",
-                body.flight_id,
+        requested_ids: list[str] = []
+        if body.leg_selections:
+            requested_ids = [str(item.flight_id).strip() for item in body.leg_selections if str(item.flight_id).strip()]
+        elif body.flight_id:
+            requested_ids = [str(body.flight_id).strip()]
+        if not requested_ids:
+            raise HTTPException(status_code=400, detail="No flight selection provided")
+
+        uuid_ids: list[UUID] = []
+        invalid_count = 0
+        for raw_id in requested_ids:
+            try:
+                uuid_ids.append(UUID(raw_id))
+            except ValueError:
+                invalid_count += 1
+
+        if uuid_ids:
+            selected_rows = await conn.fetch(
+                """
+                SELECT id, price_usd, departure_airport, arrival_airport, departure_time
+                FROM flight_options
+                WHERE trip_id = $1 AND id = ANY($2::uuid[])
+                """,
                 trip_id,
+                uuid_ids,
             )
-        except ValueError:
-            row = None
-        price = float(body.price_usd) if body.price_usd is not None else (float(row["price_usd"]) if row else None)
-        if price is None:
+        else:
+            selected_rows = []
+
+        if not selected_rows and invalid_count > 0 and body.price_usd is not None:
+            price = float(body.price_usd)
+            if price > allocation and not body.force:
+                await conn.execute("UPDATE budgets SET warning_active = true WHERE trip_id = $1", trip_id)
+                raise HTTPException(status_code=422, detail="Flight exceeds allocation")
             raise HTTPException(status_code=404, detail="Flight not found")
-        if price > allocation and not body.force:
+
+        if len(selected_rows) != len(uuid_ids):
+            raise HTTPException(status_code=404, detail="One or more selected flights were not found")
+
+        if body.leg_selections:
+            leg_keys = {
+                f"{row['departure_airport']}->{row['arrival_airport']}:{row['departure_time'].date().isoformat()}"
+                for row in selected_rows
+            }
+            if len(leg_keys) != len(selected_rows):
+                raise HTTPException(status_code=422, detail="Select at most one flight per leg")
+
+        selected_total = round(sum(float(row["price_usd"] or 0) for row in selected_rows), 2)
+        if selected_total > allocation and not body.force:
             await conn.execute("UPDATE budgets SET warning_active = true WHERE trip_id = $1", trip_id)
             raise HTTPException(status_code=422, detail="Flight exceeds allocation")
 
-        await conn.execute("UPDATE flight_options SET selected = false WHERE trip_id = $1", trip_id)
-        if row:
-            await conn.execute("UPDATE flight_options SET selected = true WHERE id = $1", body.flight_id)
+        previous_total = float(
+            await conn.fetchval(
+                "SELECT COALESCE(SUM(price_usd), 0) FROM flight_options WHERE trip_id = $1 AND selected = true",
+                trip_id,
+            )
+            or 0
+        )
+        delta = round(selected_total - previous_total, 2)
 
-        spent = round(float(budget["spent"] or 0) + price, 2)
+        await conn.execute("UPDATE flight_options SET selected = false WHERE trip_id = $1", trip_id)
+        if uuid_ids:
+            await conn.execute(
+                "UPDATE flight_options SET selected = true WHERE trip_id = $1 AND id = ANY($2::uuid[])",
+                trip_id,
+                uuid_ids,
+            )
+
+        spent = round(float(budget["spent"] or 0) + delta, 2)
         total_budget = float(budget["total_budget"] or 0)
         remaining = round(total_budget - spent, 2)
         await conn.execute(
             "UPDATE budgets SET spent = $1, remaining = $2, warning_active = false WHERE trip_id = $3",
             spent,
             remaining,
-            trip_id,
+                trip_id,
         )
         updated = await conn.fetchrow("SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1", trip_id)
-    return {"selected": True, "budget": {"currency": updated["currency"], "daily_target": float(updated["daily_target"]), "total_budget": float(updated["total_budget"]), "spent": float(updated["spent"]), "remaining": float(updated["remaining"]), "breakdown": _json_obj(updated["breakdown"]), "warning_active": bool(updated["warning_active"])}}
+    return {
+        "selected": True,
+        "selected_count": len(selected_rows),
+        "selected_flight_ids": [str(row["id"]) for row in selected_rows],
+        "budget": {
+            "currency": updated["currency"],
+            "daily_target": float(updated["daily_target"]),
+            "total_budget": float(updated["total_budget"]),
+            "spent": float(updated["spent"]),
+            "remaining": float(updated["remaining"]),
+            "breakdown": _json_obj(updated["breakdown"]),
+            "warning_active": bool(updated["warning_active"]),
+        },
+    }
 
 
 @app.post("/trips/{trip_id}/stays/search")
