@@ -10,6 +10,7 @@ var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","
 
 function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"translateY(0)":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
 function Avi(props){var s=props.size||28;return(<div title={props.name||""} style={{width:s,height:s,borderRadius:999,background:props.color||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:s*.4,fontWeight:700,color:"#fff",flexShrink:0,border:"1.5px solid "+C.surface}}>{props.ini||"?"}</div>);}
+function TrashIcon(props){var s=props.size||14;var c=props.color||"currentColor";return(<svg width={s} height={s} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16" stroke={c} strokeWidth="2" strokeLinecap="round"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" stroke={c} strokeWidth="2" strokeLinecap="round"/><path d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9l1-12" stroke={c} strokeWidth="2" strokeLinecap="round"/><path d="M10 11v6M14 11v6" stroke={c} strokeWidth="2" strokeLinecap="round"/></svg>);}
 
 async function ld(k,fb){
   try{
@@ -172,6 +173,14 @@ function crewStatusLabel(rawStatus){
   if(st==="declined")return "declined";
   if(st==="link_only")return "link only";
   return st||"unknown";
+}
+
+function crewRelationLabel(rawRelation){
+  var rel=String(rawRelation||"").trim().toLowerCase();
+  if(rel==="invitee")return "invitee";
+  if(rel==="inviter")return "inviter";
+  if(rel==="owner"||rel==="self")return "account holder";
+  return "crew member";
 }
 
 function toTripMember(member, tripStatus){
@@ -430,11 +439,15 @@ export default function WanderPlan(){
   var[resetPass,setResetPass]=useState("");
   var[rememberCreds,setRememberCreds]=useState(false);
   var[signinLoad,setSigninLoad]=useState(false);
+  var[vpW,setVpW]=useState(typeof window!=="undefined"&&window.innerWidth?window.innerWidth:1024);
+  var[profileHydrated,setPH]=useState(false);
   var[authErr,setAE]=useState("");
   var[authInfo,setAI]=useState("");
   var[wizSessionId,setWSID]=useState("");
   var[currentTripId,setCTID]=useState("");
   var[crewMsg,setCM]=useState("");
+  var[crewInviteLink,setCIL]=useState("");
+  var[crewInviteCopyMsg,setCICM]=useState("");
   var[tripInviteMsg,setTIM]=useState("");
   var[pendingInviteToken,setPIT]=useState("");
   var[pendingInviteAction,setPIA]=useState("accept");
@@ -450,6 +463,7 @@ export default function WanderPlan(){
   var[blChat,setBC]=useState([{from:"agent",text:"Tell me a place you dream of visiting! Be as vague or specific as you like."}]);
   var[blIn,setBLI]=useState("");
   var[blLoad,setBLL]=useState(false);
+  var[bucketMsg,setBM]=useState("");
   var[invEmail,setIE]=useState("");
   var chatRef=useRef(null);
   var inviteAcceptSeenRef=useRef({});
@@ -540,6 +554,7 @@ export default function WanderPlan(){
           setUser(function(p){return Object.assign({},p,{name:prof.profile.display_name||p.name,email:p.email,styles:prof.profile.travel_styles||[],interests:prof.profile.interests||{},budget:prof.profile.budget_tier||p.budget,dietary:prof.profile.dietary||[]});});
         }
       }catch(e){}
+      setPH(true);
       try{
         var bl=await apiJson("/me/bucket-list",{method:"GET"},tok);
         if(bl&&Array.isArray(bl.items)&&bl.items.length>=0)setBucket(bl.items.map(function(it){return Object.assign({id:it.id},it);}));
@@ -549,7 +564,7 @@ export default function WanderPlan(){
         if(peers&&Array.isArray(peers.peers)){
           setCrew(peers.peers.map(function(p,i){
             var dn=(p.profile&&p.profile.display_name)||p.name||p.email||("Member "+(i+1));
-            return {id:p.peer_user_id,name:dn,ini:iniFromName(dn),color:CREW_COLORS[i%CREW_COLORS.length],status:"accepted",email:p.email||"",profile:(p&&p.profile&&typeof p.profile==="object")?p.profile:{}};
+            return {id:p.peer_user_id,name:dn,ini:iniFromName(dn),color:CREW_COLORS[i%CREW_COLORS.length],status:"accepted",email:p.email||"",profile:(p&&p.profile&&typeof p.profile==="object")?p.profile:{},relation:"crew"};
           }));
         }
       }catch(e){}
@@ -565,9 +580,18 @@ export default function WanderPlan(){
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
   useEffect(function(){if(chatRef.current)chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
   useEffect(function(){if(sc==="new_trip")setTIM("");},[sc]);
+  useEffect(function(){
+    if(typeof window==="undefined")return;
+    function onResize(){
+      setVpW(window.innerWidth||1024);
+    }
+    onResize();
+    window.addEventListener("resize",onResize);
+    return function(){window.removeEventListener("resize",onResize);};
+  },[]);
 
   useEffect(function(){
-    if(!loaded||!authToken)return;
+    if(!loaded||!authToken||!profileHydrated)return;
     var t=setTimeout(function(){
       apiJson("/me/profile",{method:"PUT",body:{
         display_name:user.name||"",
@@ -578,7 +602,7 @@ export default function WanderPlan(){
       }},authToken).catch(function(){});
     },700);
     return function(){clearTimeout(t);};
-  },[user,authToken,loaded]);
+  },[user,authToken,loaded,profileHydrated]);
 
   function go(s){setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
   function back(){if(!hist.length)return;setFade(true);setTimeout(function(){setSc(hist[hist.length-1]);setHist(function(h){return h.slice(0,-1);});setFade(false);},200);}
@@ -598,17 +622,18 @@ export default function WanderPlan(){
         if(em&&emailToIdx[em]!==undefined){
           var idx=emailToIdx[em];
           var cur=next[idx]||{};
-          next[idx]=Object.assign({},cur,{
-            id:cur.id||p.peer_user_id||("m"+Date.now()),
-            name:dn||cur.name||"Member",
-            ini:cur.ini||iniFromName(dn),
-            color:cur.color||CREW_COLORS[idx%CREW_COLORS.length],
-            status:"accepted",
-            email:em,
-            profile:(p&&p.profile&&typeof p.profile==="object")?p.profile:(cur.profile||{})
-          });
-          return;
-        }
+            next[idx]=Object.assign({},cur,{
+              id:cur.id||p.peer_user_id||("m"+Date.now()),
+              name:dn||cur.name||"Member",
+              ini:cur.ini||iniFromName(dn),
+              color:cur.color||CREW_COLORS[idx%CREW_COLORS.length],
+              status:"accepted",
+              email:em,
+              profile:(p&&p.profile&&typeof p.profile==="object")?p.profile:(cur.profile||{}),
+              relation:cur.relation||"crew"
+            });
+            return;
+          }
         var nidx=next.length;
         next.push({
           id:(p&&p.peer_user_id)||("m"+Date.now()+"-"+nidx),
@@ -617,7 +642,8 @@ export default function WanderPlan(){
           color:CREW_COLORS[nidx%CREW_COLORS.length],
           status:"accepted",
           email:em,
-          profile:(p&&p.profile&&typeof p.profile==="object")?p.profile:{}
+          profile:(p&&p.profile&&typeof p.profile==="object")?p.profile:{},
+          relation:"crew"
         });
         if(em)emailToIdx[em]=nidx;
       });
@@ -652,7 +678,7 @@ export default function WanderPlan(){
             if(emailToIdx[em]!==undefined){
               var idx=emailToIdx[em];
               var cur=next[idx]||{};
-              next[idx]=Object.assign({},cur,{status:mapped,email:em});
+              next[idx]=Object.assign({},cur,{status:mapped,email:em,relation:"invitee"});
               return;
             }
             var ni=next.length;
@@ -662,7 +688,8 @@ export default function WanderPlan(){
               ini:em.substring(0,2).toUpperCase(),
               color:CREW_COLORS[ni%CREW_COLORS.length],
               status:mapped,
-              email:em
+              email:em,
+              relation:"invitee"
             });
             emailToIdx[em]=ni;
           });
@@ -1035,6 +1062,29 @@ export default function WanderPlan(){
       window.history.replaceState(null,"",window.location.pathname+(q?("?"+q):"")+cleanHash);
     }catch(e){}
   }
+  async function copyCrewInviteLink(){
+    var link=String(crewInviteLink||"").trim();
+    if(!link)return;
+    try{
+      if(navigator&&navigator.clipboard&&typeof navigator.clipboard.writeText==="function"){
+        await navigator.clipboard.writeText(link);
+      }else{
+        var ta=document.createElement("textarea");
+        ta.value=link;
+        ta.setAttribute("readonly","readonly");
+        ta.style.position="fixed";
+        ta.style.opacity="0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCICM("Invite link copied.");
+    }catch(e){
+      setCICM("Copy failed. Please copy manually.");
+    }
+    setTimeout(function(){setCICM("");},1800);
+  }
   async function acceptPendingInvite(token,inviteTokenOverride,inviteActionOverride){
     var inviteToken=(String(inviteTokenOverride||"").trim()||(pendingInviteToken||"").trim()||readInviteTokenFromUrl());
     if(!inviteToken||!token)return;
@@ -1060,6 +1110,7 @@ export default function WanderPlan(){
     try{
       var reg=await apiJson("/auth/login",{method:"POST",body:{email:email,password:signinPass}});
       if(reg&&reg.accessToken){
+        setPH(true);
         if(rememberCreds){
           sv("wp-login-creds",{remember:true,email:email,password:signinPass});
         }else{
@@ -1094,6 +1145,7 @@ export default function WanderPlan(){
     try{
       var reg=await apiJson("/auth/register",{method:"POST",body:{email:email,password:signinPass,name:name}});
       if(reg&&reg.accessToken){
+        setPH(true);
         if(rememberCreds){
           sv("wp-login-creds",{remember:true,email:email,password:signinPass});
         }else{
@@ -1141,35 +1193,65 @@ export default function WanderPlan(){
     return nm+"|"+ct;
   }
 
-  function saveDestinationAsTrip(dest){
-    var nm=String(dest&&dest.name||"").trim();
-    if(!nm)return;
-    var key=destinationTripKey(dest);
-    var country=String(dest&&dest.country||"").trim();
-    setTrips(function(prev){
-      var exists=prev.some(function(t){
-        var dn=String(t.destNames||"").trim().toLowerCase();
-        var nmk=nm.toLowerCase();
-        var ctk=country.toLowerCase();
-        if(dn===nmk||dn===nmk+" ("+ctk+")"||dn===nmk+", "+ctk)return true;
-        return destinationTripKey({name:t.destNames||"",country:""})===key;
-      });
-      if(exists)return prev;
-      var title="Trip to "+nm;
-      return prev.concat([{
-        id:"saved-"+Date.now()+"-"+Math.floor(Math.random()*1000),
-        name:title,
-        status:"saved",
-        destNames:country?(nm+" ("+country+")"):nm,
-        members:[],
-        step:0,
-        dates:"",
-        days:0,
-        budget:0,
-        spent:0
-      }]);
+  function pickDestinationForTrip(dest){
+    var did=String(dest&&dest.id||"").trim();
+    if(!did)return;
+    setNT(function(prev){
+      var p=prev||{};
+      var ds=Array.isArray(p.dests)?p.dests:[];
+      if(ds.indexOf(did)>=0)return p;
+      return Object.assign({},p,{dests:ds.concat([did])});
     });
-    setBC(function(p){return p.concat([{from:"agent",text:"Saved "+nm+" to Trips > Saved."}]);});
+    setCM("Destination selected for your next trip. Continue in Plan a New Trip.");
+    go("new_trip");
+  }
+
+  function isPersistedBucketItem(dest){
+    var id=String(dest&&dest.id||"").trim();
+    if(!id)return false;
+    return !/^d\d+/.test(id)&&id.indexOf("tmp-")!==0;
+  }
+
+  async function saveBucketDestination(dest){
+    if(!dest)return;
+    var nm=String(dest.name||"").trim()||"Destination";
+    if(isPersistedBucketItem(dest)){setBM(nm+" already saved.");setTimeout(function(){setBM("");},1800);return;}
+    if(!authToken){setBM("Sign in required to save bucket destinations.");setTimeout(function(){setBM("");},2200);return;}
+    setBM("Saving "+nm+"...");
+    try{
+      var r=await apiJson("/me/bucket-list",{method:"POST",body:{
+        destination:nm,
+        country:String(dest.country||""),
+        tags:Array.isArray(dest.tags)?dest.tags:[],
+        best_months:Array.isArray(dest.bestMonths)?dest.bestMonths:[],
+        cost_per_day:Number(dest.costPerDay||0)||0,
+        best_time_desc:String(dest.bestTimeDesc||""),
+        cost_note:String(dest.costNote||"")
+      }},authToken);
+      var item=(r&&r.item)?r.item:{};
+      updateBucketItemLocal({
+        id:item.id||dest.id,
+        name:item.name||item.destination||dest.name,
+        country:item.country||dest.country||"",
+        bestMonths:item.bestMonths||item.best_months||dest.bestMonths||[],
+        costPerDay:Number(item.costPerDay||item.cost_per_day||dest.costPerDay||0)||0,
+        tags:item.tags||dest.tags||[],
+        bestTimeDesc:item.bestTimeDesc||item.best_time_desc||dest.bestTimeDesc||"",
+        costNote:item.costNote||item.cost_note||dest.costNote||""
+      });
+      setBM(nm+" saved.");
+    }catch(e){
+      setBM("Could not save "+nm+": "+String(e&&e.message||"error"));
+    }
+    setTimeout(function(){setBM("");},2200);
+  }
+
+  function removeBucketDestination(dest){
+    if(!dest)return;
+    setBucket(function(p){return p.filter(function(x){return x.id!==dest.id;});});
+    if(authToken&&dest.id){apiJson("/me/bucket-list/"+dest.id,{method:"DELETE"},authToken).catch(function(){});}
+    setBM((dest.name||"Destination")+" removed.");
+    setTimeout(function(){setBM("");},1800);
   }
 
   async function sendCrewInvite(opts){
@@ -1177,6 +1259,8 @@ export default function WanderPlan(){
     if(!invEmail)return null;
     var email=invEmail.trim().toLowerCase();
     if(!email)return null;
+    setCICM("");
+    setCIL("");
     if(!authToken){setCM("Sign in required to send invites.");return null;}
     if(!user.email||String(user.email).indexOf("@")<0){setCM("Account email missing. Please sign out and sign in again.");return null;}
     var existing=(crew||[]).find(function(m){return String(m&&m.email||"").trim().toLowerCase()===email;});
@@ -1205,7 +1289,8 @@ export default function WanderPlan(){
         ini:ini,
         color:(existing&&existing.color)||C.purp,
         status:inviteStatus,
-        email:email
+        email:email,
+        relation:"invitee"
       });
       setCrew(function(prev){
         var p=Array.isArray(prev)?prev:[];
@@ -1222,11 +1307,18 @@ export default function WanderPlan(){
         });
       }
       setIE("");
-      if(r&&r.email_sent)setCM("Invite email sent.");
-      else setCM("Email not sent. Share invite link: "+(r&&r.invite_link?r.invite_link:"(link unavailable)"));
+      if(r&&r.email_sent){
+        setCIL("");
+        setCM("Invite email sent.");
+      }else{
+        var link=(r&&r.invite_link)?String(r.invite_link).trim():"";
+        if(link)setCIL(link);
+        setCM(link?"Email not sent. Copy and share this invite link.":"Email not sent and invite link unavailable.");
+      }
       setTimeout(function(){refreshCrewFromBackend();},1200);
       return item;
     }catch(e){
+      setCIL("");
       setCM("Invite failed: "+String(e&&e.message||"error"));
       return null;
     }
@@ -1357,14 +1449,14 @@ export default function WanderPlan(){
           });
         }
         if(!toAdd.length){
-          setBC(function(p){return p.concat([{from:"agent",text:"Those places are already in your bucket list. Use Save to add them to Trips > Saved.",suggestions:proposed}]);});
+          setBC(function(p){return p.concat([{from:"agent",text:"Those places are already in your bucket list. Pick destinations from Bucket List cards when you start planning a trip.",suggestions:proposed}]);});
           return;
         }
 
         function persistAt(idx){
           if(idx>=toAdd.length){
             var names=toAdd.map(function(d){return d.name;}).join(", ");
-            setBC(function(p){return p.concat([{from:"agent",text:"Added "+names+" to your bucket list. Use Save to add any destination to Trips > Saved.",suggestions:proposed}]);});
+            setBC(function(p){return p.concat([{from:"agent",text:"Added "+names+" to your bucket list. Destinations become part of planning only after you pick them in Plan a New Trip.",suggestions:proposed}]);});
             return;
           }
           var d=toAdd[idx];
@@ -1395,26 +1487,39 @@ export default function WanderPlan(){
   var acc=crew.filter(function(m){return m.status==="accepted";});
   var pendingCrewCount=crew.filter(function(m){return m.status==="pending"||m.status==="invited";}).length;
   var inDash=sc==="dash"||sc==="profile"||sc==="crew"||sc==="bucket"||sc==="analytics"||sc==="new_trip"||sc==="wizard"||sc==="trip_detail";
+  var isPhone=vpW<=480;
+  var isNarrow=vpW<=768;
+  var pagePad=isNarrow?12:24;
+  var formPad=isPhone?20:40;
+  var landingPadX=isPhone?16:44;
+  var crewInviteLinkUI=crewInviteLink?(<div style={{marginTop:8,marginBottom:10,padding:"10px 12px",borderRadius:10,background:C.bg,border:"1px solid "+C.border}}>
+    <p style={{fontSize:11,color:C.tx3,marginBottom:6}}>Invite link</p>
+    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+      <input value={crewInviteLink} readOnly style={{flex:1,padding:"9px 11px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:12,color:C.tx2}}/>
+      <button onClick={copyCrewInviteLink} style={{padding:"8px 12px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontSize:12,fontWeight:600,cursor:"pointer"}}>Copy link</button>
+    </div>
+    {crewInviteCopyMsg&&<p style={{fontSize:11,color:C.grn,marginTop:6}}>{crewInviteCopyMsg}</p>}
+  </div>):null;
 
   if(!loaded)return(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",color:C.tx2}}><style>{"body{margin:0}"}</style>Loading...</div>);
 
-  var CSS="body{margin:0;overflow-x:hidden}*{box-sizing:border-box}button{font-family:inherit;cursor:pointer}::placeholder{color:rgba(255,255,255,.22)}input:focus,button:focus{outline:none}@keyframes dotPulse{0%,80%,100%{transform:scale(.5);opacity:.35}40%{transform:scale(1);opacity:1}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:99px}@supports(backdrop-filter:blur(16px)){.glass{backdrop-filter:blur(16px)}}";
+  var CSS="body{margin:0;overflow-x:hidden}*{box-sizing:border-box}button{font-family:inherit;cursor:pointer}input{min-width:0}::placeholder{color:rgba(255,255,255,.22)}input:focus,button:focus{outline:none}@keyframes dotPulse{0%,80%,100%{transform:scale(.5);opacity:.35}40%{transform:scale(1);opacity:1}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:99px}@supports(backdrop-filter:blur(16px)){.glass{backdrop-filter:blur(16px)}}";
 
   return(
-    <div style={{fontFamily:"system-ui,-apple-system,sans-serif",background:C.bg,color:"#fff",minHeight:"100vh"}}>
+    <div style={{fontFamily:"system-ui,-apple-system,sans-serif",background:C.bg,color:"#fff",minHeight:"100vh",overflowX:"hidden"}}>
       <style>{CSS}</style>
       <div style={{opacity:fade?0:1,transition:"opacity .2s"}}>
 
 {sc==="landing"&&(<div style={{minHeight:"100vh",background:"radial-gradient(ellipse at 25% 45%,"+C.bg2+","+C.bg+" 55%)"}}>
-  <Fade delay={80}><nav style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"22px 44px"}}><div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:34,height:34,borderRadius:9,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700}}>W</div><span style={{fontSize:20,fontWeight:700}}>WanderPlan</span></div><button onClick={function(){go("signup");}} style={{fontSize:13.5,fontWeight:600,color:C.bg,background:C.gold,border:"none",borderRadius:9,padding:"9px 22px",cursor:"pointer"}}>Get Started</button></nav></Fade>
-  <div style={{maxWidth:680,margin:"0 auto",padding:"80px 44px 50px"}}>
+  <Fade delay={80}><nav style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:(isPhone?"16px ":"22px ")+landingPadX+"px",gap:10}}><div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}><div style={{width:34,height:34,borderRadius:9,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,flexShrink:0}}>W</div><span style={{fontSize:isPhone?18:20,fontWeight:700,whiteSpace:"nowrap"}}>WanderPlan</span></div><button onClick={function(){go("signup");}} style={{fontSize:13.5,fontWeight:600,color:C.bg,background:C.gold,border:"none",borderRadius:9,padding:isPhone?"8px 14px":"9px 22px",cursor:"pointer",whiteSpace:"nowrap"}}>Get Started</button></nav></Fade>
+  <div style={{maxWidth:680,margin:"0 auto",padding:(isPhone?"52px ":"80px ")+landingPadX+"px 50px"}}>
     <Fade delay={200}><h1 style={{fontSize:44,fontWeight:700,lineHeight:1.1,marginBottom:22}}>Dream it today. <span style={{color:C.gold}}>Plan it</span> when ready.</h1></Fade>
     <Fade delay={400}><p style={{fontSize:17,color:C.tx2,maxWidth:460,lineHeight:1.7,marginBottom:38}}>Save destinations as you discover them. Build your crew. 14 AI agents build your perfect trip.</p></Fade>
     <Fade delay={600}><button onClick={function(){go("signup");}} style={{fontSize:16,fontWeight:600,color:C.bg,padding:"17px 42px",borderRadius:13,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Start your bucket list</button></Fade>
   </div>
 </div>)}
 
-{sc==="signup"&&(<div style={{minHeight:"100vh",background:"radial-gradient(ellipse at 50% 60%,"+C.bg2+","+C.bg+")",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:400,width:"100%",padding:40}}>
+{sc==="signup"&&(<div style={{minHeight:"100vh",background:"radial-gradient(ellipse at 50% 60%,"+C.bg2+","+C.bg+")",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:400,width:"100%",padding:formPad}}>
   <Fade delay={100}><div style={{textAlign:"center",marginBottom:36}}><div style={{width:44,height:44,borderRadius:12,margin:"0 auto 18px",background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700}}>W</div><h2 style={{fontSize:32,fontWeight:700,marginBottom:8}}>{authMode==="signup"?"Sign Up":(authMode==="forgot"?"Forgot Password":"Sign In")}</h2></div></Fade>
   <Fade delay={300}><div style={{display:"flex",flexDirection:"column",gap:12}}>
     {authMode==="signup"&&<input placeholder="Name" value={user.name} onChange={function(e){upU("name",e.target.value);}} style={{width:"100%",padding:"13px 16px",borderRadius:11,background:C.surface,border:"1.5px solid "+C.border,fontSize:14.5,color:"#fff"}}/>}
@@ -1433,30 +1538,30 @@ export default function WanderPlan(){
   </div></Fade>
 </div></div>)}
 
-{sc==="ob1"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:40}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"20%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 1 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>What should we call you?</h2><p style={{fontSize:14,color:C.tx2,marginBottom:28}}>How your crew sees you.</p><input placeholder="Your name" value={user.name} onChange={function(e){upU("name",e.target.value);}} style={{width:"100%",padding:"14px 16px",borderRadius:12,background:C.surface,border:"1.5px solid "+C.border,fontSize:16,color:"#fff"}}/>{user.name.length>0&&<button onClick={function(){go("ob2");}} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Continue</button>}</Fade></div></div>)}
+{sc==="ob1"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:formPad}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"20%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 1 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>What should we call you?</h2><p style={{fontSize:14,color:C.tx2,marginBottom:28}}>How your crew sees you.</p><input placeholder="Your name" value={user.name} onChange={function(e){upU("name",e.target.value);}} style={{width:"100%",padding:"14px 16px",borderRadius:12,background:C.surface,border:"1.5px solid "+C.border,fontSize:16,color:"#fff"}}/>{user.name.length>0&&<button onClick={function(){go("ob2");}} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Continue</button>}</Fade></div></div>)}
 
-{sc==="ob2"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:40}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"40%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 2 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>How do you travel?</h2><p style={{fontSize:14,color:C.tx2,marginBottom:24}}>Select all that apply.</p><div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>{STYLES.map(function(ts){var sel=(user.styles||[]).indexOf(ts.id)>=0;return(<button key={ts.id} onClick={function(){var cur=user.styles||[];upU("styles",cur.indexOf(ts.id)>=0?cur.filter(function(x){return x!==ts.id;}):cur.concat([ts.id]));}} style={{padding:"22px 16px",borderRadius:14,textAlign:"center",cursor:"pointer",background:sel?C.goldDim:C.surface,border:"2px solid "+(sel?C.gold+"50":C.border),color:sel?C.goldT:C.tx2,fontSize:15,fontWeight:sel?600:400}}>{ts.l}</button>);})}</div>{(user.styles||[]).length>0&&<button onClick={function(){go("ob3");}} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Continue</button>}</Fade></div></div>)}
+{sc==="ob2"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:formPad}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"40%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 2 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>How do you travel?</h2><p style={{fontSize:14,color:C.tx2,marginBottom:24}}>Select all that apply.</p><div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>{STYLES.map(function(ts){var sel=(user.styles||[]).indexOf(ts.id)>=0;return(<button key={ts.id} onClick={function(){var cur=user.styles||[];upU("styles",cur.indexOf(ts.id)>=0?cur.filter(function(x){return x!==ts.id;}):cur.concat([ts.id]));}} style={{padding:"22px 16px",borderRadius:14,textAlign:"center",cursor:"pointer",background:sel?C.goldDim:C.surface,border:"2px solid "+(sel?C.gold+"50":C.border),color:sel?C.goldT:C.tx2,fontSize:15,fontWeight:sel?600:400}}>{ts.l}</button>);})}</div>{(user.styles||[]).length>0&&<button onClick={function(){go("ob3");}} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Continue</button>}</Fade></div></div>)}
 
-{sc==="ob3"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:40}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"60%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 3 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>What excites you?</h2><p style={{fontSize:14,color:C.tx2,marginBottom:24}}>Same questions your crew answers later.</p><div style={{display:"flex",flexDirection:"column",gap:7}}>{CATS.map(function(cat){var v=(user.interests||{})[cat.id];return(<div key={cat.id} style={{background:C.surface,borderRadius:12,padding:"12px 16px",border:"1px solid "+C.border,display:"flex",alignItems:"center",gap:12}}><span style={{flex:1,fontSize:14,color:C.tx2}}>{cat.q}</span><div style={{display:"flex",gap:5}}>{[{l:"Yes",v:true,c:C.grn},{l:"No",v:false,c:C.red}].map(function(o){var a=v===o.v;return(<button key={o.l} onClick={function(){var n=Object.assign({},user.interests||{});n[cat.id]=o.v;upU("interests",n);}} style={{padding:"5px 13px",borderRadius:8,border:a?"2px solid "+o.c:"1.5px solid "+C.border,background:a?o.c+"12":"transparent",color:a?o.c:C.tx3,fontWeight:600,fontSize:13,cursor:"pointer"}}>{o.l}</button>);})}</div></div>);})}</div>{Object.keys(user.interests||{}).length>=4&&<button onClick={function(){go("ob4");}} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Continue</button>}</Fade></div></div>)}
+{sc==="ob3"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:formPad}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"60%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 3 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>What excites you?</h2><p style={{fontSize:14,color:C.tx2,marginBottom:24}}>Same questions your crew answers later.</p><div style={{display:"flex",flexDirection:"column",gap:7}}>{CATS.map(function(cat){var v=(user.interests||{})[cat.id];return(<div key={cat.id} style={{background:C.surface,borderRadius:12,padding:"12px 16px",border:"1px solid "+C.border,display:"flex",alignItems:"center",gap:12}}><span style={{flex:1,fontSize:14,color:C.tx2}}>{cat.q}</span><div style={{display:"flex",gap:5}}>{[{l:"Yes",v:true,c:C.grn},{l:"No",v:false,c:C.red}].map(function(o){var a=v===o.v;return(<button key={o.l} onClick={function(){var n=Object.assign({},user.interests||{});n[cat.id]=o.v;upU("interests",n);}} style={{padding:"5px 13px",borderRadius:8,border:a?"2px solid "+o.c:"1.5px solid "+C.border,background:a?o.c+"12":"transparent",color:a?o.c:C.tx3,fontWeight:600,fontSize:13,cursor:"pointer"}}>{o.l}</button>);})}</div></div>);})}</div>{Object.keys(user.interests||{}).length>=4&&<button onClick={function(){go("ob4");}} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Continue</button>}</Fade></div></div>)}
 
-{sc==="ob4"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:40}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"80%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 4 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>Budget comfort zone?</h2><div style={{display:"flex",flexDirection:"column",gap:8}}>{BUDGETS.map(function(b){var sel=user.budget===b.id;return(<button key={b.id} onClick={function(){upU("budget",b.id);}} style={{display:"flex",justifyContent:"space-between",padding:"14px 18px",borderRadius:14,cursor:"pointer",background:sel?C.goldDim:C.surface,border:"2px solid "+(sel?C.gold+"50":C.border),color:C.tx}}><span style={{fontWeight:600,color:sel?C.goldT:C.tx}}>{b.l}</span><span style={{color:sel?C.goldT:C.tx2}}>{b.r}</span></button>);})}</div><button onClick={function(){go("ob5");}} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Continue</button></Fade></div></div>)}
+{sc==="ob4"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:formPad}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"80%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 4 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>Budget comfort zone?</h2><div style={{display:"flex",flexDirection:"column",gap:8}}>{BUDGETS.map(function(b){var sel=user.budget===b.id;return(<button key={b.id} onClick={function(){upU("budget",b.id);}} style={{display:"flex",justifyContent:"space-between",padding:"14px 18px",borderRadius:14,cursor:"pointer",background:sel?C.goldDim:C.surface,border:"2px solid "+(sel?C.gold+"50":C.border),color:C.tx}}><span style={{fontWeight:600,color:sel?C.goldT:C.tx}}>{b.l}</span><span style={{color:sel?C.goldT:C.tx2}}>{b.r}</span></button>);})}</div><button onClick={function(){go("ob5");}} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Continue</button></Fade></div></div>)}
 
-{sc==="ob5"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:40}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"100%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 5 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>Dietary needs?</h2><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{["Vegetarian","Vegan","Gluten-free","Halal","Kosher","None"].map(function(item){var sel=(user.dietary||[]).indexOf(item)>=0;return(<button key={item} onClick={function(){var cur=user.dietary||[];upU("dietary",cur.indexOf(item)>=0?cur.filter(function(x){return x!==item;}):cur.concat([item]));}} style={{padding:"8px 16px",borderRadius:10,border:"1.5px solid "+(sel?C.tealL+"50":C.border),background:sel?C.tealL+"12":"transparent",color:sel?C.tealL:C.tx2,fontSize:14,fontWeight:sel?600:400,cursor:"pointer"}}>{item}</button>);})}</div><button onClick={function(){go("dash");}} style={{width:"100%",marginTop:20,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Enter WanderPlan</button></Fade></div></div>)}
+{sc==="ob5"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:formPad}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"100%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 5 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>Dietary needs?</h2><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{["Vegetarian","Vegan","Gluten-free","Halal","Kosher","None"].map(function(item){var sel=(user.dietary||[]).indexOf(item)>=0;return(<button key={item} onClick={function(){var cur=user.dietary||[];upU("dietary",cur.indexOf(item)>=0?cur.filter(function(x){return x!==item;}):cur.concat([item]));}} style={{padding:"8px 16px",borderRadius:10,border:"1.5px solid "+(sel?C.tealL+"50":C.border),background:sel?C.tealL+"12":"transparent",color:sel?C.tealL:C.tx2,fontSize:14,fontWeight:sel?600:400,cursor:"pointer"}}>{item}</button>);})}</div><button onClick={function(){go("dash");}} style={{width:"100%",marginTop:20,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Enter WanderPlan</button></Fade></div></div>)}
 
 {inDash&&(<div style={{minHeight:"100vh",background:C.bg}}>
   {/* Top navigation bar */}
   <header style={{position:"sticky",top:0,zIndex:50,background:C.bg+"ee",backdropFilter:"blur(16px)",borderBottom:"1px solid "+C.border}}>
-    <div style={{maxWidth:900,margin:"0 auto",display:"flex",alignItems:"center",padding:"10px 24px",gap:12}}>
+    <div style={{maxWidth:900,margin:"0 auto",display:"flex",alignItems:"center",padding:"10px "+pagePad+"px",gap:10,flexWrap:isNarrow?"wrap":"nowrap"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginRight:"auto"}}><div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>W</div><span style={{fontSize:15,fontWeight:700}}>WanderPlan</span></div>
-      <nav style={{display:"flex",gap:2}}>
-        {[{id:"dash",l:"Trips"},{id:"bucket",l:"Bucket List"},{id:"crew",l:"Crew"},{id:"profile",l:"Profile"},{id:"analytics",l:"Stats"}].map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:"6px 14px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400}}>{it.l}</button>);})}
+      <nav style={{display:"flex",gap:2,overflowX:isNarrow?"auto":"visible",maxWidth:isNarrow?"100%":"none",WebkitOverflowScrolling:"touch",flex:isNarrow?"1 1 100%":"0 1 auto"}}>
+        {[{id:"dash",l:"Trips"},{id:"bucket",l:"Bucket List"},{id:"crew",l:"Crew"},{id:"profile",l:"Profile"},{id:"analytics",l:"Stats"}].map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:isPhone?"6px 10px":"6px 14px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.l}</button>);})}
       </nav>
-      <button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{padding:"7px 16px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontWeight:600,fontSize:12,cursor:"pointer",marginLeft:4}}>+ New Trip</button>
+      <button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{padding:isPhone?"7px 10px":"7px 16px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontWeight:600,fontSize:12,cursor:"pointer",marginLeft:4,whiteSpace:"nowrap"}}>{isPhone?"+ Trip":"+ New Trip"}</button>
       <div style={{marginLeft:4}}><Avi ini={user.name?user.name.charAt(0).toUpperCase():"?"} color={C.gold} size={28}/></div>
     </div>
   </header>
   {/* Main content area */}
-  <main style={{maxWidth:900,margin:"0 auto",padding:"24px 24px 80px"}}>
+  <main style={{maxWidth:900,margin:"0 auto",padding:"24px "+pagePad+"px 80px"}}>
 
   {sc==="dash"&&(function(){
     var stMap={active:{l:"Active",c:C.grn,bg:C.grnBg,icon:"LIVE"},planning:{l:"Planning",c:C.wrn,bg:C.wrnBg,icon:""},invited:{l:"Invited",c:C.sky,bg:C.sky+"14",icon:""},saved:{l:"Planning",c:C.wrn,bg:C.wrnBg,icon:""},completed:{l:"Completed",c:C.tx3,bg:"rgba(255,255,255,.05)",icon:""}};
@@ -1471,7 +1576,7 @@ export default function WanderPlan(){
       <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Trips</h1><p style={{fontSize:14,color:C.tx2,marginBottom:20}}>{trips.length} trip{trips.length!==1?"s":""} total</p></Fade>
       <Fade delay={100}><button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{width:"100%",textAlign:"left",background:C.gold+"0c",borderRadius:16,padding:"20px 24px",marginBottom:20,border:"1px solid "+C.gold+"18",cursor:"pointer",display:"flex",alignItems:"center",gap:16}}><div style={{width:44,height:44,borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0,color:"#fff"}}>+</div><div><h3 style={{fontSize:16,fontWeight:700,color:"#fff"}}>Plan a new trip</h3><p style={{fontSize:13,color:C.tx2}}>Pick from bucket list, invite crew</p></div></button></Fade>
       <Fade delay={150}><div style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>{tabs.map(function(t){var cnt=t==="all"?trips.length:trips.filter(function(tr){return matchesTripFilter(tr,t);}).length;var sel=tripFilter===t;return(<button key={t} onClick={function(){setTF(t);}} style={{padding:"6px 16px",borderRadius:999,fontSize:13,fontWeight:sel?600:400,background:sel?C.goldDim:C.surface,color:sel?C.goldT:C.tx2,border:"1px solid "+(sel?C.gold+"30":C.border),cursor:"pointer"}}>{t==="all"?"All":stMap[t]?stMap[t].l:t} ({cnt})</button>);})}</div></Fade>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,300px),1fr))",gap:14}}>
         {filtered.map(function(tr,i){var st=stMap[tr.status]||stMap.saved;var pct=tr.budget>0&&tr.spent>0?Math.round((tr.spent/tr.budget)*100):0;
           return(<Fade key={tr.id} delay={200+i*50}><div onClick={function(){setVT(tr);go("trip_detail");}} style={{background:C.surface,borderRadius:16,overflow:"hidden",border:"1px solid "+C.border,cursor:"pointer",transition:"all .2s"}}
             onMouseEnter={function(e){e.currentTarget.style.borderColor=C.gold+"40";e.currentTarget.style.transform="translateY(-2px)";}}
@@ -1479,7 +1584,11 @@ export default function WanderPlan(){
             <div style={{padding:"16px 20px 14px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                 <h3 style={{fontWeight:700,fontSize:16,flex:1,marginRight:8}}>{tr.name}</h3>
-                <div style={{display:"flex",alignItems:"center",gap:6}}>{tr.status==="active"&&<div style={{width:6,height:6,borderRadius:999,background:C.grn,animation:"pulse 1.5s infinite"}}/>}<span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:st.c,background:st.bg,whiteSpace:"nowrap"}}>{st.l}</span></div>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  {tr.status==="active"&&<div style={{width:6,height:6,borderRadius:999,background:C.grn,animation:"pulse 1.5s infinite"}}/>}
+                  <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:st.c,background:st.bg,whiteSpace:"nowrap"}}>{st.l}</span>
+                  <button onClick={function(e){e.stopPropagation();setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>
+                </div>
               </div>
               <p style={{fontSize:13,color:C.tx2,marginBottom:10}}>{tr.destNames||"No destinations"}</p>
               <div style={{display:"flex",gap:12,fontSize:12,color:C.tx3,marginBottom:10}}>
@@ -1539,7 +1648,7 @@ export default function WanderPlan(){
             }} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Accept Trip Invite</button>}
             {tr.status==="saved"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Start Planning</button>}
             {tr.status==="completed"&&<button style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:"transparent",color:C.tx2,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>View Itinerary</button>}
-            <button onClick={function(){setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});go("dash");}} style={{padding:"12px 20px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Delete</button>
+            <button onClick={function(){setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
           </div>
         </div>
       </div></Fade>
@@ -1555,37 +1664,72 @@ export default function WanderPlan(){
     <Fade delay={300}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>Auto-saved</p></div></Fade>
   </div>)}
 
-  {sc==="crew"&&(<div style={{maxWidth:520}}>
+{sc==="crew"&&(<div style={{maxWidth:520}}>
     <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Crew</h1><p style={{fontSize:14,color:C.tx2,marginBottom:24}}>{acc.length} joined, {pendingCrewCount} pending</p></Fade>
-    <Fade delay={100}><div style={{display:"flex",gap:8,marginBottom:20}}><input value={invEmail} onChange={function(e){setIE(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){sendCrewInvite();}}} placeholder="Email to invite" style={{flex:1,padding:"11px 14px",borderRadius:10,background:C.surface,border:"1.5px solid "+C.border,fontSize:14,color:"#fff"}}/><button onClick={sendCrewInvite} style={{padding:"10px 20px",borderRadius:10,border:"none",background:C.gold,color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer"}}>Invite</button></div>{crewMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:-12,marginBottom:10}}>{crewMsg}</p>}</Fade>
-    <div style={{display:"flex",flexDirection:"column",gap:7}}>{crew.map(function(m,i){var sc2=m.status==="accepted"?C.grn:(m.status==="pending"||m.status==="invited")?C.wrn:m.status==="link_only"?C.sky:C.red;var sb=m.status==="accepted"?C.grnBg:(m.status==="pending"||m.status==="invited")?C.wrnBg:m.status==="link_only"?"rgba(77,168,218,0.15)":C.redBg;return(<Fade key={m.id} delay={150+i*50}><div style={{background:C.surface,borderRadius:12,padding:"13px 16px",border:"1px solid "+C.border,display:"flex",alignItems:"center",gap:12}}><Avi ini={m.ini} color={m.color} size={36} name={m.name}/><div style={{flex:1}}><div style={{fontSize:14,fontWeight:600}}>{m.name}</div><div style={{fontSize:11,color:C.tx3}}>{m.email}</div></div><span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:sc2,background:sb}}>{m.status==="invited"?"pending":m.status}</span></div></Fade>);})}</div>
+    <Fade delay={100}><div style={{display:"flex",gap:8,marginBottom:20}}><input value={invEmail} onChange={function(e){setIE(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){sendCrewInvite();}}} placeholder="Email to invite" style={{flex:1,padding:"11px 14px",borderRadius:10,background:C.surface,border:"1.5px solid "+C.border,fontSize:14,color:"#fff"}}/><button onClick={sendCrewInvite} style={{padding:"10px 20px",borderRadius:10,border:"none",background:C.gold,color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer"}}>Invite</button></div>{crewMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:-12,marginBottom:10}}>{crewMsg}</p>}{crewInviteLinkUI}</Fade>
+    <Fade delay={130}>
+      <div style={{background:C.surface,borderRadius:12,padding:"13px 16px",border:"1px solid "+C.border,display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+        <Avi ini={iniFromName(user.name||"You")} color={C.gold} size={36} name={user.name||"You"}/>
+        <div style={{flex:1}}>
+          <div style={{fontSize:14,fontWeight:600}}>{user.name||"You"}</div>
+          <div style={{fontSize:11,color:C.tx3}}>{user.email||"signed-in account"}</div>
+        </div>
+        <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:C.goldT,background:C.goldDim}}>account holder</span>
+      </div>
+    </Fade>
+    <div style={{display:"flex",flexDirection:"column",gap:7}}>{crew.map(function(m,i){var sc2=m.status==="accepted"?C.grn:(m.status==="pending"||m.status==="invited")?C.wrn:m.status==="link_only"?C.sky:C.red;var sb=m.status==="accepted"?C.grnBg:(m.status==="pending"||m.status==="invited")?C.wrnBg:m.status==="link_only"?"rgba(77,168,218,0.15)":C.redBg;var rel=crewRelationLabel(m.relation);return(<Fade key={m.id} delay={150+i*50}><div style={{background:C.surface,borderRadius:12,padding:"13px 16px",border:"1px solid "+C.border,display:"flex",alignItems:"center",gap:12}}><Avi ini={m.ini} color={m.color} size={36} name={m.name}/><div style={{flex:1}}><div style={{fontSize:14,fontWeight:600}}>{m.name}</div><div style={{fontSize:11,color:C.tx3}}>{m.email}</div></div><span style={{fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:20,color:C.sky,background:"rgba(77,168,218,0.15)"}}>{rel}</span><span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:sc2,background:sb}}>{m.status==="invited"?"pending":m.status}</span></div></Fade>);})}</div>
   </div>)}
 
   {sc==="bucket"&&(<div>
     <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Bucket List</h1><p style={{fontSize:14,color:C.tx2,marginBottom:20}}>{bucket.length} destination{bucket.length!==1?"s":""} saved</p></Fade>
+    {bucketMsg&&<p style={{fontSize:12,color:C.tx2,marginBottom:10}}>{bucketMsg}</p>}
     <Fade delay={100}><div style={{background:C.surface,borderRadius:16,border:"1px solid "+C.border,marginBottom:20,overflow:"hidden"}}>
       <div style={{padding:"14px 18px 8px",borderBottom:"1px solid "+C.border}}><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:28,height:28,borderRadius:999,background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>B</div><span style={{fontSize:13,fontWeight:600,color:C.tealL}}>Bucket List Agent</span><span style={{fontSize:11,color:C.tx3,marginLeft:"auto"}}>AI-powered</span></div></div>
-      <div style={{maxHeight:280,overflowY:"auto",padding:"12px 18px"}}>{blChat.map(function(msg,i){var isU=msg.from==="user";var sug=Array.isArray(msg.suggestions)?msg.suggestions:[];return(<div key={i} style={{display:"flex",justifyContent:isU?"flex-end":"flex-start",marginBottom:8}}><div style={{maxWidth:"85%"}}><div style={{padding:"10px 14px",borderRadius:isU?"12px 12px 4px 12px":"12px 12px 12px 4px",background:isU?C.teal+"25":C.bg,border:"1px solid "+(isU?C.teal+"30":C.border),fontSize:14,lineHeight:1.6,color:isU?"#fff":C.tx2}}>{msg.text}</div>{!isU&&sug.length>0&&(<div style={{marginTop:6,display:"flex",flexDirection:"column",gap:6}}>{sug.map(function(d,di){var tkey=destinationTripKey(d);var alreadySaved=trips.some(function(t){var dn=String(t.destNames||"").toLowerCase();return (t.status==="saved")&&(dn.indexOf(String(d.name||"").toLowerCase())>=0);});return(<div key={tkey+"-"+di} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,background:C.surface,border:"1px solid "+C.border,borderRadius:10,padding:"8px 10px"}}><div><p style={{fontSize:13,fontWeight:600,color:"#fff"}}>{d.name}</p><p style={{fontSize:11,color:C.tx3}}>{d.country||"Destination"}</p></div><button onClick={function(){saveDestinationAsTrip(d);}} disabled={alreadySaved} style={{padding:"6px 12px",borderRadius:8,border:"none",background:alreadySaved?C.border:C.gold,color:alreadySaved?C.tx3:C.bg,fontSize:12,fontWeight:600,cursor:alreadySaved?"default":"pointer"}}>{alreadySaved?"Saved":"Save"}</button></div>);})}</div>)}</div></div>);})}{blLoad&&(<div style={{display:"flex",gap:5,padding:"8px 0"}}><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div>)}<div ref={chatRef}/></div>
+      <div style={{maxHeight:280,overflowY:"auto",padding:"12px 18px"}}>
+        {blChat.map(function(msg,i){
+          var isU=msg.from==="user";
+          var sug=Array.isArray(msg.suggestions)?msg.suggestions:[];
+          return(
+            <div key={i} style={{display:"flex",justifyContent:isU?"flex-end":"flex-start",marginBottom:8}}>
+              <div style={{maxWidth:"85%"}}>
+                <div style={{padding:"10px 14px",borderRadius:isU?"12px 12px 4px 12px":"12px 12px 12px 4px",background:isU?C.teal+"25":C.bg,border:"1px solid "+(isU?C.teal+"30":C.border),fontSize:14,lineHeight:1.6,color:isU?"#fff":C.tx2}}>{msg.text}</div>
+                {!isU&&sug.length>0&&(
+                  <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:6}}>
+                    {sug.map(function(d,di){
+                      var tkey=destinationTripKey(d);
+                      return(<div key={tkey+"-"+di} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,background:C.surface,border:"1px solid "+C.border,borderRadius:10,padding:"8px 10px"}}>
+                        <div><p style={{fontSize:13,fontWeight:600,color:"#fff"}}>{d.name}</p><p style={{fontSize:11,color:C.tx3}}>{d.country||"Destination"}</p></div>
+                      </div>);
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {blLoad&&(<div style={{display:"flex",gap:5,padding:"8px 0"}}><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div>)}
+        <div ref={chatRef}/>
+      </div>
       <div style={{display:"flex",gap:8,padding:"10px 14px",borderTop:"1px solid "+C.border}}><input value={blIn} onChange={function(e){setBLI(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendBL();}} placeholder="e.g. 'northern lights' or 'Kyoto'" disabled={blLoad} style={{flex:1,padding:"11px 14px",borderRadius:10,background:C.bg,border:"1.5px solid "+C.border,fontSize:14,color:"#fff",opacity:blLoad?.5:1}}/><button onClick={sendBL} disabled={blLoad} style={{padding:"10px 20px",borderRadius:10,border:"none",background:blLoad?C.border:C.gold,color:blLoad?C.tx3:C.bg,fontSize:14,fontWeight:600,cursor:blLoad?"default":"pointer"}}>Send</button></div>
     </div></Fade>
-    {bucket.length>0&&(<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14}}>{bucket.map(function(d,i){var alreadySaved=trips.some(function(t){var dn=String(t.destNames||"").toLowerCase();return (t.status==="saved")&&(dn.indexOf(String(d.name||"").toLowerCase())>=0);});return(<Fade key={d.id||i} delay={50+i*30}><div style={{background:C.surface,borderRadius:14,border:"1px solid "+C.border,padding:"16px 18px",position:"relative"}}>
-      <button onClick={function(){
-        setBucket(function(p){return p.filter(function(x){return x.id!==d.id;});});
-        if(authToken&&d.id){apiJson("/me/bucket-list/"+d.id,{method:"DELETE"},authToken).catch(function(){});}
-      }} style={{position:"absolute",top:10,right:10,width:22,height:22,borderRadius:999,background:"rgba(255,255,255,0.06)",border:"none",color:C.tx3,cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>x</button>
+    {bucket.length>0&&(<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,280px),1fr))",gap:14}}>{bucket.map(function(d,i){var saved=isPersistedBucketItem(d);return(<Fade key={d.id||i} delay={50+i*30}><div style={{background:C.surface,borderRadius:14,border:"1px solid "+C.border,padding:"16px 18px",position:"relative"}}>
       <h3 style={{fontSize:17,fontWeight:700,marginBottom:2}}>{d.name}</h3>
       <p style={{fontSize:13,color:C.tx2,marginBottom:8}}>{d.country}</p>
       {d.tags&&d.tags.length>0&&(<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8}}>{d.tags.map(function(t){return <span key={t} style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(255,255,255,.04)",color:C.tx2}}>{t}</span>;})}</div>)}
       <div style={{display:"flex",gap:2,marginBottom:8}}>{MO.map(function(m,mi){var g=(d.bestMonths||[]).indexOf(mi+1)>=0;return <div key={mi} style={{width:20,height:15,borderRadius:2,background:g?C.grn+"22":"rgba(255,255,255,.03)",color:g?C.grn:C.tx3,fontSize:8,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center"}}>{m}</div>;})}</div>
       <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:C.tealL}}>{d.bestTimeDesc||""}</span><span style={{fontSize:13,fontWeight:600,color:C.goldT}}>~${d.costPerDay||0}/day</span></div>
       {d.costNote&&<p style={{fontSize:11,color:C.tx3,marginTop:4}}>{d.costNote}</p>}
-      <button onClick={function(){saveDestinationAsTrip(d);}} disabled={alreadySaved} style={{marginTop:10,padding:"8px 12px",borderRadius:8,border:"none",background:alreadySaved?C.border:C.gold,color:alreadySaved?C.tx3:C.bg,fontSize:12,fontWeight:600,cursor:alreadySaved?"default":"pointer"}}>{alreadySaved?"Saved":"Save"}</button>
+      <div style={{display:"flex",gap:8,marginTop:10}}>
+        <button onClick={function(){saveBucketDestination(d);}} disabled={saved} style={{flex:1,padding:"8px 10px",borderRadius:8,border:"none",background:saved?C.border:C.gold,color:saved?C.tx3:C.bg,fontSize:12,fontWeight:600,cursor:saved?"default":"pointer"}}>{saved?"Saved":"Save"}</button>
+        <button onClick={function(){removeBucketDestination(d);}} style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid "+C.red+"40",background:C.redBg,color:C.red,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}><TrashIcon size={12} color={C.red}/>Remove</button>
+      </div>
+      <button onClick={function(){pickDestinationForTrip(d);}} style={{marginTop:8,padding:"8px 12px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",width:"100%"}}>Pick for Trip</button>
     </div></Fade>);})}</div>)}
   </div>)}
 
   {sc==="analytics"&&(<div>
     <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:24}}>Analytics</h1></Fade>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:14,marginBottom:24}}>{[{l:"Trips",v:trips.length,c:C.gold},{l:"Destinations",v:bucket.length,c:C.teal},{l:"Crew",v:crew.length,c:C.sky},{l:"Interests",v:Object.keys(user.interests||{}).length+"/8",c:C.coral}].map(function(s,i){return(<Fade key={i} delay={100+i*50}><div style={{background:C.surface,borderRadius:14,padding:"18px 20px",border:"1px solid "+C.border}}><p style={{fontSize:12,color:C.tx3,marginBottom:6}}>{s.l}</p><p style={{fontWeight:700,fontSize:28,color:s.c}}>{s.v}</p></div></Fade>);})}</div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,200px),1fr))",gap:14,marginBottom:24}}>{[{l:"Trips",v:trips.length,c:C.gold},{l:"Destinations",v:bucket.length,c:C.teal},{l:"Crew",v:crew.length,c:C.sky},{l:"Interests",v:Object.keys(user.interests||{}).length+"/8",c:C.coral}].map(function(s,i){return(<Fade key={i} delay={100+i*50}><div style={{background:C.surface,borderRadius:14,padding:"18px 20px",border:"1px solid "+C.border}}><p style={{fontSize:12,color:C.tx3,marginBottom:6}}>{s.l}</p><p style={{fontWeight:700,fontSize:28,color:s.c}}>{s.v}</p></div></Fade>);})}</div>
     {bucket.length>0&&(<Fade delay={300}><div style={{background:C.surface,borderRadius:14,padding:20,border:"1px solid "+C.border}}><h3 style={{fontWeight:700,fontSize:16,marginBottom:14}}>Bucket List Costs</h3>{bucket.map(function(d){return(<div key={d.id} style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,color:C.tx2}}>{d.name}</span><span style={{fontSize:13,fontWeight:600,color:C.goldT}}>~${d.costPerDay||0}/day</span></div>);})}</div></Fade>)}
   </div>)}
 
@@ -1613,6 +1757,7 @@ export default function WanderPlan(){
       })}
       <p style={{fontSize:12,color:C.tx3,marginTop:8}}>My Crew invite status is separate from Trip invite status. Step 2 sends trip-specific invitations for selected members.</p>
       {crewMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:6}}>{crewMsg}</p>}
+      {crewInviteLinkUI}
       {tripInviteMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:6}}>{tripInviteMsg}</p>}
     </div></Fade>
     {newTrip.name&&newTrip.dests.length>0&&(<Fade delay={250}><button onClick={function(){

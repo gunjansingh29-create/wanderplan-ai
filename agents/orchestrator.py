@@ -2880,6 +2880,18 @@ async def join_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
             if not existing:
                 raise HTTPException(status_code=403, detail="You are not invited to this trip")
             row = existing
+        trip_status = await conn.fetchval(
+            """
+            UPDATE trips
+            SET status = CASE
+                WHEN COALESCE(status, '') IN ('', 'draft', 'saved', 'invited') THEN 'planning'
+                ELSE status
+            END
+            WHERE id = $1
+            RETURNING status
+            """,
+            trip_id,
+        )
 
     return {
         "ok": True,
@@ -2887,7 +2899,7 @@ async def join_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
             "id": str(trip["id"]),
             "owner_id": str(trip["owner_id"]),
             "name": str(trip["name"] or ""),
-            "status": str(trip["status"] or "planning"),
+            "status": str(trip_status or trip["status"] or "planning"),
             "duration_days": int(trip["duration_days"] or 0),
         },
         "member": {
