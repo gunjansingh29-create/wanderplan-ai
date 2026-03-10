@@ -994,7 +994,7 @@ export default function WanderPlan(){
     saveTripPlanningState({current_step:n});
   }
   useEffect(function(){
-    if(!loaded||!authToken||(sc!=="crew"&&sc!=="new_trip"&&sc!=="dash"))return;
+    if(!loaded||!authToken||(sc!=="crew"&&sc!=="new_trip"&&sc!=="dash"&&sc!=="wizard"))return;
     refreshCrewFromBackend();
     var t=setInterval(function(){refreshCrewFromBackend();},5000);
     return function(){clearInterval(t);};
