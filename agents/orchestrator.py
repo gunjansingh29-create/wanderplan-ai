@@ -64,6 +64,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
 class PasswordResetRequest(BaseModel):
     email: str
     new_password: str
@@ -121,6 +127,10 @@ class CrewInviteEmailRequest(BaseModel):
 
 class UpdateMemberRequest(BaseModel):
     status: str
+
+
+class TripInviteRespondRequest(BaseModel):
+    action: str = "accept"
 
 
 class SaveDestinationsRequest(BaseModel):
@@ -202,6 +212,28 @@ class PoiApprovalRequest(BaseModel):
     approved: bool
 
 
+class PoiSyncItemRequest(BaseModel):
+    poi_id: Optional[str] = None
+    name: str
+    category: Optional[str] = None
+    destination: Optional[str] = None
+    country: Optional[str] = None
+    tags: list[str] = []
+    rating: Optional[float] = None
+    cost_estimate_usd: float = 0
+    approved: bool = False
+
+
+class PoiSyncRequest(BaseModel):
+    pois: list[PoiSyncItemRequest] = []
+
+
+class TripPlanningStateUpdateRequest(BaseModel):
+    current_step: Optional[int] = None
+    state: dict[str, Any] = {}
+    merge: bool = True
+
+
 class HealthAcknowledgmentItem(BaseModel):
     activity_id: str
     certification_required: Optional[str] = None
@@ -246,6 +278,41 @@ class DestinationExtractionRequest(BaseModel):
     text: str
 
 
+class MeProfileRequest(BaseModel):
+    display_name: str = ""
+    travel_styles: list[str] = []
+    interests: dict[str, Any] = {}
+    budget_tier: str = "moderate"
+    dietary: list[str] = []
+
+
+class MeBucketItemRequest(BaseModel):
+    destination: str
+    country: Optional[str] = None
+    tags: list[str] = []
+    best_months: list[int] = []
+    cost_per_day: float = 0
+    best_time_desc: str = ""
+    cost_note: str = ""
+
+
+class CrewInviteAcceptRequest(BaseModel):
+    invite_token: str
+
+
+class CrewInviteRespondRequest(BaseModel):
+    invite_token: str
+    action: str = "accept"
+
+
+class LLMMessageRequest(BaseModel):
+    model: Optional[str] = None
+    max_tokens: int = 800
+    temperature: Optional[float] = None
+    system: Optional[str] = None
+    messages: list[dict[str, Any]]
+
+
 def _smtp_settings() -> tuple[str, int, str, str, str]:
     host_port = os.getenv("SMTP_HOST", "").strip()
     smtp_user = os.getenv("SMTP_USER", "").strip()
@@ -277,27 +344,50 @@ def _send_trip_invite_email_sync(
     *,
     to_email: str,
     inviter_name: str,
+    inviter_email: str,
     trip_name: str,
     trip_id: str,
+    duration_days: int = 0,
+    destinations: Optional[list[str]] = None,
 ) -> None:
     host, port, smtp_user, smtp_pass, smtp_from = _smtp_settings()
     if not host or not smtp_user or not smtp_pass or not smtp_from:
         raise RuntimeError("SMTP is not configured (SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_EMAIL_FROM)")
 
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
-    invite_link = f"{frontend_base}/#wizard?tripId={trip_id}"
-    subject = f"WanderPlan invite: {trip_name}"
+    accept_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}&trip_invite_action=accept"
+    reject_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}&trip_invite_action=reject"
+    destination_line = ", ".join((destinations or [])[:8]).strip()
+    duration_line = f"{int(duration_days)} day trip" if int(duration_days or 0) > 0 else "Duration to be finalized"
+    subject = f"{inviter_name} invited you to trip: {trip_name}"
     text_body = (
-        f"{inviter_name} invited you to join a trip on WanderPlan.\n\n"
-        f"Trip: {trip_name}\n"
-        f"Open invite: {invite_link}\n\n"
+        "You have a WanderPlan trip invitation.\n\n"
+        f"From: {inviter_name} ({inviter_email})\n"
+        f"Trip Name: {trip_name}\n"
+        f"Duration: {duration_line}\n"
+        f"Destinations: {destination_line or 'TBD'}\n\n"
+        f"Accept Trip: {accept_link}\n"
+        f"Reject Trip: {reject_link}\n\n"
+        "If you already have a WanderPlan account, sign in and choose Accept Trip or Reject Trip.\n"
+        "If you are new, sign up first and then choose Accept Trip or Reject Trip.\n\n"
         "If you were not expecting this invite, you can ignore this email."
     )
     html_body = (
-        f"<p><strong>{inviter_name}</strong> invited you to join a trip on WanderPlan.</p>"
-        f"<p><strong>Trip:</strong> {trip_name}</p>"
-        f"<p><a href=\"{invite_link}\">Open invite</a></p>"
+        "<div style=\"font-family:Arial,Helvetica,sans-serif;line-height:1.5;color:#111;\">"
+        "<p style=\"margin:0 0 10px 0;\">You have a WanderPlan trip invitation.</p>"
+        f"<p style=\"margin:0 0 6px 0;\"><strong>From:</strong> {inviter_name} ({inviter_email})</p>"
+        f"<p style=\"margin:0 0 14px 0;\"><strong>Trip Name:</strong> {trip_name}</p>"
+        f"<p style=\"margin:0 0 6px 0;\"><strong>Duration:</strong> {duration_line}</p>"
+        f"<p style=\"margin:0 0 14px 0;\"><strong>Destinations:</strong> {destination_line or 'TBD'}</p>"
+        "<p style=\"margin:0 0 14px 0;\">"
+        f"<a href=\"{accept_link}\" style=\"display:inline-block;padding:10px 14px;border-radius:8px;background:#0D7377;color:#fff;text-decoration:none;font-weight:600;\">Accept Trip</a>"
+        "&nbsp;&nbsp;"
+        f"<a href=\"{reject_link}\" style=\"display:inline-block;padding:10px 14px;border-radius:8px;background:#ef4444;color:#fff;text-decoration:none;font-weight:600;\">Reject Trip</a>"
+        "</p>"
+        "<p style=\"margin:0 0 8px 0;\">If you already have a WanderPlan account, sign in and choose Accept Trip or Reject Trip.</p>"
+        "<p style=\"margin:0 0 8px 0;\">If you are new, sign up first and then choose Accept Trip or Reject Trip.</p>"
         "<p>If you were not expecting this invite, you can ignore this email.</p>"
+        "</div>"
     )
 
     msg = EmailMessage()
@@ -317,16 +407,22 @@ async def _send_trip_invite_email(
     *,
     to_email: str,
     inviter_name: str,
+    inviter_email: str,
     trip_name: str,
     trip_id: str,
+    duration_days: int = 0,
+    destinations: Optional[list[str]] = None,
 ) -> tuple[bool, str]:
     try:
         await asyncio.to_thread(
             _send_trip_invite_email_sync,
             to_email=to_email,
             inviter_name=inviter_name,
+            inviter_email=inviter_email,
             trip_name=trip_name,
             trip_id=trip_id,
+            duration_days=duration_days,
+            destinations=destinations,
         )
         return True, ""
     except Exception as exc:
@@ -338,22 +434,34 @@ def _send_crew_invite_email_sync(
     inviter_email: str,
     inviter_name: str,
     invitee_email: str,
+    invite_token: str,
+    invitee_has_account: bool,
 ) -> None:
     host, port, smtp_user, smtp_pass, smtp_from = _smtp_settings()
     if not host or not smtp_user or not smtp_pass or not smtp_from:
         raise RuntimeError("SMTP is not configured (SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_EMAIL_FROM)")
 
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
-    invite_link = f"{frontend_base}/?entry=home"
+    signin_or_signup_link = f"{frontend_base}/?entry=home"
+    accept_link = f"{frontend_base}/?entry=home&invite_token={quote_plus(invite_token)}&invite_action=accept"
+    reject_link = f"{frontend_base}/?entry=home&invite_token={quote_plus(invite_token)}&invite_action=reject"
     subject = f"{inviter_name} invited you to join WanderPlan crew"
     text_body = (
         f"{inviter_name} ({inviter_email}) invited you to join their WanderPlan crew.\n\n"
-        f"Sign up here: {invite_link}\n\n"
+        f"Sign in / Sign up: {signin_or_signup_link}\n"
+        f"Accept invite (new or existing account): {accept_link}\n"
+        f"Reject invite: {reject_link}\n\n"
+        "If you already have a WanderPlan account, sign in and choose Accept or Reject.\n"
+        "If you are new, sign up first and then choose Accept or Reject.\n\n"
         "After signup and profile setup, you will be able to see each other's preferences."
     )
     html_body = (
         f"<p><strong>{inviter_name}</strong> ({inviter_email}) invited you to join their WanderPlan crew.</p>"
-        f"<p><a href=\"{invite_link}\">Sign up on WanderPlan</a></p>"
+        f"<p><a href=\"{signin_or_signup_link}\">Sign in / Sign up</a></p>"
+        f"<p><a href=\"{accept_link}\">Accept invite</a></p>"
+        f"<p><a href=\"{reject_link}\">Reject invite</a></p>"
+        "<p>If you already have a WanderPlan account, sign in and choose Accept or Reject.</p>"
+        "<p>If you are new, sign up first and then choose Accept or Reject.</p>"
         "<p>After signup and profile setup, you will be able to see each other's preferences.</p>"
     )
 
@@ -375,6 +483,8 @@ async def _send_crew_invite_email(
     inviter_email: str,
     inviter_name: str,
     invitee_email: str,
+    invite_token: str,
+    invitee_has_account: bool,
 ) -> tuple[bool, str]:
     try:
         await asyncio.to_thread(
@@ -382,6 +492,8 @@ async def _send_crew_invite_email(
             inviter_email=inviter_email,
             inviter_name=inviter_name,
             invitee_email=invitee_email,
+            invite_token=invite_token,
+            invitee_has_account=invitee_has_account,
         )
         return True, ""
     except Exception as exc:
@@ -1322,6 +1434,72 @@ def _anthropic_extract_destinations(text: str) -> tuple[list[dict[str, str]], bo
     return _simple_destination_heuristic(text), False, "", "fallback:empty_llm", "Anthropic returned empty destination list"
 
 
+def _anthropic_messages_proxy(body: LLMMessageRequest) -> dict[str, Any]:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="LLM is not configured: ANTHROPIC_API_KEY missing")
+
+    model = (
+        (body.model or "").strip()
+        or os.getenv("ANTHROPIC_MODEL", "").strip()
+        or os.getenv("LLM_MODEL", "claude-sonnet-4-20250514").strip()
+    )
+    max_tokens = int(body.max_tokens or 800)
+    max_tokens = max(1, min(max_tokens, 8192))
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": body.messages or [],
+    }
+    if body.system:
+        payload["system"] = body.system
+    if body.temperature is not None:
+        payload["temperature"] = body.temperature
+
+    if not payload["messages"]:
+        raise HTTPException(status_code=400, detail="messages must not be empty")
+
+    req = urllib_request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=30) as resp:  # nosec B310
+            raw = resp.read().decode("utf-8")
+    except HTTPError as err:
+        body_text = ""
+        try:
+            body_text = err.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body_text = ""
+        status = int(getattr(err, "code", 502) or 502)
+        if status < 400 or status > 599:
+            status = 502
+        raise HTTPException(
+            status_code=status,
+            detail=f"LLM error: HTTPError {status}: {body_text[:400] or str(err.reason)}",
+        ) from err
+    except URLError as err:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM error: URLError: {getattr(err, 'reason', str(err))}",
+        ) from err
+    except TimeoutError as err:
+        raise HTTPException(status_code=504, detail="LLM error: TimeoutError contacting Anthropic") from err
+
+    try:
+        return json.loads(raw)
+    except Exception as err:
+        raise HTTPException(status_code=502, detail="LLM error: invalid JSON response from Anthropic") from err
+
+
 POI_CATALOG: dict[str, list[dict[str, Any]]] = {
     "food": [
         {"name": "Tsukiji Outer Market", "category": "food", "city": "Tokyo", "country": "Japan", "tags": ["food", "market", "seafood"], "rating": 4.5, "cost": 15},
@@ -1401,6 +1579,285 @@ def _storyboard_text(platform: str, title_tokens: list[str], destination: str) -
     return f"{base}{hashtags}"
 
 
+async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
+    # Fresh cloud databases need a complete baseline schema before app endpoints run.
+    statements = [
+        """
+        CREATE EXTENSION IF NOT EXISTS pgcrypto
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          email TEXT UNIQUE NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          password_hash TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trips (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          owner_id UUID REFERENCES users(id),
+          name TEXT NOT NULL,
+          status TEXT DEFAULT 'planning',
+          duration_days INT,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trip_members (
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          role TEXT DEFAULT 'member',
+          status TEXT DEFAULT 'pending',
+          joined_at TIMESTAMPTZ,
+          PRIMARY KEY (trip_id, user_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS bucket_list_items (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          destination TEXT NOT NULL,
+          country TEXT,
+          category TEXT,
+          added_by UUID REFERENCES users(id),
+          vote_score INT DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trip_destinations (
+          trip_id UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+          destination TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (trip_id, destination)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS timing_results (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          destination TEXT NOT NULL,
+          month_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+          preferred_months TEXT[] DEFAULT '{}',
+          avoid_months TEXT[] DEFAULT '{}',
+          best_window JSONB,
+          computed_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS interest_profiles (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          categories TEXT[] DEFAULT '{}',
+          intensity TEXT DEFAULT 'moderate',
+          must_do TEXT[] DEFAULT '{}',
+          avoid TEXT[] DEFAULT '{}',
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE (trip_id, user_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS pois (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          category TEXT,
+          city TEXT,
+          country TEXT,
+          tags TEXT[] DEFAULT '{}',
+          rating NUMERIC(3,1),
+          cost_estimate_usd NUMERIC(10,2) DEFAULT 0,
+          approved BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS budgets (
+          trip_id UUID PRIMARY KEY REFERENCES trips(id) ON DELETE CASCADE,
+          currency TEXT DEFAULT 'USD',
+          daily_target NUMERIC(12,2),
+          total_budget NUMERIC(12,2),
+          spent NUMERIC(12,2) DEFAULT 0,
+          remaining NUMERIC(12,2),
+          breakdown JSONB DEFAULT '{}'::jsonb,
+          warning_active BOOLEAN DEFAULT FALSE,
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS flight_options (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          airline TEXT,
+          departure_airport TEXT,
+          arrival_airport TEXT,
+          departure_time TIMESTAMPTZ,
+          arrival_time TIMESTAMPTZ,
+          price_usd NUMERIC(10,2),
+          stops INT DEFAULT 0,
+          duration_min INT,
+          selected BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS itinerary_days (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          day_number INT NOT NULL,
+          date DATE,
+          title TEXT,
+          approved BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS itinerary_activities (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          day_id UUID REFERENCES itinerary_days(id) ON DELETE CASCADE,
+          time_slot TEXT,
+          title TEXT NOT NULL,
+          description TEXT,
+          category TEXT,
+          location_name TEXT,
+          lat DOUBLE PRECISION,
+          lng DOUBLE PRECISION,
+          cost_estimate NUMERIC(10,2) DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS calendar_events (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          activity_id UUID REFERENCES itinerary_activities(id),
+          calendar_id TEXT,
+          event_title TEXT,
+          start_time TIMESTAMPTZ,
+          end_time TIMESTAMPTZ,
+          location TEXT,
+          synced_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS storyboards (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          platform TEXT NOT NULL,
+          content TEXT,
+          word_count INT,
+          generated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS analytics_events (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          session_id TEXT,
+          trip_id UUID,
+          user_id UUID,
+          event_type TEXT NOT NULL,
+          screen_name TEXT,
+          properties JSONB DEFAULT '{}'::jsonb,
+          client_ts TIMESTAMPTZ,
+          server_ts TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS health_acknowledgments (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          activity_id UUID,
+          certification_required TEXT,
+          user_has_cert BOOLEAN,
+          alternative_suggested TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS availability_windows (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          start_date DATE NOT NULL,
+          end_date DATE NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS member_platform_preferences (
+          trip_id UUID NOT NULL,
+          user_id UUID NOT NULL,
+          platform TEXT NOT NULL,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (trip_id, user_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trip_planning_states (
+          trip_id UUID PRIMARY KEY REFERENCES trips(id) ON DELETE CASCADE,
+          current_step INT DEFAULT 0,
+          state JSONB NOT NULL DEFAULT '{}'::jsonb,
+          updated_by UUID REFERENCES users(id),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS user_profiles (
+          user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          display_name TEXT NOT NULL DEFAULT '',
+          travel_styles TEXT[] NOT NULL DEFAULT '{}',
+          interests JSONB NOT NULL DEFAULT '{}'::jsonb,
+          budget_tier TEXT NOT NULL DEFAULT 'moderate',
+          dietary TEXT[] NOT NULL DEFAULT '{}',
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS personal_bucket_items (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          destination TEXT NOT NULL,
+          country TEXT,
+          tags TEXT[] NOT NULL DEFAULT '{}',
+          best_months INT[] NOT NULL DEFAULT '{}',
+          cost_per_day NUMERIC(10,2) NOT NULL DEFAULT 0,
+          best_time_desc TEXT NOT NULL DEFAULT '',
+          cost_note TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crew_invites (
+          invite_token TEXT PRIMARY KEY,
+          inviter_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          inviter_email TEXT NOT NULL,
+          invitee_email TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          accepted_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          accepted_at TIMESTAMPTZ
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crew_links (
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          peer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, peer_user_id),
+          CHECK (user_id <> peer_user_id)
+        )
+        """,
+    ]
+    for stmt in statements:
+        await conn.execute(stmt)
+
+
 @app.on_event("startup")
 async def _startup_db():
     global db_pool
@@ -1414,17 +1871,7 @@ async def _startup_db():
         dsn=dsn
     )
     async with db_pool.acquire() as conn:
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS member_platform_preferences (
-              trip_id UUID NOT NULL,
-              user_id UUID NOT NULL,
-              platform TEXT NOT NULL,
-              updated_at TIMESTAMPTZ DEFAULT NOW(),
-              PRIMARY KEY (trip_id, user_id)
-            )
-            """
-        )
+        await _bootstrap_schema(conn)
 
 
 @app.on_event("shutdown")
@@ -1435,17 +1882,109 @@ async def _shutdown_db():
         db_pool = None
 
 # Add /auth/login endpoint
+@app.post("/auth/register", response_model=AuthResponse, status_code=201)
+async def register(request: RegisterRequest):
+    normalized_email = (request.email or "").strip().lower()
+    incoming_password = request.password or ""
+    display_name = (request.name or "").strip() or normalized_email.split("@")[0]
+
+    if "@" not in normalized_email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if len(incoming_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    # In-memory seed/runtime users
+    if normalized_email in USERS:
+        raise HTTPException(status_code=409, detail="Email already exists")
+
+    user_id = str(uuid4())
+    if db_pool is not None:
+        async with db_pool.acquire() as conn:
+            existing = await conn.fetchrow("SELECT id FROM users WHERE email = $1", normalized_email)
+            if existing:
+                raise HTTPException(status_code=409, detail="Email already exists")
+            await conn.execute(
+                """
+                INSERT INTO users (id, email, name, password_hash)
+                VALUES ($1::uuid, $2, $3, $4)
+                """,
+                user_id,
+                normalized_email,
+                display_name,
+                f"plain:{incoming_password}",
+            )
+
+    # Keep login compatibility even when DB is unavailable locally.
+    USERS[normalized_email] = {
+        "password": incoming_password,
+        "user_id": user_id,
+        "name": display_name,
+    }
+
+    return AuthResponse(
+        accessToken=f"test-token:{user_id}",
+        user_id=user_id,
+        name=display_name if display_name else normalized_email.split("@")[0],
+    )
+
+
 @app.post("/auth/login", response_model=AuthResponse)
 async def login(request: LoginRequest):
     normalized_email = (request.email or "").strip().lower()
+    incoming_password = request.password or ""
+
     user = USERS.get(normalized_email)
-    if not user or user["password"] != request.password:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    return AuthResponse(
-        accessToken=f"test-token:{user['user_id']}",
-        user_id=user["user_id"],
-        name=user["name"]
-    )
+    if user and user["password"] == incoming_password:
+        return AuthResponse(
+            accessToken=f"test-token:{user['user_id']}",
+            user_id=user["user_id"],
+            name=user["name"]
+        )
+
+    if db_pool is not None:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, name, password_hash FROM users WHERE email = $1",
+                normalized_email,
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            stored = str(row["password_hash"] or "")
+            valid = False
+            if stored.startswith("plain:"):
+                valid = stored[6:] == incoming_password
+            elif stored:
+                try:
+                    # Supports pgcrypto hashes produced by crypt(..., gen_salt('bf')).
+                    valid = bool(
+                        await conn.fetchval(
+                            "SELECT crypt($1, $2) = $2",
+                            incoming_password,
+                            stored,
+                        )
+                    )
+                except Exception:
+                    valid = False
+
+        if not valid:
+            matched_seed = USERS.get(normalized_email)
+            if not matched_seed or matched_seed["password"] != incoming_password:
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        # Cache for subsequent logins without DB hit in the same process.
+        USERS[normalized_email] = {
+            "password": incoming_password,
+            "user_id": str(row["id"]),
+            "name": str(row["name"] or normalized_email.split("@")[0]),
+        }
+        return AuthResponse(
+            accessToken=f"test-token:{row['id']}",
+            user_id=str(row["id"]),
+            name=str(row["name"] or normalized_email.split("@")[0]),
+        )
+
+    raise HTTPException(status_code=404, detail="User not found")
 
 
 @app.post("/auth/password-reset", response_model=PasswordResetResponse)
@@ -1462,6 +2001,14 @@ async def password_reset(request: PasswordResetRequest):
     if user:
         user["password"] = new_password
 
+    if db_pool is not None:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET password_hash = $1 WHERE LOWER(email) = $2",
+                f"plain:{new_password}",
+                normalized_email,
+            )
+
     # Return a generic success message to avoid email enumeration.
     return PasswordResetResponse(
         ok=True,
@@ -1470,17 +2017,65 @@ async def password_reset(request: PasswordResetRequest):
 
 
 @app.post("/crew/invite-email")
-async def crew_invite_email(request: CrewInviteEmailRequest):
+async def crew_invite_email(request: CrewInviteEmailRequest, authorization: str | None = Header(default=None)):
     inviter_email = (request.inviter_email or "").strip().lower()
     invitee_email = (request.invitee_email or "").strip().lower()
     inviter_name = (request.inviter_name or "").strip() or "A WanderPlan user"
 
-    if "@" not in inviter_email:
-        raise HTTPException(status_code=400, detail="Invalid inviter email")
     if "@" not in invitee_email:
         raise HTTPException(status_code=400, detail="Invalid invitee email")
-    if inviter_email == invitee_email:
-        raise HTTPException(status_code=400, detail="Cannot invite your own email")
+
+    authed_user_id = ""
+    if authorization:
+        try:
+            authed_user_id = _parse_user_id_from_token(authorization)
+        except HTTPException:
+            authed_user_id = ""
+
+    invite_token = str(uuid4())
+    invitee_has_account = False
+    if db_pool is not None:
+        async with db_pool.acquire() as conn:
+            inviter = None
+            if authed_user_id:
+                inviter = await conn.fetchrow(
+                    "SELECT id, email, name FROM users WHERE id = $1",
+                    authed_user_id,
+                )
+            if inviter is None:
+                if "@" not in inviter_email:
+                    raise HTTPException(status_code=400, detail="Invalid inviter email")
+                inviter = await conn.fetchrow(
+                    "SELECT id, email, name FROM users WHERE LOWER(email) = $1",
+                    inviter_email,
+                )
+            if not inviter:
+                raise HTTPException(status_code=404, detail="Inviter account not found")
+            inviter_email = str(inviter["email"] or "").strip().lower()
+            if inviter_email == invitee_email:
+                raise HTTPException(status_code=400, detail="Cannot invite your own email")
+            invitee_row = await conn.fetchrow(
+                "SELECT id FROM users WHERE LOWER(email) = $1",
+                invitee_email,
+            )
+            invitee_has_account = invitee_row is not None
+            await conn.execute(
+                """
+                INSERT INTO crew_invites (invite_token, inviter_user_id, inviter_email, invitee_email, status)
+                VALUES ($1, $2, $3, $4, 'pending')
+                """,
+                invite_token,
+                str(inviter["id"]),
+                inviter_email,
+                invitee_email,
+            )
+            if not request.inviter_name and inviter["name"]:
+                inviter_name = str(inviter["name"])
+    else:
+        if "@" not in inviter_email:
+            raise HTTPException(status_code=400, detail="Invalid inviter email")
+        if inviter_email == invitee_email:
+            raise HTTPException(status_code=400, detail="Cannot invite your own email")
 
     delivery_mode = _crew_invite_delivery_mode()
     email_sent = False
@@ -1490,17 +2085,462 @@ async def crew_invite_email(request: CrewInviteEmailRequest):
             inviter_email=inviter_email,
             inviter_name=inviter_name,
             invitee_email=invitee_email,
+            invite_token=invite_token,
+            invitee_has_account=invitee_has_account,
         )
 
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+    accept_link = f"{frontend_base}/?entry=home&invite_token={quote_plus(invite_token)}&invite_action=accept"
+    reject_link = f"{frontend_base}/?entry=home&invite_token={quote_plus(invite_token)}&invite_action=reject"
     return {
         "ok": True,
         "invitee_email": invitee_email,
+        "invite_token": invite_token,
         "email_sent": email_sent,
         "email_error": email_error or None,
         "delivery_mode": "email" if email_sent else "link_only",
-        "invite_link": f"{frontend_base}/?entry=home",
+        "invite_link": accept_link,
+        "accept_link": accept_link,
+        "reject_link": reject_link,
+        "invitee_has_account": invitee_has_account,
     }
+
+
+async def _crew_respond_to_invite(token: str, action: str, user_id: str) -> dict[str, Any]:
+    token = (token or "").strip()
+    action = (action or "accept").strip().lower()
+    if action in {"accepted"}:
+        action = "accept"
+    if action in {"declined", "reject"}:
+        action = "reject"
+    if action not in {"accept", "reject"}:
+        raise HTTPException(status_code=400, detail="action must be accept or reject")
+    if not token:
+        raise HTTPException(status_code=400, detail="invite_token is required")
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT id, email FROM users WHERE id = $1", user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        my_email = str(user["email"] or "").strip().lower()
+
+        invite = await conn.fetchrow(
+            """
+            SELECT invite_token, inviter_user_id, inviter_email, invitee_email, status, accepted_by_user_id
+            FROM crew_invites
+            WHERE invite_token = $1
+            """,
+            token,
+        )
+        if not invite:
+            raise HTTPException(status_code=404, detail="Invite not found")
+
+        if str(invite["invitee_email"] or "").strip().lower() != my_email:
+            raise HTTPException(status_code=403, detail="Invite does not belong to this account")
+
+        inviter_user_id = str(invite["inviter_user_id"] or "")
+        if not inviter_user_id:
+            raise HTTPException(status_code=404, detail="Inviter account no longer exists")
+
+        current_status = str(invite["status"] or "").lower()
+        if action == "accept":
+            if current_status == "accepted":
+                accepted_by = str(invite["accepted_by_user_id"] or "")
+                if accepted_by and accepted_by != user_id:
+                    raise HTTPException(status_code=409, detail="Invite already accepted by another account")
+            if current_status == "declined":
+                raise HTTPException(status_code=409, detail="Invite already declined")
+
+            # Ensure reciprocal links exist even for idempotent accepts.
+            await conn.execute(
+                """
+                INSERT INTO crew_links (user_id, peer_user_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, peer_user_id) DO NOTHING
+                """,
+                inviter_user_id,
+                user_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO crew_links (user_id, peer_user_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, peer_user_id) DO NOTHING
+                """,
+                user_id,
+                inviter_user_id,
+            )
+            await conn.execute(
+                """
+                UPDATE crew_invites
+                SET status = 'accepted', accepted_by_user_id = $2, accepted_at = COALESCE(accepted_at, NOW())
+                WHERE invite_token = $1
+                """,
+                token,
+                user_id,
+            )
+            # If multiple pending invites were sent to the same email, mark them accepted too
+            # so inviter status does not remain stale on an older "pending" token.
+            await conn.execute(
+                """
+                UPDATE crew_invites
+                SET status = 'accepted', accepted_by_user_id = $3, accepted_at = COALESCE(accepted_at, NOW())
+                WHERE inviter_user_id = $1
+                  AND LOWER(invitee_email) = $2
+                  AND status = 'pending'
+                """,
+                inviter_user_id,
+                my_email,
+                user_id,
+            )
+            return {
+                "ok": True,
+                "action": "accept",
+                "status": "accepted",
+                "inviter_user_id": inviter_user_id,
+                "invitee_user_id": user_id,
+                "already_linked": current_status == "accepted",
+            }
+
+        # reject
+        if current_status == "accepted":
+            raise HTTPException(status_code=409, detail="Invite already accepted")
+        if current_status == "declined":
+            return {
+                "ok": True,
+                "action": "reject",
+                "status": "declined",
+                "inviter_user_id": inviter_user_id,
+                "invitee_user_id": user_id,
+                "already_linked": False,
+            }
+
+        await conn.execute(
+            """
+            UPDATE crew_invites
+            SET status = 'declined', accepted_by_user_id = NULL, accepted_at = NOW()
+            WHERE invite_token = $1
+            """,
+            token,
+        )
+        return {
+            "ok": True,
+            "action": "reject",
+            "status": "declined",
+            "inviter_user_id": inviter_user_id,
+            "invitee_user_id": user_id,
+            "already_linked": False,
+        }
+
+
+@app.post("/crew/invites/respond")
+async def crew_respond_invite(body: CrewInviteRespondRequest, user_id: str = Depends(get_current_user_id)):
+    return await _crew_respond_to_invite(body.invite_token, body.action, user_id)
+
+
+@app.post("/crew/invites/accept")
+async def crew_accept_invite(body: CrewInviteAcceptRequest, user_id: str = Depends(get_current_user_id)):
+    return await _crew_respond_to_invite(body.invite_token, "accept", user_id)
+
+
+@app.get("/crew/invites/sent")
+async def crew_sent_invites(user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH ranked AS (
+              SELECT
+                ci.invite_token,
+                ci.invitee_email,
+                ci.status,
+                ci.created_at,
+                ci.accepted_at,
+                ci.accepted_by_user_id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY LOWER(ci.invitee_email)
+                  ORDER BY ci.created_at DESC
+                ) AS rn
+              FROM crew_invites ci
+              WHERE ci.inviter_user_id = $1
+            )
+            SELECT
+              r.invite_token,
+              r.invitee_email,
+              r.status,
+              r.created_at,
+              r.accepted_at,
+              u.email AS accepted_by_email
+            FROM ranked r
+            LEFT JOIN users u ON u.id = r.accepted_by_user_id
+            WHERE r.rn = 1
+            ORDER BY r.created_at DESC
+            """,
+            user_id,
+        )
+    return {
+        "invites": [
+            {
+                "invite_token": str(row["invite_token"] or ""),
+                "invitee_email": str(row["invitee_email"] or ""),
+                "status": str(row["status"] or "pending"),
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "accepted_at": row["accepted_at"].isoformat() if row["accepted_at"] else None,
+                "accepted_by_email": str(row["accepted_by_email"] or ""),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/crew/links")
+async def crew_links(user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT cl.peer_user_id, u.email, u.name
+            FROM crew_links cl
+            JOIN users u ON u.id = cl.peer_user_id
+            WHERE cl.user_id = $1
+            ORDER BY u.name ASC, u.email ASC
+            """,
+            user_id,
+        )
+    return {
+        "links": [
+            {
+                "peer_user_id": str(row["peer_user_id"]),
+                "email": str(row["email"] or ""),
+                "name": str(row["name"] or ""),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/crew/peer-profiles")
+async def crew_peer_profiles(user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+              u.id AS peer_user_id,
+              u.email,
+              u.name,
+              up.display_name,
+              up.travel_styles,
+              up.interests,
+              up.budget_tier,
+              up.dietary
+            FROM crew_links cl
+            JOIN users u ON u.id = cl.peer_user_id
+            LEFT JOIN user_profiles up ON up.user_id = u.id
+            WHERE cl.user_id = $1
+            ORDER BY COALESCE(up.display_name, u.name) ASC, u.email ASC
+            """,
+            user_id,
+        )
+    peers = []
+    for row in rows:
+        default_name = str(row["name"] or row["email"] or "Traveler")
+        interests = row["interests"]
+        if isinstance(interests, str):
+            try:
+                interests = json.loads(interests)
+            except Exception:
+                interests = {}
+        if not isinstance(interests, dict):
+            interests = {}
+        peers.append(
+            {
+                "peer_user_id": str(row["peer_user_id"]),
+                "email": str(row["email"] or ""),
+                "name": default_name,
+                "profile": {
+                    "display_name": str(row["display_name"] or default_name),
+                    "travel_styles": list(row["travel_styles"] or []),
+                    "interests": interests,
+                    "budget_tier": str(row["budget_tier"] or "moderate"),
+                    "dietary": list(row["dietary"] or []),
+                },
+            }
+        )
+    return {"peers": peers}
+
+
+@app.put("/me/profile")
+async def put_me_profile(body: MeProfileRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT name, email FROM users WHERE id = $1", user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        display_name = (body.display_name or "").strip() or str(user["name"] or "").strip() or str(user["email"]).split("@")[0]
+        await conn.execute(
+            """
+            INSERT INTO user_profiles (user_id, display_name, travel_styles, interests, budget_tier, dietary, updated_at)
+            VALUES ($1, $2, $3::text[], $4::jsonb, $5, $6::text[], NOW())
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+              display_name = EXCLUDED.display_name,
+              travel_styles = EXCLUDED.travel_styles,
+              interests = EXCLUDED.interests,
+              budget_tier = EXCLUDED.budget_tier,
+              dietary = EXCLUDED.dietary,
+              updated_at = NOW()
+            """,
+            user_id,
+            display_name,
+            body.travel_styles or [],
+            json.dumps(body.interests or {}),
+            body.budget_tier or "moderate",
+            body.dietary or [],
+        )
+    return {
+        "ok": True,
+        "profile": {
+            "display_name": display_name,
+            "travel_styles": body.travel_styles or [],
+            "interests": body.interests or {},
+            "budget_tier": body.budget_tier or "moderate",
+            "dietary": body.dietary or [],
+        },
+    }
+
+
+@app.get("/me/profile")
+async def get_me_profile(user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT u.name, u.email, up.display_name, up.travel_styles, up.interests, up.budget_tier, up.dietary
+            FROM users u
+            LEFT JOIN user_profiles up ON up.user_id = u.id
+            WHERE u.id = $1
+            """,
+            user_id,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    default_name = str(row["name"] or row["email"] or "Traveler")
+    interests = row["interests"]
+    if isinstance(interests, str):
+        try:
+            interests = json.loads(interests)
+        except Exception:
+            interests = {}
+    if not isinstance(interests, dict):
+        interests = {}
+    return {
+        "profile": {
+            "display_name": str(row["display_name"] or default_name),
+            "travel_styles": list(row["travel_styles"] or []),
+            "interests": interests,
+            "budget_tier": str(row["budget_tier"] or "moderate"),
+            "dietary": list(row["dietary"] or []),
+        }
+    }
+
+
+def _format_personal_bucket_item(row: asyncpg.Record) -> dict[str, Any]:
+    item_id = str(row["id"])
+    destination = str(row["destination"] or "")
+    country = str(row["country"] or "")
+    tags = list(row["tags"] or [])
+    best_months = [int(x) for x in (row["best_months"] or [])]
+    cost_per_day = float(row["cost_per_day"] or 0)
+    best_time_desc = str(row["best_time_desc"] or "")
+    cost_note = str(row["cost_note"] or "")
+    return {
+        "id": item_id,
+        "destination": destination,
+        "name": destination,
+        "country": country,
+        "tags": tags,
+        "best_months": best_months,
+        "bestMonths": best_months,
+        "cost_per_day": cost_per_day,
+        "costPerDay": cost_per_day,
+        "best_time_desc": best_time_desc,
+        "bestTimeDesc": best_time_desc,
+        "cost_note": cost_note,
+        "costNote": cost_note,
+    }
+
+
+@app.post("/me/bucket-list", status_code=201)
+async def post_me_bucket_list(body: MeBucketItemRequest, user_id: str = Depends(get_current_user_id)):
+    destination = (body.destination or "").strip()
+    if not destination:
+        raise HTTPException(status_code=400, detail="destination is required")
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO personal_bucket_items (
+              user_id, destination, country, tags, best_months, cost_per_day, best_time_desc, cost_note
+            )
+            VALUES ($1, $2, $3, $4::text[], $5::int[], $6, $7, $8)
+            RETURNING id, destination, country, tags, best_months, cost_per_day, best_time_desc, cost_note
+            """,
+            user_id,
+            destination,
+            (body.country or "").strip() or None,
+            body.tags or [],
+            body.best_months or [],
+            body.cost_per_day or 0,
+            body.best_time_desc or "",
+            body.cost_note or "",
+        )
+    return {"item": _format_personal_bucket_item(row)}
+
+
+@app.get("/me/bucket-list")
+async def get_me_bucket_list(user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, destination, country, tags, best_months, cost_per_day, best_time_desc, cost_note
+            FROM personal_bucket_items
+            WHERE user_id = $1
+            ORDER BY created_at DESC, destination ASC
+            """,
+            user_id,
+        )
+    return {"items": [_format_personal_bucket_item(row) for row in rows]}
+
+
+@app.delete("/me/bucket-list/{item_id}")
+async def delete_me_bucket_item(item_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        deleted = await conn.fetchrow(
+            """
+            DELETE FROM personal_bucket_items
+            WHERE id = $1 AND user_id = $2
+            RETURNING id
+            """,
+            item_id,
+            user_id,
+        )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Bucket item not found")
+    return {"ok": True, "id": str(deleted["id"])}
 
 
 @app.post("/nlp/extract-destinations")
@@ -1525,6 +2565,11 @@ async def extract_destinations(body: DestinationExtractionRequest):
         "parse_source": parse_source,
         "llm_error": llm_error,
     }
+
+
+@app.post("/llm/messages")
+async def llm_messages(body: LLMMessageRequest):
+    return await asyncio.to_thread(_anthropic_messages_proxy, body)
 
 
 @app.post("/trips", status_code=201)
@@ -1618,17 +2663,297 @@ async def get_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
     }
 
 
+@app.get("/trips/{trip_id}/planning-state")
+async def get_trip_planning_state(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        row = await conn.fetchrow(
+            """
+            SELECT trip_id, current_step, state, updated_by, updated_at
+            FROM trip_planning_states
+            WHERE trip_id = $1
+            """,
+            trip_id,
+        )
+    if not row:
+        return {
+            "trip_id": trip_id,
+            "current_step": 0,
+            "state": {},
+            "updated_by": None,
+            "updated_at": None,
+        }
+    return {
+        "trip_id": str(row["trip_id"]),
+        "current_step": int(row["current_step"] or 0),
+        "state": row["state"] or {},
+        "updated_by": str(row["updated_by"]) if row["updated_by"] else None,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+@app.put("/trips/{trip_id}/planning-state")
+async def put_trip_planning_state(
+    trip_id: str,
+    body: TripPlanningStateUpdateRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    incoming_state = body.state if isinstance(body.state, dict) else {}
+    if body.current_step is not None:
+        try:
+            next_step = max(0, int(body.current_step))
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid current_step")
+    else:
+        next_step = None
+
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        membership = await conn.fetchrow(
+            "SELECT status FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not membership or str(membership["status"] or "pending").lower() != "accepted":
+            raise HTTPException(status_code=403, detail="Only accepted trip members can update planning state")
+
+        existing = await conn.fetchrow(
+            """
+            SELECT current_step, state
+            FROM trip_planning_states
+            WHERE trip_id = $1
+            """,
+            trip_id,
+        )
+        existing_state = (existing["state"] or {}) if existing else {}
+        if not isinstance(existing_state, dict):
+            existing_state = {}
+        if body.merge:
+            merged_state = dict(existing_state)
+            merged_state.update(incoming_state)
+        else:
+            merged_state = incoming_state
+
+        step_value = next_step if next_step is not None else int((existing["current_step"] if existing else 0) or 0)
+        row = await conn.fetchrow(
+            """
+            INSERT INTO trip_planning_states (trip_id, current_step, state, updated_by, updated_at)
+            VALUES ($1, $2, $3::jsonb, $4, NOW())
+            ON CONFLICT (trip_id)
+            DO UPDATE SET current_step = EXCLUDED.current_step,
+                          state = EXCLUDED.state,
+                          updated_by = EXCLUDED.updated_by,
+                          updated_at = NOW()
+            RETURNING trip_id, current_step, state, updated_by, updated_at
+            """,
+            trip_id,
+            step_value,
+            json.dumps(merged_state),
+            user_id,
+        )
+
+    return {
+        "trip_id": str(row["trip_id"]),
+        "current_step": int(row["current_step"] or 0),
+        "state": row["state"] or {},
+        "updated_by": str(row["updated_by"]) if row["updated_by"] else None,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+@app.get("/me/trips")
+async def get_my_trips(user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        my_trips = await conn.fetch(
+            """
+            SELECT t.id, t.owner_id, t.name, t.status, t.duration_days, tm.role AS my_role, tm.status AS my_status
+            FROM trip_members tm
+            JOIN trips t ON t.id = tm.trip_id
+            WHERE tm.user_id = $1
+            ORDER BY t.name ASC
+            """,
+            user_id,
+        )
+
+        trips: list[dict[str, Any]] = []
+        for trip in my_trips:
+            members = await conn.fetch(
+                """
+                SELECT
+                  tm.user_id,
+                  tm.role,
+                  tm.status,
+                  u.name,
+                  u.email,
+                  up.display_name,
+                  up.interests,
+                  up.budget_tier,
+                  up.dietary
+                FROM trip_members tm
+                JOIN users u ON u.id = tm.user_id
+                LEFT JOIN user_profiles up ON up.user_id = u.id
+                WHERE tm.trip_id = $1
+                ORDER BY tm.joined_at NULLS FIRST, u.email ASC
+                """,
+                trip["id"],
+            )
+            # Primary source for selected trip destinations in current flow.
+            # Fallback to legacy trip_destinations if needed.
+            try:
+                dest_rows = await conn.fetch(
+                    """
+                    SELECT destination
+                    FROM bucket_list_items
+                    WHERE trip_id = $1
+                    GROUP BY destination
+                    ORDER BY MAX(vote_score) DESC, destination ASC
+                    """,
+                    trip["id"],
+                )
+            except Exception:
+                dest_rows = []
+            if not dest_rows:
+                try:
+                    dest_rows = await conn.fetch(
+                        "SELECT destination FROM trip_destinations WHERE trip_id = $1 ORDER BY destination ASC",
+                        trip["id"],
+                    )
+                except Exception:
+                    dest_rows = []
+
+            member_items: list[dict[str, Any]] = []
+            for m in members:
+                interests = m["interests"]
+                if isinstance(interests, str):
+                    try:
+                        interests = json.loads(interests)
+                    except Exception:
+                        interests = {}
+                if not isinstance(interests, dict):
+                    interests = {}
+
+                member_items.append(
+                    {
+                        "user_id": str(m["user_id"]),
+                        "role": str(m["role"] or "member"),
+                        "status": str(m["status"] or "pending"),
+                        "name": str(m["name"] or ""),
+                        "email": str(m["email"] or ""),
+                        "profile": {
+                            "display_name": str(m["display_name"] or m["name"] or ""),
+                            "interests": interests,
+                            "budget_tier": str(m["budget_tier"] or "moderate"),
+                            "dietary": list(m["dietary"] or []),
+                        },
+                    }
+                )
+
+            trips.append(
+                {
+                    "id": str(trip["id"]),
+                    "owner_id": str(trip["owner_id"]),
+                    "name": str(trip["name"] or ""),
+                    "status": str(trip["status"] or "planning"),
+                    "duration_days": int(trip["duration_days"] or 0),
+                    "my_role": str(trip["my_role"] or "member"),
+                    "my_status": str(trip["my_status"] or "pending"),
+                    "destinations": [str(d["destination"]) for d in dest_rows],
+                    "members": member_items,
+                }
+            )
+
+    return {"trips": trips}
+
+
+@app.post("/trips/{trip_id}/join")
+async def join_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        trip = await conn.fetchrow(
+            "SELECT id, owner_id, name, status, duration_days FROM trips WHERE id = $1",
+            trip_id,
+        )
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+
+        row = await conn.fetchrow(
+            """
+            UPDATE trip_members
+            SET status = 'accepted', joined_at = NOW()
+            WHERE trip_id = $1 AND user_id = $2
+            RETURNING user_id, role, status
+            """,
+            trip_id,
+            user_id,
+        )
+        if not row:
+            existing = await conn.fetchrow(
+                "SELECT user_id, role, status FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+                trip_id,
+                user_id,
+            )
+            if not existing:
+                raise HTTPException(status_code=403, detail="You are not invited to this trip")
+            row = existing
+        trip_status = await conn.fetchval(
+            """
+            UPDATE trips
+            SET status = CASE
+                WHEN COALESCE(status, '') IN ('', 'draft', 'saved', 'invited') THEN 'planning'
+                ELSE status
+            END
+            WHERE id = $1
+            RETURNING status
+            """,
+            trip_id,
+        )
+
+    return {
+        "ok": True,
+        "trip": {
+            "id": str(trip["id"]),
+            "owner_id": str(trip["owner_id"]),
+            "name": str(trip["name"] or ""),
+            "status": str(trip_status or trip["status"] or "planning"),
+            "duration_days": int(trip["duration_days"] or 0),
+        },
+        "member": {
+            "user_id": str(row["user_id"]),
+            "role": str(row["role"] or "member"),
+            "status": str(row["status"] or "pending"),
+        },
+    }
+
+
 @app.post("/trips/{trip_id}/members", status_code=201)
 async def invite_member(
     trip_id: str,
     body: InviteMemberRequest,
     user_id: str = Depends(get_current_user_id),
 ):
+    try:
+        UUID(str(trip_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid trip id")
+
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
+    trip_duration_days = 0
+    trip_destinations: list[str] = []
+    inviter_email = ""
     async with db_pool.acquire() as conn:
-        trip = await conn.fetchrow("SELECT owner_id, name FROM trips WHERE id = $1", trip_id)
+        trip = await conn.fetchrow("SELECT owner_id, name, duration_days FROM trips WHERE id = $1", trip_id)
         if not trip:
             raise HTTPException(status_code=404, detail="Trip not found")
         if str(trip["owner_id"]) != user_id:
@@ -1638,15 +2963,30 @@ async def invite_member(
         if not invitee:
             raise HTTPException(status_code=404, detail="User not found")
 
-        inviter = await conn.fetchrow("SELECT name FROM users WHERE id = $1", user_id)
+        inviter = await conn.fetchrow("SELECT name, email FROM users WHERE id = $1", user_id)
         inviter_name = inviter["name"] if inviter and inviter["name"] else "A WanderPlan user"
+        inviter_email = str(inviter["email"] or "").strip().lower() if inviter and inviter["email"] else "owner@example.com"
+        trip_duration_days = int(trip["duration_days"] or 0)
+        dest_rows = await conn.fetch(
+            """
+            SELECT DISTINCT destination
+            FROM bucket_list_items
+            WHERE trip_id = $1
+            ORDER BY destination ASC
+            LIMIT 8
+            """,
+            trip_id,
+        )
+        trip_destinations = [str(row["destination"] or "").strip() for row in dest_rows if str(row["destination"] or "").strip()]
 
         row = await conn.fetchrow(
             """
             INSERT INTO trip_members (trip_id, user_id, role, status)
             VALUES ($1, $2, $3, 'pending')
             ON CONFLICT (trip_id, user_id)
-            DO UPDATE SET role = EXCLUDED.role, status = 'pending'
+            DO UPDATE
+            SET role = EXCLUDED.role,
+                status = CASE WHEN trip_members.status = 'accepted' THEN 'accepted' ELSE 'pending' END
             RETURNING user_id, role, status
             """,
             trip_id,
@@ -1657,9 +2997,15 @@ async def invite_member(
     email_sent, email_error = await _send_trip_invite_email(
         to_email=invitee["email"],
         inviter_name=inviter_name,
+        inviter_email=inviter_email,
         trip_name=trip["name"],
         trip_id=trip_id,
+        duration_days=trip_duration_days,
+        destinations=trip_destinations,
     )
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+    accept_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}&trip_invite_action=accept"
+    reject_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}&trip_invite_action=reject"
 
     return {
         "user_id": str(row["user_id"]),
@@ -1668,7 +3014,123 @@ async def invite_member(
         "email": invitee["email"],
         "email_sent": email_sent,
         "email_error": email_error or None,
+        "accept_link": accept_link,
+        "reject_link": reject_link,
     }
+
+
+@app.post("/trips/{trip_id}/respond")
+async def respond_trip_invite(
+    trip_id: str,
+    body: TripInviteRespondRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    action = (body.action or "accept").strip().lower()
+    if action in {"accepted"}:
+        action = "accept"
+    if action in {"decline", "declined", "reject"}:
+        action = "reject"
+    if action not in {"accept", "reject"}:
+        raise HTTPException(status_code=400, detail="action must be accept or reject")
+
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        trip = await conn.fetchrow(
+            "SELECT id, owner_id, name, status, duration_days FROM trips WHERE id = $1",
+            trip_id,
+        )
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+
+        membership = await conn.fetchrow(
+            """
+            SELECT user_id, role, status
+            FROM trip_members
+            WHERE trip_id = $1 AND user_id = $2
+            """,
+            trip_id,
+            user_id,
+        )
+        if not membership:
+            raise HTTPException(status_code=403, detail="You are not invited to this trip")
+
+        current_status = str(membership["status"] or "pending").lower()
+        if action == "accept":
+            row = await conn.fetchrow(
+                """
+                UPDATE trip_members
+                SET status = 'accepted', joined_at = NOW()
+                WHERE trip_id = $1 AND user_id = $2
+                RETURNING user_id, role, status
+                """,
+                trip_id,
+                user_id,
+            )
+            normalized_trip = await conn.fetchrow(
+                """
+                UPDATE trips
+                SET status = CASE
+                    WHEN COALESCE(status, '') IN ('', 'draft', 'saved', 'invited') THEN 'planning'
+                    ELSE status
+                END
+                WHERE id = $1
+                RETURNING status
+                """,
+                trip_id,
+            )
+            return {
+                "ok": True,
+                "action": action,
+                "trip": {
+                    "id": str(trip["id"]),
+                    "owner_id": str(trip["owner_id"]),
+                    "name": str(trip["name"] or ""),
+                    "status": str(normalized_trip["status"] if normalized_trip else trip["status"] or "planning"),
+                    "duration_days": int(trip["duration_days"] or 0),
+                },
+                "member": {
+                    "user_id": str(row["user_id"]),
+                    "role": str(row["role"] or "member"),
+                    "status": str(row["status"] or "accepted"),
+                    "previous_status": current_status,
+                },
+            }
+
+        if current_status == "accepted":
+            raise HTTPException(status_code=409, detail="Invite already accepted")
+
+        row = await conn.fetchrow(
+            """
+            UPDATE trip_members
+            SET status = 'declined'
+            WHERE trip_id = $1 AND user_id = $2
+            RETURNING user_id, role, status
+            """,
+            trip_id,
+            user_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Membership not found")
+
+        return {
+            "ok": True,
+            "action": action,
+            "trip": {
+                "id": str(trip["id"]),
+                "owner_id": str(trip["owner_id"]),
+                "name": str(trip["name"] or ""),
+                "status": str(trip["status"] or "planning"),
+                "duration_days": int(trip["duration_days"] or 0),
+            },
+            "member": {
+                "user_id": str(row["user_id"]),
+                "role": str(row["role"] or "member"),
+                "status": str(row["status"] or "declined"),
+                "previous_status": current_status,
+            },
+        }
 
 
 @app.get("/trips/{trip_id}/destinations")
@@ -2081,6 +3543,171 @@ async def get_pois(
                 "approved": bool(row["approved"]),
             }
             for row in rows
+        ]
+    }
+
+
+@app.post("/trips/{trip_id}/pois/sync")
+async def sync_pois(
+    trip_id: str,
+    body: PoiSyncRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    clean_items: list[dict[str, Any]] = []
+    for item in body.pois or []:
+        name = str(item.name or "").strip()
+        if not name:
+            continue
+        city = str(item.destination or "").strip()
+        country = str(item.country or "").strip()
+        category = str(item.category or "").strip().lower() or "culture"
+        tags = [str(t or "").strip() for t in (item.tags or [])]
+        tags = [t for t in tags if t]
+        rating = None
+        if item.rating is not None:
+            try:
+                rating = round(float(item.rating), 1)
+            except Exception:
+                rating = None
+        try:
+            cost_estimate = round(float(item.cost_estimate_usd or 0), 2)
+        except Exception:
+            cost_estimate = 0.0
+        clean_items.append(
+            {
+                "poi_id": str(item.poi_id or "").strip(),
+                "name": name,
+                "category": category,
+                "city": city,
+                "country": country,
+                "tags": tags,
+                "rating": rating,
+                "cost_estimate_usd": cost_estimate,
+                "approved": bool(item.approved),
+            }
+        )
+
+    if len(clean_items) == 0:
+        return {"pois": []}
+
+    synced_rows: list[Any] = []
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        member_row = await conn.fetchrow(
+            "SELECT status FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not member_row or str(member_row["status"] or "pending").lower() != "accepted":
+            raise HTTPException(status_code=403, detail="Only accepted trip members can sync POIs")
+        for item in clean_items:
+            updated = None
+            pid = None
+            if item["poi_id"]:
+                try:
+                    pid = str(UUID(item["poi_id"]))
+                except Exception:
+                    pid = None
+            if pid:
+                updated = await conn.fetchrow(
+                    """
+                    UPDATE pois
+                    SET name = $1,
+                        category = $2,
+                        city = NULLIF($3, ''),
+                        country = NULLIF($4, ''),
+                        tags = $5::text[],
+                        rating = $6,
+                        cost_estimate_usd = $7,
+                        approved = $8
+                    WHERE id = $9 AND trip_id = $10
+                    RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                    """,
+                    item["name"],
+                    item["category"],
+                    item["city"],
+                    item["country"],
+                    item["tags"],
+                    item["rating"],
+                    item["cost_estimate_usd"],
+                    item["approved"],
+                    pid,
+                    trip_id,
+                )
+            if not updated:
+                existing = await conn.fetchrow(
+                    """
+                    SELECT id
+                    FROM pois
+                    WHERE trip_id = $1
+                      AND LOWER(name) = LOWER($2)
+                      AND COALESCE(LOWER(city), '') = COALESCE(LOWER($3), '')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    trip_id,
+                    item["name"],
+                    item["city"],
+                )
+                if existing:
+                    updated = await conn.fetchrow(
+                        """
+                        UPDATE pois
+                        SET category = $1,
+                            country = NULLIF($2, ''),
+                            tags = $3::text[],
+                            rating = $4,
+                            cost_estimate_usd = $5,
+                            approved = $6
+                        WHERE id = $7 AND trip_id = $8
+                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                        """,
+                        item["category"],
+                        item["country"],
+                        item["tags"],
+                        item["rating"],
+                        item["cost_estimate_usd"],
+                        item["approved"],
+                        existing["id"],
+                        trip_id,
+                    )
+                else:
+                    updated = await conn.fetchrow(
+                        """
+                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, approved)
+                        VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6::text[], $7, $8, $9)
+                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                        """,
+                        trip_id,
+                        item["name"],
+                        item["category"],
+                        item["city"],
+                        item["country"],
+                        item["tags"],
+                        item["rating"],
+                        item["cost_estimate_usd"],
+                        item["approved"],
+                    )
+            if updated:
+                synced_rows.append(updated)
+
+    return {
+        "pois": [
+            {
+                "poi_id": str(row["id"]),
+                "name": row["name"],
+                "category": row["category"],
+                "city": row["city"],
+                "country": row["country"],
+                "tags": row["tags"] or [],
+                "rating": float(row["rating"] or 0),
+                "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
+                "approved": bool(row["approved"]),
+            }
+            for row in synced_rows
         ]
     }
 
