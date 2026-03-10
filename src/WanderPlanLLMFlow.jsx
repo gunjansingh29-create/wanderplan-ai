@@ -39,7 +39,8 @@ function normalizeApiBase(raw){
 }
 
 function resolveApiBase(){
-  var envBase=normalizeApiBase((typeof process!=="undefined"&&process.env&&process.env.REACT_APP_API_BASE)||"");
+  // CRA/webpack inlines REACT_APP_* at build time.
+  var envBase=normalizeApiBase((process.env.REACT_APP_API_BASE)||"");
   if(envBase)return envBase;
   if(typeof window!=="undefined"){
     try{
@@ -63,7 +64,7 @@ function toApiUrl(path){
 }
 
 var API_BASE=resolveApiBase();
-var LLM_PROXY=normalizeApiBase((typeof process!=="undefined"&&process.env&&process.env.REACT_APP_LLM_PROXY)||"")||(""+API_BASE+"/llm/messages");
+var LLM_PROXY=normalizeApiBase((process.env.REACT_APP_LLM_PROXY)||"")||(""+API_BASE+"/llm/messages");
 var CREW_COLORS=[C.sky,C.coral,C.grn,C.purp,C.tealL,C.gold];
 
 function iniFromName(name){
