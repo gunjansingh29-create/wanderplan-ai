@@ -6,7 +6,7 @@ var MOFUL=["January","February","March","April","May","June","July","August","Se
 var CATS=[{id:"hiking",q:"Hiking & nature?"},{id:"food",q:"Food & cooking?"},{id:"culture",q:"Temples & history?"},{id:"photo",q:"Photography?"},{id:"adventure",q:"Water sports?"},{id:"nightlife",q:"Nightlife?"},{id:"shopping",q:"Markets & shopping?"},{id:"wellness",q:"Spa & wellness?"}];
 var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-range",r:"$120-250/day"},{id:"premium",l:"Premium",r:"$250-400/day"},{id:"luxury",l:"Luxury",r:"$400+/day"}];
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
-var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","Budget","Flights","Duration","Stays","Dining","Itinerary","Confirmed"];
+var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","POI Voting","Budget","Flights","Duration","Stays","Dining","Itinerary","Confirmed"];
 
 function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"translateY(0)":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
 function Avi(props){var s=props.size||28;return(<div title={props.name||""} style={{width:s,height:s,borderRadius:999,background:props.color||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:s*.4,fontWeight:700,color:"#fff",flexShrink:0,border:"1.5px solid "+C.surface}}>{props.ini||"?"}</div>);}
@@ -142,6 +142,11 @@ function mapTripMemberStatus(rawStatus){
   if(st==="declined"||st==="rejected")return "declined";
   if(st==="owner")return "accepted";
   return st||"selected";
+}
+
+function isUuidLike(value){
+  var v=String(value||"").trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
 function crewStatusLabel(rawStatus){
@@ -445,6 +450,7 @@ export default function WanderPlan(){
   var[poiLoad,setPL]=useState(false);
   var[poiDone,setPD]=useState(false);
   var[poiStatus,setPS]=useState({});
+  var[poiVotes,setPV]=useState({});
   var[poiAsk,setPA]=useState("");
   var[poiAskLoad,setPAL]=useState(false);
   var[flightDates,setFD]=useState({origin:"",depart:"",arrive:"",ret:""});
@@ -679,13 +685,22 @@ export default function WanderPlan(){
           };
         });
         var destArr=Array.isArray(t.destinations)?t.destinations:[];
+        var tripDestinations=destArr.map(function(d){
+          if(typeof d==="string")return d.trim();
+          if(d&&typeof d==="object"){
+            return String(d.name||d.destination||"").trim();
+          }
+          return "";
+        }).filter(Boolean);
         return {
           id:String(t.id||""),
           name:String(t.name||"Trip"),
           status:displayStatus,
           trip_status:tripStatusRaw,
           my_status:myStatusRaw,
-          destNames:destArr.join(" + "),
+          dests:tripDestinations.slice(),
+          destinations:tripDestinations.slice(),
+          destNames:tripDestinations.join(" + "),
           members:members,
           step:0,
           dates:"",
@@ -702,6 +717,7 @@ export default function WanderPlan(){
           if(!p)return t;
           return Object.assign({},t,{
             destNames:(t.destNames&&t.destNames.trim())?t.destNames:(p.destNames||""),
+            dests:(Array.isArray(t.dests)&&t.dests.length)?t.dests:(Array.isArray(p.dests)?p.dests:[]),
             step:Number(p.step||0)||0,
             dates:p.dates||"",
             budget:Number(p.budget||0)||0,
@@ -733,7 +749,13 @@ export default function WanderPlan(){
         if(!prev||!prev.id)return prev;
         var found=mapped.find(function(t){return t.id===prev.id;});
         if(!found)return prev;
-        return Object.assign({},prev,{members:found.members,status:found.status,name:found.name});
+        return Object.assign({},prev,{
+          members:found.members,
+          status:found.status,
+          name:found.name,
+          destNames:found.destNames,
+          dests:Array.isArray(found.dests)?found.dests.slice():[]
+        });
       });
     }catch(e){}
   }
@@ -1006,7 +1028,12 @@ export default function WanderPlan(){
   }
 
   async function inviteSelectedMembersToTrip(tripId,members){
-    if(!authToken||!tripId||!Array.isArray(members)||members.length===0)return;
+    var tripIdStr=String(tripId||"").trim();
+    if(!authToken||!tripIdStr||!Array.isArray(members)||members.length===0)return;
+    if(!isUuidLike(tripIdStr)){
+      setTIM("Trip session is missing. Go back to Create and save the trip first.");
+      return;
+    }
     var sent=0;
     var failed=[];
     var statusByEmail={};
@@ -1022,7 +1049,7 @@ export default function WanderPlan(){
         continue;
       }
       try{
-        var ir=await apiJson("/trips/"+tripId+"/members",{method:"POST",body:{email:email,role:"member"}},authToken);
+        var ir=await apiJson("/trips/"+tripIdStr+"/members",{method:"POST",body:{email:email,role:"member"}},authToken);
         var mappedStatus=mapTripMemberStatus(ir&&ir.status);
         statusByEmail[email]=mappedStatus;
         if(mappedStatus==="accepted"&&m.id)joinedIds[m.id]=true;
@@ -1043,7 +1070,7 @@ export default function WanderPlan(){
       });
       setTrips(function(prev){
         return (prev||[]).map(function(t){
-          if(!t||t.id!==tripId)return t;
+          if(!t||t.id!==tripIdStr)return t;
           var ms=(Array.isArray(t.members)?t.members:[]).map(function(mm){
             var em=String(mm&&mm.email||"").trim().toLowerCase();
             if(!em||statusByEmail[em]===undefined)return mm;
@@ -1403,7 +1430,22 @@ export default function WanderPlan(){
             setWS(0);go("wizard");
           }
         }).catch(function(){
-          setTrips(function(p){return p.concat([localTrip]);});setNT(localTrip);setWS(0);go("wizard");
+          apiJson("/trips",{method:"POST",body:{name:newTrip.name,duration_days:10,destination_hint:destNames[0]||""}},authToken).then(function(cr){
+            var createdTripId=(cr&&cr.trip&&cr.trip.id)||"";
+            if(createdTripId&&destNames.length>0){
+              apiJson("/trips/"+createdTripId+"/destinations",{method:"PUT",body:{destinations:destNames,votes:{}}},authToken).catch(function(){});
+            }
+            if(createdTripId&&newTrip.members&&newTrip.members.length>0){
+              inviteSelectedMembersToTrip(createdTripId,newTrip.members.filter(function(m){return isTripInvitePending(m);}));
+            }
+            var trip=Object.assign({},localTrip,{id:createdTripId||localTrip.id,name:newTrip.name,destNames:destNames.join(" + "),status:"planning"});
+            setCTID(createdTripId||"");
+            setTrips(function(p){return p.concat([trip]);});
+            setNT(trip);
+            setWS(0);go("wizard");
+          }).catch(function(){
+            setTrips(function(p){return p.concat([localTrip]);});setNT(localTrip);setWS(0);go("wizard");
+          });
         });
       }else{
         setTrips(function(p){return p.concat([localTrip]);});setNT(localTrip);setWS(0);go("wizard");
@@ -1421,7 +1463,17 @@ export default function WanderPlan(){
       if(st!=="declined")selectedCount++;
     });
     var canGo=jc>0||tm.length===0;
-    var td=(tr.dests||[]).map(function(id){return bucket.find(function(b){return b.id===id;});}).filter(Boolean);
+    var tripDestInputs=(Array.isArray(tr.dests)&&tr.dests.length)?tr.dests:String(tr.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
+    var td=tripDestInputs.map(function(v,idx){
+      var raw=String(v||"").trim();
+      if(!raw)return null;
+      var byId=bucket.find(function(b){return b.id===raw;});
+      if(byId)return byId;
+      var byName=bucket.find(function(b){return String(b&&b.name||"").trim().toLowerCase()===raw.toLowerCase();});
+      if(byName)return byName;
+      var sid=("trip-dest-"+idx+"-"+raw.toLowerCase().replace(/[^a-z0-9]+/g,"-")).replace(/^-+|-+$/g,"");
+      return {id:sid||("trip-dest-"+idx),name:raw,country:"",bestMonths:[],costPerDay:0,tags:[],bestTimeDesc:"",costNote:""};
+    }).filter(Boolean);
     var vd=td.filter(function(d){var v=destVotes[d.id];return v&&v.yes>v.no;});
     var dests=vd.length>0?vd:td;
 
@@ -1442,7 +1494,7 @@ export default function WanderPlan(){
     }
     function sendStep2TripInvites(){
       var tripIdForInvites=String(currentTripId||tr.id||"").trim();
-      if(!(authToken&&tripIdForInvites)){setTIM("Save/start this trip first, then send trip invites.");return;}
+      if(!(authToken&&tripIdForInvites&&isUuidLike(tripIdForInvites))){setTIM("Save/start this trip first, then send trip invites.");return;}
       var pending=tm.filter(function(m){return isTripInvitePending(m);});
       if(pending.length===0){setTIM("Trip invites already sent for selected members.");return;}
       inviteSelectedMembersToTrip(tripIdForInvites,pending);
@@ -1663,7 +1715,18 @@ export default function WanderPlan(){
 
     {wizStep===3&&(<div>
       {ab("Interest Profiler","Your profile interests merged with the group. Green = strong consensus.")}
-      {CATS.map(function(cat,i){var my=(user.interests||{})[cat.id];var gy=my===true?1:0;var gt=1;tm.forEach(function(m){if(tripJoined[m.id]){gt++;if(Math.random()>0.35)gy++;}});var p=Math.round((gy/gt)*100);
+      {CATS.map(function(cat,i){
+        var my=(user.interests||{})[cat.id];
+        var yesCount=0;
+        var totalCount=0;
+        if(typeof my==="boolean"){totalCount++;if(my)yesCount++;}
+        tm.forEach(function(m){
+          var prof=(m&&m.profile&&typeof m.profile==="object")?m.profile:null;
+          var ints=(prof&&prof.interests&&typeof prof.interests==="object")?prof.interests:{};
+          var v=ints[cat.id];
+          if(typeof v==="boolean"){totalCount++;if(v)yesCount++;}
+        });
+        var p=totalCount>0?Math.round((yesCount/totalCount)*100):0;
         return(<div key={cat.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:i<CATS.length-1?"1px solid "+C.border:"none"}}><span style={{flex:1,fontSize:13,color:C.tx2}}>{cat.q}</span><div style={{width:80,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:p+"%",background:p>=70?C.grn:p>=40?C.wrn:C.red,borderRadius:999}}/></div><span style={{fontSize:12,fontWeight:600,color:p>=70?C.grn:p>=40?C.wrn:C.red,minWidth:36,textAlign:"right"}}>{p}%</span></div>);
       })}
       {goBtn("Continue")}
@@ -1680,6 +1743,46 @@ export default function WanderPlan(){
       var rejected=pois.filter(function(p,i){return poiStatus[i]==="no";});
       var pending=pois.filter(function(p,i){return !poiStatus[i];});
       var allDecided=poiDone&&pois.length>0&&pending.length===0;
+      function revisePOISelection(){
+        setPS({});
+        if(authToken&&wizSessionId){
+          apiJson("/wizard/sessions/"+wizSessionId+"/actions",{method:"POST",body:{action_type:"revise_step",payload:{step:wizStep,scope:"poi.selection"}}},authToken).catch(function(){});
+        }
+      }
+      function approvePOISelection(){
+        var voteMembers=[{
+          id:"me",
+          name:user.name||user.email||"You",
+          ini:iniFromName(user.name||user.email||"You"),
+          color:C.gold
+        }];
+        (tm||[]).forEach(function(m){
+          voteMembers.push({
+            id:String(m.id||m.email||("crew-"+voteMembers.length)),
+            name:m.name||m.email||"Crew",
+            ini:m.ini||iniFromName(m.name||m.email||"Crew"),
+            color:m.color||CREW_COLORS[voteMembers.length%CREW_COLORS.length]
+          });
+        });
+        var acceptedIdx=[];
+        pois.forEach(function(_,i){if(poiStatus[i]==="yes")acceptedIdx.push(i);});
+        setPV(function(prev){
+          var next=Object.assign({},prev||{});
+          acceptedIdx.forEach(function(idx){
+            var row=Object.assign({},next[idx]||{});
+            voteMembers.forEach(function(vm){
+              if(row[vm.id]!==undefined)return;
+              row[vm.id]=(vm.id==="me")?"up":"";
+            });
+            next[idx]=row;
+          });
+          return next;
+        });
+        if(authToken&&wizSessionId){
+          apiJson("/wizard/sessions/"+wizSessionId+"/actions",{method:"POST",body:{action_type:"approve_step",payload:{step:wizStep,scope:"poi.selection",accepted_count:accepted.length,rejected_count:rejected.length}}},authToken).catch(function(){});
+        }
+        adv();
+      }
       function buildPOIGroupPrefs(){
         var yesMap={},noMap={},dietMap={},summaries=[];
         (tm||[]).forEach(function(m){
@@ -1719,6 +1822,7 @@ export default function WanderPlan(){
         {ab("POI Discovery Agent",poiDone?(allDecided?accepted.length+" activities selected. Add more or continue.":"Accept or reject each activity:"):("Find activities matched to your group"+(profCount>0?(" ("+profCount+" crew profile"+(profCount>1?"s":"")+" included)"):".") ))}
         {!poiDone&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent searches {dests.length} destination{dests.length>1?"s":""} based on group interests and budget.</p><button onClick={function(){
           setPL(true);
+          setPS({});
           askPOI(dests,user.interests||{},user.budget,user.dietary,poiGroupPrefs).then(function(res){
             if(res&&res.length){setPois(res);setPL(false);setPD(true);return;}
             if(authToken&&currentTripId){
@@ -1750,13 +1854,111 @@ export default function WanderPlan(){
           <div style={{marginTop:14,padding:"12px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"15"}}><p style={{fontSize:12,color:C.tealL}}>Missing something? Ask the agent to add a specific activity:</p></div>
           <div style={{display:"flex",gap:8,marginTop:8}}><input value={poiAsk} onChange={function(e){setPA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")addPOI();}} placeholder="e.g. 'a sunset sailing tour' or 'cooking class'" disabled={poiAskLoad} style={{flex:1,padding:"11px 14px",borderRadius:10,background:C.bg,border:"1.5px solid "+C.border,fontSize:14,color:"#fff",opacity:poiAskLoad?.5:1}}/><button onClick={addPOI} disabled={poiAskLoad} style={{padding:"10px 16px",borderRadius:10,border:"none",background:poiAskLoad?C.border:C.teal,color:poiAskLoad?C.tx3:"#fff",fontSize:13,fontWeight:600,cursor:poiAskLoad?"default":"pointer"}}>Add</button></div>
           {poiAskLoad&&<div style={{display:"flex",gap:4,marginTop:8}}><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div>}
-          {allDecided&&(<div style={{marginTop:14}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{accepted.length} activities selected across {dests.length} destination{dests.length>1?"s":""}. Total est. cost: ${accepted.reduce(function(s,p){return s+(p.cost||0);},0)}</p></div>{goBtn("Finalize "+accepted.length+" Activities")}</div>)}
+          {allDecided&&(<div style={{marginTop:14}}>
+            <div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}>
+              <p style={{fontSize:12,color:C.grn}}>{accepted.length} activities selected across {dests.length} destination{dests.length>1?"s":""}. Total est. cost: ${accepted.reduce(function(s,p){return s+(p.cost||0);},0)}</p>
+            </div>
+            <div style={{marginTop:10,padding:"10px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"18"}}>
+              <p style={{fontSize:12,color:C.tealL,fontWeight:600,marginBottom:4}}>Consolidated crew shortlist</p>
+              <p style={{fontSize:12,color:C.tx2}}>{accepted.length>0?accepted.map(function(p){return p.name;}).join(", "):"No accepted activities yet."}</p>
+            </div>
+            <div style={{display:"flex",gap:10,marginTop:12}}>
+              <button onClick={revisePOISelection} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
+              <button onClick={approvePOISelection} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Approve</button>
+            </div>
+          </div>)}
         </div>)}
         {poiDone&&pois.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"20px 0"}}>No activities found. Try asking for something specific below.</p><div style={{display:"flex",gap:8}}><input value={poiAsk} onChange={function(e){setPA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")addPOI();}} placeholder="e.g. 'hiking in Kyoto'" style={{flex:1,padding:"11px 14px",borderRadius:10,background:C.bg,border:"1.5px solid "+C.border,fontSize:14,color:"#fff"}}/><button onClick={addPOI} style={{padding:"10px 16px",borderRadius:10,border:"none",background:C.teal,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Add</button></div></div>)}
       </div>);
     }())}
 
-    {wizStep===6&&(<div>
+    {wizStep===6&&(function(){
+      var voteMembers=[{
+        id:"me",
+        name:user.name||user.email||"You",
+        ini:iniFromName(user.name||user.email||"You"),
+        color:C.gold
+      }];
+      (tm||[]).forEach(function(m){
+        voteMembers.push({
+          id:String(m.id||m.email||("crew-"+voteMembers.length)),
+          name:m.name||m.email||"Crew",
+          ini:m.ini||iniFromName(m.name||m.email||"Crew"),
+          color:m.color||CREW_COLORS[voteMembers.length%CREW_COLORS.length]
+        });
+      });
+      var candidates=[];
+      pois.forEach(function(p,i){if(poiStatus[i]==="yes")candidates.push({idx:i,poi:p});});
+      if(candidates.length===0){
+        pois.forEach(function(p,i){if(poiStatus[i]!=="no")candidates.push({idx:i,poi:p});});
+      }
+      var ranked=candidates.map(function(it){
+        var row=poiVotes[it.idx]||{};
+        var up=0;var down=0;
+        voteMembers.forEach(function(vm){
+          var v=row[vm.id];
+          if(v==="up")up++;
+          else if(v==="down")down++;
+        });
+        return Object.assign({},it,{up:up,down:down,score:up-down});
+      }).sort(function(a,b){
+        if(b.up!==a.up)return b.up-a.up;
+        if(a.down!==b.down)return a.down-b.down;
+        return String(a.poi.name||"").localeCompare(String(b.poi.name||""));
+      });
+      function castPoiVote(idx,memberId,vote){
+        setPV(function(prev){
+          var next=Object.assign({},prev||{});
+          var row=Object.assign({},next[idx]||{});
+          row[memberId]=vote;
+          next[idx]=row;
+          return next;
+        });
+      }
+      function applyPoiVotingAndContinue(){
+        var nextStatus=Object.assign({},poiStatus||{});
+        ranked.forEach(function(r){
+          nextStatus[r.idx]=(r.up>=r.down)?"yes":"no";
+        });
+        setPS(nextStatus);
+        logWizAction("record_selection",{key:"pois.voting",value:ranked.map(function(r){return {name:r.poi.name,up:r.up,down:r.down,approved:r.up>=r.down};})});
+        adv();
+      }
+      return(<div>
+        {ab("POI Voting Agent","Crew votes are tabulated here. Ranked from most voted to least voted.")}
+        {ranked.length===0&&<p style={{fontSize:13,color:C.tx2,padding:"8px 0"}}>No POIs available to vote yet. Go back to Activities and approve some first.</p>}
+        {ranked.map(function(r){
+          return(<div key={r.idx} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <p style={{fontSize:20,fontWeight:700,lineHeight:1.2}}>{r.poi.name}</p>
+              <span style={{fontSize:11,padding:"3px 10px",borderRadius:999,background:C.grnBg,color:C.grn,fontWeight:700}}>{r.up} up</span>
+            </div>
+            <p style={{fontSize:13,color:C.tx2,marginBottom:10}}>{r.poi.destination||"Destination"} - Mentioned by {r.up}</p>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {voteMembers.map(function(vm){
+                var row=poiVotes[r.idx]||{};
+                var v=row[vm.id]||"";
+                return(<div key={vm.id} style={{display:"flex",alignItems:"center",gap:6}}>
+                  <Avi ini={vm.ini} color={vm.color} size={24} name={vm.name}/>
+                  <button onClick={function(){castPoiVote(r.idx,vm.id,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:"pointer"}}>{"\uD83D\uDC4D"}</button>
+                  <button onClick={function(){castPoiVote(r.idx,vm.id,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:"pointer"}}>{"\uD83D\uDC4E"}</button>
+                </div>);
+              })}
+            </div>
+          </div>);
+        })}
+        {ranked.length>0&&(<div style={{marginTop:14,padding:"10px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"18"}}>
+          <p style={{fontSize:12,color:C.tealL,fontWeight:700,marginBottom:4}}>Ranked shortlist</p>
+          <p style={{fontSize:12,color:C.tx2}}>{ranked.map(function(r){return r.poi.name+" ("+r.up+")";}).join(" | ")}</p>
+        </div>)}
+        <div style={{display:"flex",gap:10,marginTop:14}}>
+          <button onClick={function(){setWS(5);}} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
+          <button onClick={applyPoiVotingAndContinue} disabled={ranked.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:ranked.length===0?C.border:C.teal,color:ranked.length===0?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:ranked.length===0?"default":"pointer",minHeight:46}}>Approve</button>
+        </div>
+      </div>);
+    }())}
+
+    {wizStep===7&&(<div>
       {ab("Budget Agent","Group budget preferences side-by-side:")}
       <div style={{display:"flex",gap:6,marginBottom:14}}><div style={{flex:1,background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center"}}><p style={{fontSize:11,color:C.tx3}}>You</p><p style={{fontSize:14,fontWeight:600,color:C.goldT}}>{user.budget||"moderate"}</p></div>{tm.filter(function(m){return tripJoined[m.id];}).map(function(m){return(<div key={m.id} style={{flex:1,background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center"}}><p style={{fontSize:11,color:C.tx3}}>{m.ini}</p><p style={{fontSize:14,fontWeight:600,color:C.sky}}>moderate</p></div>);})}</div>
       <div style={{padding:"12px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20",marginBottom:8}}><p style={{fontSize:13,color:C.tealL}}>Recommended: <strong>Mid-range ($150-250/day)</strong></p><p style={{fontSize:12,color:C.tx2,marginTop:4}}>Allocation: Flights 30% / Stays 35% / Food 20% / Activities 10% / Buffer 5%</p></div>
@@ -1765,7 +1967,7 @@ export default function WanderPlan(){
       {budgetSaveErr&&<p style={{fontSize:12,color:C.red,marginTop:8}}>{budgetSaveErr}</p>}
     </div>)}
 
-    {wizStep===7&&(function(){
+    {wizStep===8&&(function(){
       var extraInputs=flightLegInputsForDests();
       var allPicked=(flightLegs||[]).length>0&&(flightLegs||[]).every(function(leg){return !!flightSel[leg.leg_id];});
       function updFlight(k,v){setFD(function(p){var n=Object.assign({},p);n[k]=v;return n;});}
@@ -1819,7 +2021,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===8&&(function(){
+    {wizStep===9&&(function(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var poisByDest={};accPois.forEach(function(p){var d=p.destination||"Other";if(!poisByDest[d])poisByDest[d]=[];poisByDest[d].push(p);});
       var destNames=Object.keys(poisByDest);if(destNames.length===0)dests.forEach(function(d){destNames.push(d.name);poisByDest[d.name]=[];});
@@ -1855,7 +2057,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===9&&(function(){
+    {wizStep===10&&(function(){
       var grpSize=(jc||0)+1;var totalN=10;
       var destGroups={};if(stays.length>0)stays.forEach(function(s){var d=s.destination||"Other";if(!destGroups[d])destGroups[d]=[];destGroups[d].push(s);});
       var destList=Object.keys(destGroups);
@@ -1931,7 +2133,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===10&&(function(){
+    {wizStep===11&&(function(){
       var grpSize=(jc||0)+1;var dietStr=(user.dietary||[]).join(", ")||"none";
       var totalDays=10;
       var approvedMeals=[];var rejectedMeals=[];var pendingMeals=[];
@@ -2013,7 +2215,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===11&&(function(){
+    {wizStep===12&&(function(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var grpSize=(jc||0)+1;
       var totalDays=0;dests.forEach(function(d){var dd=durPerDest[d.name];totalDays+=dd!==undefined?dd:2;});totalDays=Math.max(totalDays+Math.max(0,dests.length-1)+1,3);
@@ -2063,7 +2265,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===12&&(function(){
+    {wizStep===13&&(function(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var grpSize=(jc||0)+1;
       var pStays=[];Object.keys(stayPick).forEach(function(dn){var grp=(function(){var g={};stays.forEach(function(s){var d=s.destination||"Other";if(!g[d])g[d]=[];g[d].push(s);});return g;})();if(grp[dn]&&grp[dn][stayPick[dn]])pStays.push(grp[dn][stayPick[dn]]);});
