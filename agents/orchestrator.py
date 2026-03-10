@@ -129,6 +129,10 @@ class UpdateMemberRequest(BaseModel):
     status: str
 
 
+class TripInviteRespondRequest(BaseModel):
+    action: str = "accept"
+
+
 class SaveDestinationsRequest(BaseModel):
     destinations: list[str]
     votes: dict[str, int] = {}
@@ -340,33 +344,48 @@ def _send_trip_invite_email_sync(
     *,
     to_email: str,
     inviter_name: str,
+    inviter_email: str,
     trip_name: str,
     trip_id: str,
+    duration_days: int = 0,
+    destinations: Optional[list[str]] = None,
 ) -> None:
     host, port, smtp_user, smtp_pass, smtp_from = _smtp_settings()
     if not host or not smtp_user or not smtp_pass or not smtp_from:
         raise RuntimeError("SMTP is not configured (SMTP_HOST/SMTP_USER/SMTP_PASS/ALERT_EMAIL_FROM)")
 
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
-    invite_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}"
+    accept_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}&trip_invite_action=accept"
+    reject_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}&trip_invite_action=reject"
+    destination_line = ", ".join((destinations or [])[:8]).strip()
+    duration_line = f"{int(duration_days)} day trip" if int(duration_days or 0) > 0 else "Duration to be finalized"
     subject = f"{inviter_name} invited you to trip: {trip_name}"
     text_body = (
         "You have a WanderPlan trip invitation.\n\n"
-        f"From: {inviter_name}\n"
-        f"Trip Name: {trip_name}\n\n"
-        f"Accept this trip invite: {invite_link}\n\n"
-        "If you already have a WanderPlan account, sign in and accept the invitation.\n"
-        "If you are new, sign up first and then accept the invitation.\n\n"
+        f"From: {inviter_name} ({inviter_email})\n"
+        f"Trip Name: {trip_name}\n"
+        f"Duration: {duration_line}\n"
+        f"Destinations: {destination_line or 'TBD'}\n\n"
+        f"Accept Trip: {accept_link}\n"
+        f"Reject Trip: {reject_link}\n\n"
+        "If you already have a WanderPlan account, sign in and choose Accept Trip or Reject Trip.\n"
+        "If you are new, sign up first and then choose Accept Trip or Reject Trip.\n\n"
         "If you were not expecting this invite, you can ignore this email."
     )
     html_body = (
         "<div style=\"font-family:Arial,Helvetica,sans-serif;line-height:1.5;color:#111;\">"
         "<p style=\"margin:0 0 10px 0;\">You have a WanderPlan trip invitation.</p>"
-        f"<p style=\"margin:0 0 6px 0;\"><strong>From:</strong> {inviter_name}</p>"
+        f"<p style=\"margin:0 0 6px 0;\"><strong>From:</strong> {inviter_name} ({inviter_email})</p>"
         f"<p style=\"margin:0 0 14px 0;\"><strong>Trip Name:</strong> {trip_name}</p>"
-        f"<p style=\"margin:0 0 14px 0;\"><a href=\"{invite_link}\" style=\"display:inline-block;padding:10px 14px;border-radius:8px;background:#0D7377;color:#fff;text-decoration:none;font-weight:600;\">Accept Trip Invite</a></p>"
-        "<p style=\"margin:0 0 8px 0;\">If you already have a WanderPlan account, sign in and accept the invitation.</p>"
-        "<p style=\"margin:0 0 8px 0;\">If you are new, sign up first and then accept the invitation.</p>"
+        f"<p style=\"margin:0 0 6px 0;\"><strong>Duration:</strong> {duration_line}</p>"
+        f"<p style=\"margin:0 0 14px 0;\"><strong>Destinations:</strong> {destination_line or 'TBD'}</p>"
+        "<p style=\"margin:0 0 14px 0;\">"
+        f"<a href=\"{accept_link}\" style=\"display:inline-block;padding:10px 14px;border-radius:8px;background:#0D7377;color:#fff;text-decoration:none;font-weight:600;\">Accept Trip</a>"
+        "&nbsp;&nbsp;"
+        f"<a href=\"{reject_link}\" style=\"display:inline-block;padding:10px 14px;border-radius:8px;background:#ef4444;color:#fff;text-decoration:none;font-weight:600;\">Reject Trip</a>"
+        "</p>"
+        "<p style=\"margin:0 0 8px 0;\">If you already have a WanderPlan account, sign in and choose Accept Trip or Reject Trip.</p>"
+        "<p style=\"margin:0 0 8px 0;\">If you are new, sign up first and then choose Accept Trip or Reject Trip.</p>"
         "<p>If you were not expecting this invite, you can ignore this email.</p>"
         "</div>"
     )
@@ -388,16 +407,22 @@ async def _send_trip_invite_email(
     *,
     to_email: str,
     inviter_name: str,
+    inviter_email: str,
     trip_name: str,
     trip_id: str,
+    duration_days: int = 0,
+    destinations: Optional[list[str]] = None,
 ) -> tuple[bool, str]:
     try:
         await asyncio.to_thread(
             _send_trip_invite_email_sync,
             to_email=to_email,
             inviter_name=inviter_name,
+            inviter_email=inviter_email,
             trip_name=trip_name,
             trip_id=trip_id,
+            duration_days=duration_days,
+            destinations=destinations,
         )
         return True, ""
     except Exception as exc:
@@ -2924,8 +2949,11 @@ async def invite_member(
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
+    trip_duration_days = 0
+    trip_destinations: list[str] = []
+    inviter_email = ""
     async with db_pool.acquire() as conn:
-        trip = await conn.fetchrow("SELECT owner_id, name FROM trips WHERE id = $1", trip_id)
+        trip = await conn.fetchrow("SELECT owner_id, name, duration_days FROM trips WHERE id = $1", trip_id)
         if not trip:
             raise HTTPException(status_code=404, detail="Trip not found")
         if str(trip["owner_id"]) != user_id:
@@ -2935,8 +2963,21 @@ async def invite_member(
         if not invitee:
             raise HTTPException(status_code=404, detail="User not found")
 
-        inviter = await conn.fetchrow("SELECT name FROM users WHERE id = $1", user_id)
+        inviter = await conn.fetchrow("SELECT name, email FROM users WHERE id = $1", user_id)
         inviter_name = inviter["name"] if inviter and inviter["name"] else "A WanderPlan user"
+        inviter_email = str(inviter["email"] or "").strip().lower() if inviter and inviter["email"] else "owner@example.com"
+        trip_duration_days = int(trip["duration_days"] or 0)
+        dest_rows = await conn.fetch(
+            """
+            SELECT DISTINCT destination
+            FROM bucket_list_items
+            WHERE trip_id = $1
+            ORDER BY destination ASC
+            LIMIT 8
+            """,
+            trip_id,
+        )
+        trip_destinations = [str(row["destination"] or "").strip() for row in dest_rows if str(row["destination"] or "").strip()]
 
         row = await conn.fetchrow(
             """
@@ -2956,9 +2997,15 @@ async def invite_member(
     email_sent, email_error = await _send_trip_invite_email(
         to_email=invitee["email"],
         inviter_name=inviter_name,
+        inviter_email=inviter_email,
         trip_name=trip["name"],
         trip_id=trip_id,
+        duration_days=trip_duration_days,
+        destinations=trip_destinations,
     )
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+    accept_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}&trip_invite_action=accept"
+    reject_link = f"{frontend_base}/?entry=home&join_trip_id={quote_plus(str(trip_id))}&trip_invite_action=reject"
 
     return {
         "user_id": str(row["user_id"]),
@@ -2967,7 +3014,123 @@ async def invite_member(
         "email": invitee["email"],
         "email_sent": email_sent,
         "email_error": email_error or None,
+        "accept_link": accept_link,
+        "reject_link": reject_link,
     }
+
+
+@app.post("/trips/{trip_id}/respond")
+async def respond_trip_invite(
+    trip_id: str,
+    body: TripInviteRespondRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    action = (body.action or "accept").strip().lower()
+    if action in {"accepted"}:
+        action = "accept"
+    if action in {"decline", "declined", "reject"}:
+        action = "reject"
+    if action not in {"accept", "reject"}:
+        raise HTTPException(status_code=400, detail="action must be accept or reject")
+
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        trip = await conn.fetchrow(
+            "SELECT id, owner_id, name, status, duration_days FROM trips WHERE id = $1",
+            trip_id,
+        )
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+
+        membership = await conn.fetchrow(
+            """
+            SELECT user_id, role, status
+            FROM trip_members
+            WHERE trip_id = $1 AND user_id = $2
+            """,
+            trip_id,
+            user_id,
+        )
+        if not membership:
+            raise HTTPException(status_code=403, detail="You are not invited to this trip")
+
+        current_status = str(membership["status"] or "pending").lower()
+        if action == "accept":
+            row = await conn.fetchrow(
+                """
+                UPDATE trip_members
+                SET status = 'accepted', joined_at = NOW()
+                WHERE trip_id = $1 AND user_id = $2
+                RETURNING user_id, role, status
+                """,
+                trip_id,
+                user_id,
+            )
+            normalized_trip = await conn.fetchrow(
+                """
+                UPDATE trips
+                SET status = CASE
+                    WHEN COALESCE(status, '') IN ('', 'draft', 'saved', 'invited') THEN 'planning'
+                    ELSE status
+                END
+                WHERE id = $1
+                RETURNING status
+                """,
+                trip_id,
+            )
+            return {
+                "ok": True,
+                "action": action,
+                "trip": {
+                    "id": str(trip["id"]),
+                    "owner_id": str(trip["owner_id"]),
+                    "name": str(trip["name"] or ""),
+                    "status": str(normalized_trip["status"] if normalized_trip else trip["status"] or "planning"),
+                    "duration_days": int(trip["duration_days"] or 0),
+                },
+                "member": {
+                    "user_id": str(row["user_id"]),
+                    "role": str(row["role"] or "member"),
+                    "status": str(row["status"] or "accepted"),
+                    "previous_status": current_status,
+                },
+            }
+
+        if current_status == "accepted":
+            raise HTTPException(status_code=409, detail="Invite already accepted")
+
+        row = await conn.fetchrow(
+            """
+            UPDATE trip_members
+            SET status = 'declined'
+            WHERE trip_id = $1 AND user_id = $2
+            RETURNING user_id, role, status
+            """,
+            trip_id,
+            user_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Membership not found")
+
+        return {
+            "ok": True,
+            "action": action,
+            "trip": {
+                "id": str(trip["id"]),
+                "owner_id": str(trip["owner_id"]),
+                "name": str(trip["name"] or ""),
+                "status": str(trip["status"] or "planning"),
+                "duration_days": int(trip["duration_days"] or 0),
+            },
+            "member": {
+                "user_id": str(row["user_id"]),
+                "role": str(row["role"] or "member"),
+                "status": str(row["status"] or "declined"),
+                "previous_status": current_status,
+            },
+        }
 
 
 @app.get("/trips/{trip_id}/destinations")

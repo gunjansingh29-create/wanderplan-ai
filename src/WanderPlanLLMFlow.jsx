@@ -91,6 +91,15 @@ function readJoinTripIdFromUrl(){
   return "";
 }
 
+function readTripInviteActionFromUrl(){
+  try{
+    var sp=new URLSearchParams(window.location.search||"");
+    var a=(sp.get("trip_invite_action")||"").trim().toLowerCase();
+    if(a==="accept"||a==="reject"||a==="decline")return a==="decline"?"reject":a;
+  }catch(e){}
+  return "";
+}
+
 function readInviteActionFromUrl(){
   try{
     var sp=new URLSearchParams(window.location.search||"");
@@ -452,6 +461,7 @@ export default function WanderPlan(){
   var[pendingInviteToken,setPIT]=useState("");
   var[pendingInviteAction,setPIA]=useState("accept");
   var[pendingTripJoinId,setPTJ]=useState("");
+  var[pendingTripJoinAction,setPTJA]=useState("");
   var[user,setUser]=useState({name:"",email:"",styles:[],interests:{},budget:"moderate",dietary:[]});
   var[crew,setCrew]=useState([]);
   var[bucket,setBucket]=useState([]);
@@ -527,8 +537,10 @@ export default function WanderPlan(){
     try{
       var tripIdInUrl=readJoinTripIdFromUrl();
       if(tripIdInUrl){
+        var tripActionInUrl=readTripInviteActionFromUrl();
         setPTJ(tripIdInUrl);
-        setCM("Trip invitation detected. Open the invited trip and click Accept Trip Invite.");
+        setPTJA(tripActionInUrl);
+        setCM(tripActionInUrl==="reject"?"Trip invitation detected. Sign in to reject this trip invite.":"Trip invitation detected. Sign in to review this trip invite.");
       }
     }catch(e){}
     var u=await ld("wp-u",null);if(u)setUser(u);
@@ -1011,6 +1023,10 @@ export default function WanderPlan(){
     setTF("invited");
   },[loaded,pendingTripJoinId]);
   useEffect(function(){
+    if(!loaded||!authToken||!pendingTripJoinId||!pendingTripJoinAction)return;
+    processPendingTripInvite(authToken);
+  },[loaded,authToken,pendingTripJoinId,pendingTripJoinAction]);
+  useEffect(function(){
     if(!loaded||!authToken||sc!=="wizard"||wizStep!==1||!currentTripId)return;
     var members=(newTrip&&Array.isArray(newTrip.members))?newTrip.members:[];
     var pendingMembers=members.filter(function(m){return isTripInvitePending(m);});
@@ -1048,6 +1064,7 @@ export default function WanderPlan(){
     try{
       var sp=new URLSearchParams(window.location.search||"");
       sp.delete("join_trip_id");
+      sp.delete("trip_invite_action");
       var q=sp.toString();
       var hash=String(window.location.hash||"");
       var cleanHash=hash;
@@ -1056,6 +1073,7 @@ export default function WanderPlan(){
         var hp=new URLSearchParams(hash.substring(idx+1));
         hp.delete("tripId");
         hp.delete("join_trip_id");
+        hp.delete("trip_invite_action");
         var hq=hp.toString();
         cleanHash=hash.substring(0,idx)+(hq?("?"+hq):"");
       }
@@ -1101,6 +1119,26 @@ export default function WanderPlan(){
       setCM("Invite found but could not be processed yet: "+String(e&&e.message||"error"));
     }
   }
+  async function processPendingTripInvite(token,tripIdOverride,tripActionOverride){
+    var tripId=(String(tripIdOverride||"").trim()||(pendingTripJoinId||"").trim()||readJoinTripIdFromUrl());
+    if(!tripId||!token)return false;
+    var rawAction=(String(tripActionOverride||"").trim().toLowerCase()||String(pendingTripJoinAction||"").trim().toLowerCase()||readTripInviteActionFromUrl());
+    if(!rawAction)return false;
+    var action=(rawAction==="reject"||rawAction==="decline")?"reject":"accept";
+    try{
+      await apiJson("/trips/"+tripId+"/respond",{method:"POST",body:{action:action}},token);
+      setCM(action==="reject"?"Trip invite rejected.":"Trip invite accepted.");
+      if(action==="accept")setTF("planning");
+      setPTJ("");
+      setPTJA("");
+      clearTripJoinFromUrl();
+      await refreshTripsFromBackend(token);
+      return true;
+    }catch(e){
+      setCM("Trip invite could not be processed: "+String(e&&e.message||"error"));
+      return false;
+    }
+  }
   async function loginUser(){
     setAE("");
     setAI("");
@@ -1120,6 +1158,7 @@ export default function WanderPlan(){
         upU("email",email);
         if(reg.name&&!user.name)upU("name",reg.name);
         await acceptPendingInvite(reg.accessToken);
+        await processPendingTripInvite(reg.accessToken);
         await refreshTripsFromBackend(reg.accessToken);
         go("dash");
       }
@@ -1155,6 +1194,7 @@ export default function WanderPlan(){
         upU("email",email);
         if(reg.name&&!user.name)upU("name",reg.name);
         await acceptPendingInvite(reg.accessToken);
+        await processPendingTripInvite(reg.accessToken);
         await refreshTripsFromBackend(reg.accessToken);
         go("ob1");
       }
@@ -1636,16 +1676,29 @@ export default function WanderPlan(){
           {(tr.status==="planning"||tr.status==="active")&&(<div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>WIZARD PROGRESS</p><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s2,i){var done=i<(tr.step||0);var act=i===(tr.step||0);return(<div key={i} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",background:act?C.gold:done?C.teal+"25":C.bg,color:act?C.bg:done?C.teal:C.tx3,border:act?"none":"1px solid "+C.border}}>{done?"Y":(i+1)}</div>);})}</div><p style={{fontSize:12,color:C.tx3,marginTop:6}}>Step {(tr.step||0)+1} of {WIZ.length}: {WIZ[tr.step||0]||""}</p></div>)}
           <div style={{display:"flex",gap:10}}>
             {(tr.status==="planning"||tr.status==="active")&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(tr.step||0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Continue Planning</button>}
-            {tr.status==="invited"&&<button onClick={function(){
-              if(!authToken||!tr.id)return;
-              apiJson("/trips/"+tr.id+"/join",{method:"POST"},authToken).then(function(){
-                setCM("Trip invite accepted.");
-                setTF("planning");
-                setPTJ("");
-                clearTripJoinFromUrl();
-                refreshTripsFromBackend(authToken).then(function(){go("dash");});
-              }).catch(function(e){setCM("Trip invite could not be accepted: "+String(e&&e.message||"error"));});
-            }} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Accept Trip Invite</button>}
+            {tr.status==="invited"&&(<>
+              <button onClick={function(){
+                if(!authToken||!tr.id)return;
+                apiJson("/trips/"+tr.id+"/respond",{method:"POST",body:{action:"accept"}},authToken).then(function(){
+                  setCM("Trip invite accepted.");
+                  setTF("planning");
+                  setPTJ("");
+                  setPTJA("");
+                  clearTripJoinFromUrl();
+                  refreshTripsFromBackend(authToken).then(function(){go("dash");});
+                }).catch(function(e){setCM("Trip invite could not be accepted: "+String(e&&e.message||"error"));});
+              }} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Accept Trip Invite</button>
+              <button onClick={function(){
+                if(!authToken||!tr.id)return;
+                apiJson("/trips/"+tr.id+"/respond",{method:"POST",body:{action:"reject"}},authToken).then(function(){
+                  setCM("Trip invite rejected.");
+                  setPTJ("");
+                  setPTJA("");
+                  clearTripJoinFromUrl();
+                  refreshTripsFromBackend(authToken).then(function(){go("dash");});
+                }).catch(function(e){setCM("Trip invite could not be rejected: "+String(e&&e.message||"error"));});
+              }} style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Reject</button>
+            </>)}
             {tr.status==="saved"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Start Planning</button>}
             {tr.status==="completed"&&<button style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:"transparent",color:C.tx2,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>View Itinerary</button>}
             <button onClick={function(){setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
@@ -1712,8 +1765,13 @@ export default function WanderPlan(){
       </div>
       <div style={{display:"flex",gap:8,padding:"10px 14px",borderTop:"1px solid "+C.border}}><input value={blIn} onChange={function(e){setBLI(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendBL();}} placeholder="e.g. 'northern lights' or 'Kyoto'" disabled={blLoad} style={{flex:1,padding:"11px 14px",borderRadius:10,background:C.bg,border:"1.5px solid "+C.border,fontSize:14,color:"#fff",opacity:blLoad?.5:1}}/><button onClick={sendBL} disabled={blLoad} style={{padding:"10px 20px",borderRadius:10,border:"none",background:blLoad?C.border:C.gold,color:blLoad?C.tx3:C.bg,fontSize:14,fontWeight:600,cursor:blLoad?"default":"pointer"}}>Send</button></div>
     </div></Fade>
-    {bucket.length>0&&(<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,280px),1fr))",gap:14}}>{bucket.map(function(d,i){var saved=isPersistedBucketItem(d);return(<Fade key={d.id||i} delay={50+i*30}><div style={{background:C.surface,borderRadius:14,border:"1px solid "+C.border,padding:"16px 18px",position:"relative"}}>
-      <h3 style={{fontSize:17,fontWeight:700,marginBottom:2}}>{d.name}</h3>
+    {bucket.length>0&&(<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,280px),1fr))",gap:14}}>{bucket.map(function(d,i){var saved=isPersistedBucketItem(d);return(<Fade key={d.id||i} delay={50+i*30}><div style={{background:C.surface,borderRadius:14,border:"1px solid "+C.border,padding:"16px 18px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:2}}>
+        <h3 style={{fontSize:17,fontWeight:700,marginBottom:0}}>{d.name}</h3>
+        <button onClick={function(){removeBucketDestination(d);}} title="Remove destination" aria-label={"Remove "+(d.name||"destination")} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.red+"40",background:C.redBg,color:C.red,fontSize:11,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6,whiteSpace:"nowrap"}}>
+          <TrashIcon size={12} color={C.red}/>Remove
+        </button>
+      </div>
       <p style={{fontSize:13,color:C.tx2,marginBottom:8}}>{d.country}</p>
       {d.tags&&d.tags.length>0&&(<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8}}>{d.tags.map(function(t){return <span key={t} style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(255,255,255,.04)",color:C.tx2}}>{t}</span>;})}</div>)}
       <div style={{display:"flex",gap:2,marginBottom:8}}>{MO.map(function(m,mi){var g=(d.bestMonths||[]).indexOf(mi+1)>=0;return <div key={mi} style={{width:20,height:15,borderRadius:2,background:g?C.grn+"22":"rgba(255,255,255,.03)",color:g?C.grn:C.tx3,fontSize:8,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center"}}>{m}</div>;})}</div>
@@ -1721,7 +1779,6 @@ export default function WanderPlan(){
       {d.costNote&&<p style={{fontSize:11,color:C.tx3,marginTop:4}}>{d.costNote}</p>}
       <div style={{display:"flex",gap:8,marginTop:10}}>
         <button onClick={function(){saveBucketDestination(d);}} disabled={saved} style={{flex:1,padding:"8px 10px",borderRadius:8,border:"none",background:saved?C.border:C.gold,color:saved?C.tx3:C.bg,fontSize:12,fontWeight:600,cursor:saved?"default":"pointer"}}>{saved?"Saved":"Save"}</button>
-        <button onClick={function(){removeBucketDestination(d);}} style={{flex:1,padding:"8px 10px",borderRadius:8,border:"1px solid "+C.red+"40",background:C.redBg,color:C.red,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}><TrashIcon size={12} color={C.red}/>Remove</button>
       </div>
       <button onClick={function(){pickDestinationForTrip(d);}} style={{marginTop:8,padding:"8px 12px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",width:"100%"}}>Pick for Trip</button>
     </div></Fade>);})}</div>)}
@@ -1812,6 +1869,58 @@ export default function WanderPlan(){
       if(st==="invited"){invitedCount++;return;}
       if(st!=="declined")selectedCount++;
     });
+    function memberIdentity(member){
+      var em=String(member&&member.email||"").trim().toLowerCase();
+      if(em)return "email:"+em;
+      var id=String(member&&member.id||"").trim();
+      if(id)return "id:"+id;
+      return "";
+    }
+    function findTripMemberFor(member){
+      var key=memberIdentity(member);
+      if(!key)return null;
+      for(var i=0;i<tm.length;i++){
+        if(memberIdentity(tm[i])===key)return tm[i];
+      }
+      return null;
+    }
+    var step2CrewPool=[];
+    var step2CrewSeen={};
+    function addStep2CrewMember(raw,tripStatusHint){
+      var m=toTripMember(raw,tripStatusHint||raw&&raw.trip_status||raw&&raw.status||"selected");
+      if(mapTripMemberStatus(m.trip_status||m.status)==="declined")return;
+      var key=memberIdentity(m);
+      if(!key)return;
+      if(step2CrewSeen[key]===undefined){
+        step2CrewSeen[key]=step2CrewPool.length;
+        step2CrewPool.push(m);
+        return;
+      }
+      var idx=step2CrewSeen[key];
+      var cur=step2CrewPool[idx]||{};
+      var curSt=mapTripMemberStatus(cur.trip_status||cur.status);
+      var nextSt=mapTripMemberStatus(m.trip_status||m.status);
+      var rank={accepted:4,invited:3,selected:2,pending:2,declined:0};
+      var useNext=(rank[nextSt]||1)>(rank[curSt]||1);
+      step2CrewPool[idx]=Object.assign({},cur,m,useNext?{trip_status:nextSt,status:nextSt}:{});
+    }
+    (crew||[]).forEach(function(m){
+      addStep2CrewMember(m,"selected");
+    });
+    tm.forEach(function(m){
+      addStep2CrewMember(m,m.trip_status||m.status);
+    });
+    function toggleStep2Member(member){
+      var key=memberIdentity(member);
+      if(!key)return;
+      setNT(function(prev){
+        if(!prev)return prev;
+        var ms=Array.isArray(prev.members)?prev.members:[];
+        var exists=ms.some(function(x){return memberIdentity(x)===key;});
+        var nextMembers=exists?ms.filter(function(x){return memberIdentity(x)!==key;}):ms.concat([toTripMember(member,"selected")]);
+        return Object.assign({},prev,{members:nextMembers});
+      });
+    }
     var canGo=jc>0||tm.length===0;
     var tripDestInputs=(Array.isArray(tr.dests)&&tr.dests.length)?tr.dests:String(tr.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
     var td=tripDestInputs.map(function(v,idx){
@@ -2078,7 +2187,35 @@ export default function WanderPlan(){
     </div>)}
 
     {wizStep===1&&(<div>
-      {ab("Trip Coordinator",tm.length>0?"Selected members are invited to this specific trip. Waiting for at least 1 acceptance before continuing.":"No trip members selected. You can continue solo.")}
+      {ab("Trip Coordinator",tm.length>0?"Selected members are invited to this specific trip. Waiting for at least 1 acceptance before continuing.":"No trip members selected yet. Select crew members below, or continue solo.")}
+      <div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+        <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:8}}>SELECT FROM MY CREW ({step2CrewPool.length})</p>
+        {step2CrewPool.length===0?(<p style={{fontSize:12,color:C.tx3}}>No crew members available. Invite people in My Crew first.</p>):(
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {step2CrewPool.map(function(m){
+              var inTrip=findTripMemberFor(m);
+              var tripSt=mapTripMemberStatus(inTrip&&(inTrip.trip_status||inTrip.status));
+              var crewSt=String(m.crew_status||m.status||"");
+              var locked=tripSt==="accepted"||tripSt==="invited";
+              var selected=!!inTrip;
+              var tripBadgeLabel=selected?(tripSt==="accepted"?"accepted":(tripSt==="invited"?"invited":"selected")):"not selected";
+              var tripBadgeColor=tripSt==="accepted"?C.grn:(tripSt==="invited"?C.wrn:(selected?C.tealL:C.tx3));
+              var tripBadgeBg=tripSt==="accepted"?C.grnBg:(tripSt==="invited"?C.wrnBg:(selected?C.teal+"18":"rgba(255,255,255,.04)"));
+              return(
+                <button key={memberIdentity(m)||m.id||m.email} disabled={locked} onClick={function(){toggleStep2Member(m);}} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 10px",borderRadius:10,border:"1px solid "+(selected?C.teal+"45":C.border),background:selected?C.teal+"12":"transparent",cursor:locked?"default":"pointer",opacity:locked?.8:1,textAlign:"left"}}>
+                  <Avi ini={m.ini||iniFromName(m.name||m.email||"M")} color={m.color||C.purp} size={30}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.name||m.email||"Crew Member"}</div>
+                    <div style={{fontSize:11,color:C.tx3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.email||""}</div>
+                  </div>
+                  <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:20,color:C.sky,background:C.sky+"14",whiteSpace:"nowrap"}}>{"crew: "+crewStatusLabel(crewSt)}</span>
+                  <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:20,color:tripBadgeColor,background:tripBadgeBg,whiteSpace:"nowrap"}}>{tripBadgeLabel}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
       {tm.map(function(m){var st=mapTripMemberStatus(m&&(m.trip_status||m.status));var j=st==="accepted"||tripJoined[m.id];return(<div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:"1px solid "+C.border}}>
         <Avi ini={m.ini} color={m.color} size={36}/><div style={{flex:1}}><div style={{fontSize:14,fontWeight:600}}>{m.name}</div><div style={{fontSize:12,color:C.tx3}}>{m.email}</div></div>
         {j?(<span style={{fontSize:11,fontWeight:600,padding:"4px 12px",borderRadius:20,color:C.grn,background:C.grnBg}}>Accepted</span>):(<div style={{display:"flex",gap:6}}><span style={{fontSize:11,fontWeight:600,padding:"4px 10px",borderRadius:20,color:C.wrn,background:C.wrnBg,animation:"pulse 2s infinite"}}>{st==="invited"?"Invited":"Selected"}</span><button onClick={function(){setTJ(function(p){var n=Object.assign({},p);n[m.id]=true;return n;});}} style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:"1px solid "+C.grn+"30",background:C.grnBg,color:C.grn,cursor:"pointer",fontWeight:600}}>Sim Join</button></div>)}
