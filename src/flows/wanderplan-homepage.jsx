@@ -126,6 +126,31 @@ async function loginViaApi(email, password) {
   return payload || {};
 }
 
+async function registerViaApi(email, password, name) {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, name }),
+  });
+  const text = await res.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = text;
+  }
+  if (!res.ok) {
+    const detail =
+      typeof payload === "string"
+        ? payload
+        : payload?.detail || payload?.message || `HTTP ${res.status}`;
+    const err = new Error(String(detail || "Create account failed"));
+    err.status = res.status;
+    throw err;
+  }
+  return payload || {};
+}
+
 async function resetPasswordViaApi(email, newPassword) {
   const res = await fetch(`${API_BASE}/auth/password-reset`, {
     method: "POST",
@@ -420,6 +445,7 @@ export default function WanderPlanHome({
     try {
       const localUsers = readLocalAuthUsers();
       const localAccount = localUsers[normalizedEmail];
+      const fallbackName = defaultProfileNameFromEmail(normalizedEmail);
 
       if (authMode === "signup") {
         if (localAccount) {
@@ -427,43 +453,65 @@ export default function WanderPlanHome({
           return;
         }
 
-        let backendExists = false;
         try {
-          await loginViaApi(normalizedEmail, rawPassword);
-          backendExists = true;
+          const created = await registerViaApi(normalizedEmail, rawPassword, fallbackName);
+          sessionName = String(created?.name || fallbackName).trim();
+          saveAuthSession({
+            email: normalizedEmail,
+            provider: "backend",
+            remember_me: rememberMe,
+            accessToken: created?.accessToken || "",
+            user_id: created?.user_id || "",
+            name: created?.name || "",
+            signed_in_at: new Date().toISOString(),
+          });
         } catch (err) {
-          if (err?.status && err.status !== 401) {
-            throw err;
-          }
-        }
-        if (backendExists) {
-          setAuthError("An account with this email already exists. Sign in instead.");
-          return;
-        }
-
-        localUsers[normalizedEmail] = {
-          password: rawPassword,
-          created_at: new Date().toISOString(),
-        };
-        saveLocalAuthUsers(localUsers);
-        saveAuthSession({
-          email: normalizedEmail,
-          provider: "local",
-          remember_me: rememberMe,
-          signed_in_at: new Date().toISOString(),
-        });
-      } else {
-        if (localAccount) {
-          if (localAccount.password !== rawPassword) {
-            setAuthError("Invalid email or password.");
+          if (err?.status === 409) {
+            setAuthError("An account with this email already exists. Sign in instead.");
             return;
           }
+          if (err?.status === 404) {
+            setAuthError("Auth service endpoint not found. Check REACT_APP_API_BASE.");
+            return;
+          }
+          if (err?.status) {
+            throw err;
+          }
+
+          localUsers[normalizedEmail] = {
+            password: rawPassword,
+            created_at: new Date().toISOString(),
+          };
+          saveLocalAuthUsers(localUsers);
           saveAuthSession({
             email: normalizedEmail,
             provider: "local",
             remember_me: rememberMe,
             signed_in_at: new Date().toISOString(),
           });
+        }
+      } else {
+        if (localAccount) {
+          if (localAccount.password === rawPassword) {
+            saveAuthSession({
+              email: normalizedEmail,
+              provider: "local",
+              remember_me: rememberMe,
+              signed_in_at: new Date().toISOString(),
+            });
+          } else {
+            const login = await loginViaApi(normalizedEmail, rawPassword);
+            sessionName = login?.name || "";
+            saveAuthSession({
+              email: normalizedEmail,
+              provider: "backend",
+              remember_me: rememberMe,
+              accessToken: login?.accessToken || "",
+              user_id: login?.user_id || "",
+              name: login?.name || "",
+              signed_in_at: new Date().toISOString(),
+            });
+          }
         } else {
           const login = await loginViaApi(normalizedEmail, rawPassword);
           sessionName = login?.name || "";
@@ -494,7 +542,14 @@ export default function WanderPlanHome({
         setScreen("profile-name");
       }
     } catch (err) {
-      setAuthError(err?.message || "Unable to sign in right now.");
+      if (authMode === "login" && err?.status === 404) {
+        setAuthMode("signup");
+        setAuthError("Account not found. Please create an account.");
+      } else if (err?.status === 404) {
+        setAuthError("Auth service endpoint not found. Check REACT_APP_API_BASE.");
+      } else {
+        setAuthError(err?.message || "Unable to sign in right now.");
+      }
     } finally {
       setAuthBusy(false);
     }
