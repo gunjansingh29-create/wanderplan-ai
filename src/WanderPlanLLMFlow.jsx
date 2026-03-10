@@ -149,6 +149,22 @@ function isUuidLike(value){
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
+function userIdFromToken(token){
+  var t=String(token||"").trim();
+  if(t.indexOf("test-token:")===0){
+    return t.substring("test-token:".length).trim();
+  }
+  return "";
+}
+
+function makeVoteUserId(userId,email,fallback){
+  var uid=String(userId||"").trim();
+  if(uid)return uid;
+  var em=String(email||"").trim().toLowerCase();
+  if(em)return "email:"+em;
+  return String(fallback||"member");
+}
+
 function crewStatusLabel(rawStatus){
   var st=String(rawStatus||"").trim().toLowerCase();
   if(st==="accepted")return "joined";
@@ -440,8 +456,9 @@ export default function WanderPlan(){
   var tripInviteAttemptRef=useRef({});
   var tripInviteInFlightRef=useRef(false);
   var inviteTripFilterAppliedRef=useRef(false);
+  var planningStateUpdatedAtRef=useRef("");
   // Wizard interaction states
-  var[destVotes,setDV]=useState({});
+  var[destMemberVotes,setDMV]=useState({});
   var[tripJoined,setTJ]=useState({});
   var[grpInts,setGI]=useState({});
   var[timingOk,setTO]=useState(false);
@@ -759,6 +776,184 @@ export default function WanderPlan(){
       });
     }catch(e){}
   }
+  function mapBackendPois(rows){
+    return (Array.isArray(rows)?rows:[]).map(function(x){
+      var rawCat=String((x&&x.category)||"Culture");
+      var category=rawCat?rawCat.charAt(0).toUpperCase()+rawCat.slice(1).toLowerCase():"Culture";
+      return {
+        poi_id:String((x&&x.poi_id)||(x&&x.id)||""),
+        name:String((x&&x.name)||""),
+        destination:String((x&&x.city)||(x&&x.destination)||(x&&x.country)||""),
+        category:category,
+        duration:String((x&&x.duration)||"2-3h"),
+        cost:Number((x&&x.cost_estimate_usd)!==undefined?(x&&x.cost_estimate_usd):((x&&x.cost)!==undefined?(x&&x.cost):0))||0,
+        rating:Number((x&&x.rating)!==undefined?(x&&x.rating):4.5)||4.5,
+        matchReason:String((x&&x.matchReason)||(((x&&Array.isArray(x.tags))?x.tags:[]).join(", "))),
+        tags:(x&&Array.isArray(x.tags))?x.tags:[],
+        approved:typeof (x&&x.approved)==="boolean"?x.approved:null
+      };
+    });
+  }
+  function syncTripPoisToBackend(statusMap){
+    var tripIdForSync=String(currentTripId||newTrip.id||"").trim();
+    if(!(authToken&&tripIdForSync&&isUuidLike(tripIdForSync)))return Promise.resolve(null);
+    var rows=(pois||[]);
+    if(rows.length===0)return Promise.resolve(null);
+    var status=statusMap||poiStatus||{};
+    var payload=rows.map(function(p,idx){
+      return {
+        poi_id:String(p&&p.poi_id||"")||null,
+        name:String(p&&p.name||"").trim(),
+        category:String(p&&p.category||"Culture"),
+        destination:String(p&&p.destination||""),
+        country:String(p&&p.country||""),
+        tags:Array.isArray(p&&p.tags)?p.tags:[],
+        rating:Number(p&&p.rating||0)||0,
+        cost_estimate_usd:Number((p&&p.cost)!==undefined?p.cost:0)||0,
+        approved:status[idx]==="yes"
+      };
+    }).filter(function(p){return !!p.name;});
+    if(payload.length===0)return Promise.resolve(null);
+    return apiJson("/trips/"+tripIdForSync+"/pois/sync",{method:"POST",body:{pois:payload}},authToken).then(function(r){
+      var mapped=mapBackendPois((r&&r.pois)||[]);
+      if(mapped.length>0){
+        setPois(mapped);
+        setPD(true);
+        var nextStatus={};
+        mapped.forEach(function(p,idx){
+          if(p.approved===true)nextStatus[idx]="yes";
+          else if(p.approved===false)nextStatus[idx]="no";
+        });
+        setPS(nextStatus);
+      }
+      return r;
+    }).catch(function(){return null;});
+  }
+  async function refreshCurrentTripSharedState(token,tripId){
+    var tok=token||authToken;
+    var tid=String(tripId||currentTripId||"").trim();
+    if(!(tok&&tid&&isUuidLike(tid)))return;
+    try{
+      var tripRes=null;
+      var destRes=null;
+      var poiRes=null;
+      try{tripRes=await apiJson("/trips/"+tid,{method:"GET"},tok);}catch(e){}
+      try{destRes=await apiJson("/trips/"+tid+"/destinations",{method:"GET"},tok);}catch(e){}
+      try{poiRes=await apiJson("/trips/"+tid+"/pois?limit=50",{method:"GET"},tok);}catch(e){}
+      var sharedNames=[];
+      if(destRes&&Array.isArray(destRes.destinations)){
+        sharedNames=destRes.destinations.map(function(d){return String((d&&d.name)||d||"").trim();}).filter(Boolean);
+      }
+      var tripStatus="";
+      var tripName="";
+      var sharedMembers=null;
+      if(tripRes&&tripRes.trip){
+        tripStatus=String(tripRes.trip.status||"");
+        tripName=String(tripRes.trip.name||"");
+        var myEmail=String(user.email||"").trim().toLowerCase();
+        var existingByEmail={};
+        ((newTrip&&Array.isArray(newTrip.members))?newTrip.members:[]).forEach(function(m){
+          var em=String(m&&m.email||"").trim().toLowerCase();
+          if(em)existingByEmail[em]=m;
+        });
+        sharedMembers=(Array.isArray(tripRes.trip.members)?tripRes.trip.members:[]).filter(function(m){
+          return String(m&&m.email||"").trim().toLowerCase()!==myEmail;
+        }).map(function(m,mi){
+          var em=String(m&&m.email||"").trim().toLowerCase();
+          var existing=existingByEmail[em]||{};
+          var dn=String(m&&m.name||m&&m.email||("Member "+(mi+1)));
+          var st=mapTripMemberStatus(String(m&&m.status||"pending"));
+          return {
+            id:String(m&&m.user_id||("tm-"+mi)),
+            name:dn,
+            ini:existing.ini||iniFromName(dn),
+            color:existing.color||CREW_COLORS[mi%CREW_COLORS.length],
+            status:st,
+            trip_status:st,
+            crew_status:String(existing.crew_status||""),
+            email:em,
+            profile:(existing&&existing.profile&&typeof existing.profile==="object")?existing.profile:{}
+          };
+        });
+      }
+      if(sharedNames.length>0||tripStatus||tripName||(sharedMembers&&sharedMembers.length>=0)){
+        setTrips(function(prev){
+          return (prev||[]).map(function(t){
+            if(!t||String(t.id||"")!==tid)return t;
+            return Object.assign({},t,{
+              name:tripName||t.name,
+              status:tripStatus||t.status,
+              dests:sharedNames.length>0?sharedNames.slice():(Array.isArray(t.dests)?t.dests:[]),
+              destNames:sharedNames.length>0?sharedNames.join(" + "):(t.destNames||""),
+              members:(sharedMembers&&sharedMembers.length>0)?sharedMembers:t.members
+            });
+          });
+        });
+        setNT(function(prev){
+          if(!prev||String(prev.id||"")!==tid)return prev;
+          return Object.assign({},prev,{
+            name:tripName||prev.name,
+            status:tripStatus||prev.status,
+            dests:sharedNames.length>0?sharedNames.slice():(Array.isArray(prev.dests)?prev.dests:[]),
+            destNames:sharedNames.length>0?sharedNames.join(" + "):(prev.destNames||""),
+            members:(sharedMembers&&sharedMembers.length>0)?sharedMembers:prev.members
+          });
+        });
+      }
+      if(poiRes&&Array.isArray(poiRes.pois)){
+        var mappedPois=mapBackendPois(poiRes.pois);
+        if(mappedPois.length>0){
+          setPois(mappedPois);
+          setPD(true);
+          var syncedStatus={};
+          mappedPois.forEach(function(p,idx){
+            if(p.approved===true)syncedStatus[idx]="yes";
+            else if(p.approved===false)syncedStatus[idx]="no";
+          });
+          setPS(syncedStatus);
+        }
+      }
+    }catch(e){}
+  }
+  function getCurrentPlannerId(){
+    return makeVoteUserId(userIdFromToken(authToken),user.email,"me");
+  }
+  async function refreshTripPlanningState(token,tripId){
+    var tok=token||authToken;
+    var tid=String(tripId||currentTripId||"").trim();
+    if(!(tok&&tid&&isUuidLike(tid)))return;
+    try{
+      var ps=await apiJson("/trips/"+tid+"/planning-state",{method:"GET"},tok);
+      if(!ps)return;
+      var updatedAt=String(ps.updated_at||"");
+      if(updatedAt)planningStateUpdatedAtRef.current=updatedAt;
+      if(typeof ps.current_step==="number"&&sc==="wizard"){
+        var remoteStep=Math.min(Math.max(0,Number(ps.current_step)||0),Math.max(WIZ.length-1,0));
+        if(remoteStep!==wizStep)setWS(remoteStep);
+      }
+      var st=(ps&&ps.state&&typeof ps.state==="object")?ps.state:{};
+      if(st.dest_member_votes&&typeof st.dest_member_votes==="object")setDMV(st.dest_member_votes);
+      if(st.poi_votes&&typeof st.poi_votes==="object")setPV(st.poi_votes);
+    }catch(e){}
+  }
+  function saveTripPlanningState(patch){
+    var tid=String(currentTripId||newTrip.id||"").trim();
+    if(!(authToken&&tid&&isUuidLike(tid)))return Promise.resolve(null);
+    var body={merge:true,state:{}};
+    if(patch&&typeof patch==="object"){
+      if(patch.current_step!==undefined)body.current_step=Number(patch.current_step)||0;
+      if(patch.state&&typeof patch.state==="object")body.state=patch.state;
+    }
+    return apiJson("/trips/"+tid+"/planning-state",{method:"PUT",body:body},authToken).then(function(r){
+      if(r&&r.updated_at)planningStateUpdatedAtRef.current=String(r.updated_at||"");
+      return r;
+    }).catch(function(){return null;});
+  }
+  function setWizardStepShared(nextStep){
+    var n=Math.min(Math.max(0,Number(nextStep)||0),Math.max(WIZ.length-1,0));
+    setWS(n);
+    saveTripPlanningState({current_step:n});
+  }
   useEffect(function(){
     if(!loaded||!authToken||(sc!=="crew"&&sc!=="new_trip"&&sc!=="dash"))return;
     refreshCrewFromBackend();
@@ -771,6 +966,16 @@ export default function WanderPlan(){
     var t=setInterval(function(){refreshTripsFromBackend();},7000);
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,user.email]);
+  useEffect(function(){
+    if(!loaded||!authToken||sc!=="wizard"||!currentTripId||!isUuidLike(currentTripId))return;
+    refreshCurrentTripSharedState();
+    refreshTripPlanningState();
+    var t=setInterval(function(){
+      refreshCurrentTripSharedState();
+      refreshTripPlanningState();
+    },4000);
+    return function(){clearInterval(t);};
+  },[loaded,authToken,sc,currentTripId,user.email]);
   useEffect(function(){
     if(!loaded)return;
     if(!pendingTripJoinId)return;
@@ -1474,7 +1679,50 @@ export default function WanderPlan(){
       var sid=("trip-dest-"+idx+"-"+raw.toLowerCase().replace(/[^a-z0-9]+/g,"-")).replace(/^-+|-+$/g,"");
       return {id:sid||("trip-dest-"+idx),name:raw,country:"",bestMonths:[],costPerDay:0,tags:[],bestTimeDesc:"",costNote:""};
     }).filter(Boolean);
-    var vd=td.filter(function(d){var v=destVotes[d.id];return v&&v.yes>v.no;});
+    var currentPlannerId=getCurrentPlannerId();
+    var destVoteVoters=[{
+      id:currentPlannerId,
+      name:user.name||user.email||"You",
+      ini:iniFromName(user.name||user.email||"You"),
+      color:C.gold
+    }];
+    tm.forEach(function(m,mi){
+      var st=mapTripMemberStatus(m&&(m.trip_status||m.status));
+      if(st==="accepted"||tripJoined[m.id]){
+        destVoteVoters.push({
+          id:makeVoteUserId(m.id,m.email,("member-"+mi)),
+          name:m.name||m.email||("Member "+(mi+1)),
+          ini:m.ini||iniFromName(m.name||m.email||("Member "+(mi+1))),
+          color:m.color||CREW_COLORS[(mi+1)%CREW_COLORS.length]
+        });
+      }
+    });
+    var majorityNeeded=Math.floor(Math.max(destVoteVoters.length,1)/2)+1;
+    function getDestVoteSummary(destId){
+      var row=destMemberVotes[destId]||{};
+      var up=0;var down=0;var votedCount=0;
+      destVoteVoters.forEach(function(v){
+        var val=row[v.id];
+        if(val==="up"){up++;votedCount++;}
+        else if(val==="down"){down++;votedCount++;}
+      });
+      var allVoted=votedCount===destVoteVoters.length&&destVoteVoters.length>0;
+      var majorityWin=up>=majorityNeeded&&up>down;
+      return {up:up,down:down,votedCount:votedCount,allVoted:allVoted,majorityWin:majorityWin};
+    }
+    function castDestVote(destId,voterId,vote){
+      if(voterId!==currentPlannerId)return;
+      setDMV(function(prev){
+        var next=Object.assign({},prev||{});
+        var row=Object.assign({},next[destId]||{});
+        row[voterId]=vote;
+        next[destId]=row;
+        saveTripPlanningState({state:{dest_member_votes:next}});
+        return next;
+      });
+    }
+    var vd=td.filter(function(d){var s=getDestVoteSummary(d.id);return s.majorityWin;});
+    var allDestinationsVoted=td.length>0&&td.every(function(d){return getDestVoteSummary(d.id).allVoted;});
     var dests=vd.length>0?vd:td;
 
     function logWizAction(action,payload){
@@ -1485,12 +1733,12 @@ export default function WanderPlan(){
     function adv(){
       logWizAction("approve_step",{step:wizStep});
       var n=wizStep+1;
-      if(n<WIZ.length){setWS(n);setTrips(function(p){if(!p.length)return p;return p.slice(0,-1).concat([Object.assign({},p[p.length-1],{step:n})]);});}
+      if(n<WIZ.length){setWizardStepShared(n);setTrips(function(p){if(!p.length)return p;return p.slice(0,-1).concat([Object.assign({},p[p.length-1],{step:n})]);});}
       else{go("dash");}
     }
     function revise(){
       logWizAction("revise_step",{step:wizStep-1});
-      if(wizStep>0)setWS(wizStep-1);
+      if(wizStep>0)setWizardStepShared(wizStep-1);
     }
     function sendStep2TripInvites(){
       var tripIdForInvites=String(currentTripId||tr.id||"").trim();
@@ -1669,20 +1917,13 @@ export default function WanderPlan(){
       }
     }
 
-    var hdr=(<div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}><button onClick={function(){if(wizStep>0)setWS(wizStep-1);else go("dash");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13}}>Back</button><div style={{flex:1,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:pct+"%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2,transition:"width .5s"}}/></div><span style={{fontSize:11,color:C.tx3}}>{wizStep+1}/{WIZ.length}</span></div>);
+    var hdr=(<div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}><button onClick={function(){if(wizStep>0)setWizardStepShared(wizStep-1);else go("dash");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13}}>Back</button><div style={{flex:1,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:pct+"%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2,transition:"width .5s"}}/></div><span style={{fontSize:11,color:C.tx3}}>{wizStep+1}/{WIZ.length}</span></div>);
     var shdr=(<Fade delay={50}><div style={{display:"flex",alignItems:"center",gap:12,margin:"16px 0 20px"}}><div style={{width:44,height:44,borderRadius:13,background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:"#fff"}}>{wizStep+1}</div><div><h2 style={{fontSize:20,fontWeight:700}}>{WIZ[wizStep]}</h2><p style={{fontSize:13,color:C.tx2}}>Step {wizStep+1} of {WIZ.length}</p></div></div></Fade>);
-    var chps=(<Fade delay={80}><div style={{background:C.surface,borderRadius:14,padding:"14px 18px",border:"1px solid "+C.border,marginBottom:16}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{fontSize:12,color:C.tx3}}>{tr.name||"Trip"}</span><div style={{display:"flex",gap:3}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={20}/>{tm.map(function(m){return <Avi key={m.id} ini={m.ini} color={m.color} size={20}/>;})}</div></div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s,i){var dn=i<wizStep;var a=i===wizStep;return(<div key={i} onClick={function(){setWS(i);}} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",background:a?C.gold:dn?C.teal+"25":C.bg,color:a?C.bg:dn?C.teal:C.tx3,border:a?"none":"1px solid "+C.border}}>{dn?"Y":(i+1)}</div>);})}</div></div></Fade>);
+    var chps=(<Fade delay={80}><div style={{background:C.surface,borderRadius:14,padding:"14px 18px",border:"1px solid "+C.border,marginBottom:16}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{fontSize:12,color:C.tx3}}>{tr.name||"Trip"}</span><div style={{display:"flex",gap:3}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={20}/>{tm.map(function(m){return <Avi key={m.id} ini={m.ini} color={m.color} size={20}/>;})}</div></div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s,i){var dn=i<wizStep;var a=i===wizStep;return(<div key={i} onClick={function(){setWizardStepShared(i);}} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",background:a?C.gold:dn?C.teal+"25":C.bg,color:a?C.bg:dn?C.teal:C.tx3,border:a?"none":"1px solid "+C.border}}>{dn?"Y":(i+1)}</div>);})}</div></div></Fade>);
 
     var ab=function(n,msg){return(<div style={{display:"flex",gap:10,marginBottom:14}}><div style={{width:28,height:28,borderRadius:999,background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",flexShrink:0}}>AI</div><div><p style={{fontSize:11,color:C.tealL,fontWeight:600,marginBottom:3}}>{n}</p><div style={{background:C.bg,padding:"10px 14px",borderRadius:"12px 12px 12px 3px",fontSize:14,lineHeight:1.6,color:C.tx2,border:"1px solid "+C.border}}>{msg}</div></div></div>);};
     var goBtn=function(label){return(<button onClick={adv} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{label||"Approve & Continue"}</button>);};
     var ynBtns=(<div style={{display:"flex",gap:10,marginTop:16}}><button onClick={revise} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button><button onClick={adv} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>{wizStep>=WIZ.length-1?"Finish Trip":"Approve"}</button></div>);
-    function buildVoteResult(userSaysYes){
-      var total=Math.max((jc||0)+1,1); // user + joined crew
-      var majority=Math.floor(total/2)+1;
-      if(userSaysYes)return {yes:majority,no:total-majority,voted:true};
-      return {yes:total-majority,no:majority,voted:true};
-    }
-
     return(<div style={{maxWidth:560}}>{hdr}{shdr}{chps}<Fade delay={120}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
 
     {wizStep===0&&(<div>
@@ -1705,12 +1946,46 @@ export default function WanderPlan(){
     </div>)}
 
     {wizStep===2&&(<div>
-      {ab("Voting Agent","Everyone votes on each destination. Majority wins.")}
-      {td.map(function(d){var v=destVotes[d.id]||{yes:0,no:0,voted:false};return(<div key={d.id} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><div><span style={{fontWeight:700}}>{d.name}</span><span style={{color:C.tx3,fontSize:13,marginLeft:8}}>{d.country}</span></div>{v.voted&&<span style={{fontSize:11,fontWeight:600,padding:"2px 10px",borderRadius:20,background:v.yes>v.no?C.grnBg:C.redBg,color:v.yes>v.no?C.grn:C.red}}>{v.yes>v.no?"In":"Out"}</span>}</div>
-        {!v.voted?(<div style={{display:"flex",gap:8}}><button onClick={function(){setDV(function(p){var n=Object.assign({},p);n[d.id]=buildVoteResult(true);return n;});}} style={{flex:1,padding:"9px",borderRadius:8,border:"1.5px solid "+C.grn+"30",background:"transparent",color:C.grn,fontWeight:600,cursor:"pointer"}}>Yes</button><button onClick={function(){setDV(function(p){var n=Object.assign({},p);n[d.id]=buildVoteResult(false);return n;});}} style={{flex:1,padding:"9px",borderRadius:8,border:"1.5px solid "+C.red+"30",background:"transparent",color:C.red,fontWeight:600,cursor:"pointer"}}>No</button></div>):(<div style={{display:"flex",gap:12,fontSize:12}}><span style={{color:C.grn}}>{v.yes} yes</span><span style={{color:C.red}}>{v.no} no</span></div>)}
-      </div>);})}
-      {td.every(function(d){return destVotes[d.id]&&destVotes[d.id].voted;})&&(<div>{(vd.length>0)?(<div style={{marginTop:12,padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{vd.length} approved: {vd.map(function(d){return d.name;}).join(", ")}</p></div>):(<div style={{marginTop:12,padding:"10px 14px",borderRadius:10,background:C.wrnBg}}><p style={{fontSize:12,color:C.wrn}}>No clear majority. Keeping all selected destinations.</p></div>)}{goBtn("Continue with "+(vd.length>0?vd.length:td.length)+" destination"+((vd.length>0?vd.length:td.length)>1?"s":""))}</div>)}
+      {ab("Voting Agent","Each traveler votes thumbs up/down per destination. Continue unlocks only after all votes are in and at least one destination has majority.")}
+      <div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}>
+        <p style={{fontSize:12,color:C.tealL}}>Majority needed: {majorityNeeded} of {destVoteVoters.length}</p>
+      </div>
+      {td.map(function(d){
+        var s=getDestVoteSummary(d.id);
+        return(<div key={d.id} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,alignItems:"center"}}>
+            <div><span style={{fontWeight:700}}>{d.name}</span><span style={{color:C.tx3,fontSize:13,marginLeft:8}}>{d.country}</span></div>
+            <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,background:s.allVoted?(s.majorityWin?C.grnBg:C.redBg):C.wrnBg,color:s.allVoted?(s.majorityWin?C.grn:C.red):C.wrn}}>
+              {s.allVoted?(s.majorityWin?"In":"Out"):("Voting "+s.votedCount+"/"+destVoteVoters.length)}
+            </span>
+          </div>
+          <div style={{display:"flex",gap:6,marginBottom:8,fontSize:12}}>
+            <span style={{color:C.grn}}>{s.up} up</span>
+            <span style={{color:C.red}}>{s.down} down</span>
+          </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+            {destVoteVoters.map(function(vr){
+              var row=destMemberVotes[d.id]||{};
+              var vv=row[vr.id]||"";
+              var canEdit=vr.id===currentPlannerId;
+              return(<div key={vr.id} style={{display:"flex",alignItems:"center",gap:6}}>
+                <Avi ini={vr.ini} color={vr.color} size={24} name={vr.name}/>
+                <button disabled={!canEdit} onClick={function(){castDestVote(d.id,vr.id,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="up"?C.grn+"55":C.grn+"35"),background:vv==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
+                <button disabled={!canEdit} onClick={function(){castDestVote(d.id,vr.id,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="down"?C.red+"55":C.red+"35"),background:vv==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
+              </div>);
+            })}
+          </div>
+        </div>);
+      })}
+      {allDestinationsVoted&&vd.length>0&&(<div style={{marginTop:12}}>
+        <div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}>
+          <p style={{fontSize:12,color:C.grn}}>{vd.length} approved by majority: {vd.map(function(d){return d.name;}).join(", ")}</p>
+        </div>
+        {goBtn("Continue with "+vd.length+" destination"+(vd.length>1?"s":""))}
+      </div>)}
+      {allDestinationsVoted&&vd.length===0&&(<div style={{marginTop:12,padding:"10px 14px",borderRadius:10,background:C.wrnBg}}>
+        <p style={{fontSize:12,color:C.wrn}}>No destination reached majority yet. Adjust votes so at least one place wins.</p>
+      </div>)}
     </div>)}
 
     {wizStep===3&&(<div>
@@ -1751,14 +2026,14 @@ export default function WanderPlan(){
       }
       function approvePOISelection(){
         var voteMembers=[{
-          id:"me",
+          id:currentPlannerId,
           name:user.name||user.email||"You",
           ini:iniFromName(user.name||user.email||"You"),
           color:C.gold
         }];
         (tm||[]).forEach(function(m){
           voteMembers.push({
-            id:String(m.id||m.email||("crew-"+voteMembers.length)),
+            id:makeVoteUserId(m.id,m.email,("crew-"+voteMembers.length)),
             name:m.name||m.email||"Crew",
             ini:m.ini||iniFromName(m.name||m.email||"Crew"),
             color:m.color||CREW_COLORS[voteMembers.length%CREW_COLORS.length]
@@ -1772,16 +2047,17 @@ export default function WanderPlan(){
             var row=Object.assign({},next[idx]||{});
             voteMembers.forEach(function(vm){
               if(row[vm.id]!==undefined)return;
-              row[vm.id]=(vm.id==="me")?"up":"";
+              row[vm.id]=(vm.id===currentPlannerId)?"up":"";
             });
             next[idx]=row;
           });
+          saveTripPlanningState({state:{poi_votes:next}});
           return next;
         });
         if(authToken&&wizSessionId){
           apiJson("/wizard/sessions/"+wizSessionId+"/actions",{method:"POST",body:{action_type:"approve_step",payload:{step:wizStep,scope:"poi.selection",accepted_count:accepted.length,rejected_count:rejected.length}}},authToken).catch(function(){});
         }
-        adv();
+        syncTripPoisToBackend(poiStatus).finally(function(){adv();});
       }
       function buildPOIGroupPrefs(){
         var yesMap={},noMap={},dietMap={},summaries=[];
@@ -1827,10 +2103,7 @@ export default function WanderPlan(){
             if(res&&res.length){setPois(res);setPL(false);setPD(true);return;}
             if(authToken&&currentTripId){
               apiJson("/trips/"+currentTripId+"/pois?limit=30",{method:"GET"},authToken).then(function(r){
-                var rows=(r&&r.pois||[]).map(function(x){return{
-                  name:x.name,destination:x.city||x.country||"",category:x.category||"Culture",duration:"2-3h",
-                  cost:x.cost_estimate_usd||0,rating:x.rating||4.5,matchReason:(x.tags||[]).join(", "),tags:x.tags||[]
-                };});
+                var rows=mapBackendPois((r&&r.pois)||[]);
                 setPois(rows||[]);setPL(false);setPD(true);
               }).catch(function(){setPois([]);setPL(false);setPD(true);});
               return;
@@ -1874,14 +2147,14 @@ export default function WanderPlan(){
 
     {wizStep===6&&(function(){
       var voteMembers=[{
-        id:"me",
+        id:currentPlannerId,
         name:user.name||user.email||"You",
         ini:iniFromName(user.name||user.email||"You"),
         color:C.gold
       }];
       (tm||[]).forEach(function(m){
         voteMembers.push({
-          id:String(m.id||m.email||("crew-"+voteMembers.length)),
+          id:makeVoteUserId(m.id,m.email,("crew-"+voteMembers.length)),
           name:m.name||m.email||"Crew",
           ini:m.ini||iniFromName(m.name||m.email||"Crew"),
           color:m.color||CREW_COLORS[voteMembers.length%CREW_COLORS.length]
@@ -1907,11 +2180,13 @@ export default function WanderPlan(){
         return String(a.poi.name||"").localeCompare(String(b.poi.name||""));
       });
       function castPoiVote(idx,memberId,vote){
+        if(memberId!==currentPlannerId)return;
         setPV(function(prev){
           var next=Object.assign({},prev||{});
           var row=Object.assign({},next[idx]||{});
           row[memberId]=vote;
           next[idx]=row;
+          saveTripPlanningState({state:{poi_votes:next}});
           return next;
         });
       }
@@ -1922,7 +2197,7 @@ export default function WanderPlan(){
         });
         setPS(nextStatus);
         logWizAction("record_selection",{key:"pois.voting",value:ranked.map(function(r){return {name:r.poi.name,up:r.up,down:r.down,approved:r.up>=r.down};})});
-        adv();
+        syncTripPoisToBackend(nextStatus).finally(function(){adv();});
       }
       return(<div>
         {ab("POI Voting Agent","Crew votes are tabulated here. Ranked from most voted to least voted.")}
@@ -1938,10 +2213,11 @@ export default function WanderPlan(){
               {voteMembers.map(function(vm){
                 var row=poiVotes[r.idx]||{};
                 var v=row[vm.id]||"";
+                var canEdit=vm.id===currentPlannerId;
                 return(<div key={vm.id} style={{display:"flex",alignItems:"center",gap:6}}>
                   <Avi ini={vm.ini} color={vm.color} size={24} name={vm.name}/>
-                  <button onClick={function(){castPoiVote(r.idx,vm.id,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:"pointer"}}>{"\uD83D\uDC4D"}</button>
-                  <button onClick={function(){castPoiVote(r.idx,vm.id,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:"pointer"}}>{"\uD83D\uDC4E"}</button>
+                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.idx,vm.id,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
+                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.idx,vm.id,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
                 </div>);
               })}
             </div>
@@ -1952,7 +2228,7 @@ export default function WanderPlan(){
           <p style={{fontSize:12,color:C.tx2}}>{ranked.map(function(r){return r.poi.name+" ("+r.up+")";}).join(" | ")}</p>
         </div>)}
         <div style={{display:"flex",gap:10,marginTop:14}}>
-          <button onClick={function(){setWS(5);}} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
+          <button onClick={function(){setWizardStepShared(5);}} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
           <button onClick={applyPoiVotingAndContinue} disabled={ranked.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:ranked.length===0?C.border:C.teal,color:ranked.length===0?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:ranked.length===0?"default":"pointer",minHeight:46}}>Approve</button>
         </div>
       </div>);
@@ -2050,7 +2326,7 @@ export default function WanderPlan(){
         <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",color:C.tx3,fontSize:13}}><span>Travel between destinations</span><span>{travelDays}d</span></div>
         <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",color:C.tx3,fontSize:13}}><span>Buffer / rest</span><span>1d</span></div>
         <div style={{display:"flex",justifyContent:"space-between",padding:"14px 0 0",borderTop:"2px solid "+C.gold+"20",marginTop:6}}><span style={{fontWeight:700,fontSize:18,color:C.goldT}}>Total</span><span style={{fontWeight:700,fontSize:18,color:C.goldT}}>{totalCalc} days</span></div>
-        {tooLong&&(<div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:C.wrnBg,border:"1px solid "+C.wrn+"20"}}><p style={{fontSize:13,color:C.wrn,fontWeight:600}}>This trip is {totalCalc} days. Consider reducing days per destination above, or go back to Activities to trim some.</p><button onClick={function(){setWS(5);}} style={{marginTop:8,padding:"8px 16px",borderRadius:8,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
+        {tooLong&&(<div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:C.wrnBg,border:"1px solid "+C.wrn+"20"}}><p style={{fontSize:13,color:C.wrn,fontWeight:600}}>This trip is {totalCalc} days. Consider reducing days per destination above, or go back to Activities to trim some.</p><button onClick={function(){setWizardStepShared(5);}} style={{marginTop:8,padding:"8px 16px",borderRadius:8,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
         {!feasible&&(<div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:C.redBg,border:"1px solid "+C.red+"20"}}><p style={{fontSize:13,color:C.red}}>Over 21 days may not be feasible. Reduce time per destination or remove activities.</p></div>)}
         {feasible&&!tooLong&&goBtn("Approve "+totalCalc+" days")}
         {feasible&&tooLong&&goBtn("Accept "+totalCalc+" days anyway")}
@@ -2261,7 +2537,7 @@ export default function WanderPlan(){
           </div>
           <button onClick={approveItineraryThenAdvance} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Approve Itinerary</button>
         </div>)}
-        {itinDone&&itin.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"20px 0"}}>Could not build itinerary. You may need more activities or meals approved.</p><button onClick={function(){setWS(5);}} style={{padding:"10px 18px",borderRadius:10,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
+        {itinDone&&itin.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"20px 0"}}>Could not build itinerary. You may need more activities or meals approved.</p><button onClick={function(){setWizardStepShared(5);}} style={{padding:"10px 18px",borderRadius:10,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
       </div>);
     }())}
 

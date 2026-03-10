@@ -208,6 +208,28 @@ class PoiApprovalRequest(BaseModel):
     approved: bool
 
 
+class PoiSyncItemRequest(BaseModel):
+    poi_id: Optional[str] = None
+    name: str
+    category: Optional[str] = None
+    destination: Optional[str] = None
+    country: Optional[str] = None
+    tags: list[str] = []
+    rating: Optional[float] = None
+    cost_estimate_usd: float = 0
+    approved: bool = False
+
+
+class PoiSyncRequest(BaseModel):
+    pois: list[PoiSyncItemRequest] = []
+
+
+class TripPlanningStateUpdateRequest(BaseModel):
+    current_step: Optional[int] = None
+    state: dict[str, Any] = {}
+    merge: bool = True
+
+
 class HealthAcknowledgmentItem(BaseModel):
     activity_id: str
     certification_required: Optional[str] = None
@@ -1752,6 +1774,15 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS trip_planning_states (
+          trip_id UUID PRIMARY KEY REFERENCES trips(id) ON DELETE CASCADE,
+          current_step INT DEFAULT 0,
+          state JSONB NOT NULL DEFAULT '{}'::jsonb,
+          updated_by UUID REFERENCES users(id),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS user_profiles (
           user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
           display_name TEXT NOT NULL DEFAULT '',
@@ -2607,6 +2638,109 @@ async def get_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
     }
 
 
+@app.get("/trips/{trip_id}/planning-state")
+async def get_trip_planning_state(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        row = await conn.fetchrow(
+            """
+            SELECT trip_id, current_step, state, updated_by, updated_at
+            FROM trip_planning_states
+            WHERE trip_id = $1
+            """,
+            trip_id,
+        )
+    if not row:
+        return {
+            "trip_id": trip_id,
+            "current_step": 0,
+            "state": {},
+            "updated_by": None,
+            "updated_at": None,
+        }
+    return {
+        "trip_id": str(row["trip_id"]),
+        "current_step": int(row["current_step"] or 0),
+        "state": row["state"] or {},
+        "updated_by": str(row["updated_by"]) if row["updated_by"] else None,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+@app.put("/trips/{trip_id}/planning-state")
+async def put_trip_planning_state(
+    trip_id: str,
+    body: TripPlanningStateUpdateRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    incoming_state = body.state if isinstance(body.state, dict) else {}
+    if body.current_step is not None:
+        try:
+            next_step = max(0, int(body.current_step))
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid current_step")
+    else:
+        next_step = None
+
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        membership = await conn.fetchrow(
+            "SELECT status FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not membership or str(membership["status"] or "pending").lower() != "accepted":
+            raise HTTPException(status_code=403, detail="Only accepted trip members can update planning state")
+
+        existing = await conn.fetchrow(
+            """
+            SELECT current_step, state
+            FROM trip_planning_states
+            WHERE trip_id = $1
+            """,
+            trip_id,
+        )
+        existing_state = (existing["state"] or {}) if existing else {}
+        if not isinstance(existing_state, dict):
+            existing_state = {}
+        if body.merge:
+            merged_state = dict(existing_state)
+            merged_state.update(incoming_state)
+        else:
+            merged_state = incoming_state
+
+        step_value = next_step if next_step is not None else int((existing["current_step"] if existing else 0) or 0)
+        row = await conn.fetchrow(
+            """
+            INSERT INTO trip_planning_states (trip_id, current_step, state, updated_by, updated_at)
+            VALUES ($1, $2, $3::jsonb, $4, NOW())
+            ON CONFLICT (trip_id)
+            DO UPDATE SET current_step = EXCLUDED.current_step,
+                          state = EXCLUDED.state,
+                          updated_by = EXCLUDED.updated_by,
+                          updated_at = NOW()
+            RETURNING trip_id, current_step, state, updated_by, updated_at
+            """,
+            trip_id,
+            step_value,
+            json.dumps(merged_state),
+            user_id,
+        )
+
+    return {
+        "trip_id": str(row["trip_id"]),
+        "current_step": int(row["current_step"] or 0),
+        "state": row["state"] or {},
+        "updated_by": str(row["updated_by"]) if row["updated_by"] else None,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
 @app.get("/me/trips")
 async def get_my_trips(user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
@@ -2770,6 +2904,11 @@ async def invite_member(
     body: InviteMemberRequest,
     user_id: str = Depends(get_current_user_id),
 ):
+    try:
+        UUID(str(trip_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid trip id")
+
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
@@ -3229,6 +3368,171 @@ async def get_pois(
                 "approved": bool(row["approved"]),
             }
             for row in rows
+        ]
+    }
+
+
+@app.post("/trips/{trip_id}/pois/sync")
+async def sync_pois(
+    trip_id: str,
+    body: PoiSyncRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    clean_items: list[dict[str, Any]] = []
+    for item in body.pois or []:
+        name = str(item.name or "").strip()
+        if not name:
+            continue
+        city = str(item.destination or "").strip()
+        country = str(item.country or "").strip()
+        category = str(item.category or "").strip().lower() or "culture"
+        tags = [str(t or "").strip() for t in (item.tags or [])]
+        tags = [t for t in tags if t]
+        rating = None
+        if item.rating is not None:
+            try:
+                rating = round(float(item.rating), 1)
+            except Exception:
+                rating = None
+        try:
+            cost_estimate = round(float(item.cost_estimate_usd or 0), 2)
+        except Exception:
+            cost_estimate = 0.0
+        clean_items.append(
+            {
+                "poi_id": str(item.poi_id or "").strip(),
+                "name": name,
+                "category": category,
+                "city": city,
+                "country": country,
+                "tags": tags,
+                "rating": rating,
+                "cost_estimate_usd": cost_estimate,
+                "approved": bool(item.approved),
+            }
+        )
+
+    if len(clean_items) == 0:
+        return {"pois": []}
+
+    synced_rows: list[Any] = []
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        member_row = await conn.fetchrow(
+            "SELECT status FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not member_row or str(member_row["status"] or "pending").lower() != "accepted":
+            raise HTTPException(status_code=403, detail="Only accepted trip members can sync POIs")
+        for item in clean_items:
+            updated = None
+            pid = None
+            if item["poi_id"]:
+                try:
+                    pid = str(UUID(item["poi_id"]))
+                except Exception:
+                    pid = None
+            if pid:
+                updated = await conn.fetchrow(
+                    """
+                    UPDATE pois
+                    SET name = $1,
+                        category = $2,
+                        city = NULLIF($3, ''),
+                        country = NULLIF($4, ''),
+                        tags = $5::text[],
+                        rating = $6,
+                        cost_estimate_usd = $7,
+                        approved = $8
+                    WHERE id = $9 AND trip_id = $10
+                    RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                    """,
+                    item["name"],
+                    item["category"],
+                    item["city"],
+                    item["country"],
+                    item["tags"],
+                    item["rating"],
+                    item["cost_estimate_usd"],
+                    item["approved"],
+                    pid,
+                    trip_id,
+                )
+            if not updated:
+                existing = await conn.fetchrow(
+                    """
+                    SELECT id
+                    FROM pois
+                    WHERE trip_id = $1
+                      AND LOWER(name) = LOWER($2)
+                      AND COALESCE(LOWER(city), '') = COALESCE(LOWER($3), '')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    trip_id,
+                    item["name"],
+                    item["city"],
+                )
+                if existing:
+                    updated = await conn.fetchrow(
+                        """
+                        UPDATE pois
+                        SET category = $1,
+                            country = NULLIF($2, ''),
+                            tags = $3::text[],
+                            rating = $4,
+                            cost_estimate_usd = $5,
+                            approved = $6
+                        WHERE id = $7 AND trip_id = $8
+                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                        """,
+                        item["category"],
+                        item["country"],
+                        item["tags"],
+                        item["rating"],
+                        item["cost_estimate_usd"],
+                        item["approved"],
+                        existing["id"],
+                        trip_id,
+                    )
+                else:
+                    updated = await conn.fetchrow(
+                        """
+                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, approved)
+                        VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6::text[], $7, $8, $9)
+                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                        """,
+                        trip_id,
+                        item["name"],
+                        item["category"],
+                        item["city"],
+                        item["country"],
+                        item["tags"],
+                        item["rating"],
+                        item["cost_estimate_usd"],
+                        item["approved"],
+                    )
+            if updated:
+                synced_rows.append(updated)
+
+    return {
+        "pois": [
+            {
+                "poi_id": str(row["id"]),
+                "name": row["name"],
+                "category": row["category"],
+                "city": row["city"],
+                "country": row["country"],
+                "tags": row["tags"] or [],
+                "rating": float(row["rating"] or 0),
+                "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
+                "approved": bool(row["approved"]),
+            }
+            for row in synced_rows
         ]
     }
 
