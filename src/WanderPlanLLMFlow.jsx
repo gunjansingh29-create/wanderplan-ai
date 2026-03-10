@@ -38,6 +38,23 @@ function normalizeApiBase(raw){
   return v.replace(/\/+$/,"");
 }
 
+function resolveApiBase(){
+  var envBase=normalizeApiBase((typeof process!=="undefined"&&process.env&&process.env.REACT_APP_API_BASE)||"");
+  if(envBase)return envBase;
+  if(typeof window!=="undefined"){
+    try{
+      var sp=new URLSearchParams(window.location.search||"");
+      var q=normalizeApiBase(sp.get("api_base")||"");
+      if(q)return q;
+    }catch(e){}
+    var host=String(window.location.hostname||"").toLowerCase();
+    if(host==="localhost"||host==="127.0.0.1")return "http://localhost:8000";
+    // Safe production fallback when env is missing in Vercel.
+    return "https://wanderplan-orchestrator.onrender.com";
+  }
+  return "http://localhost:8000";
+}
+
 function toApiUrl(path){
   var p=String(path||"");
   if(/^https?:\/\//i.test(p))return p;
@@ -45,7 +62,7 @@ function toApiUrl(path){
   return API_BASE+p;
 }
 
-var API_BASE=normalizeApiBase((typeof process!=="undefined"&&process.env&&process.env.REACT_APP_API_BASE)||"http://localhost:8000");
+var API_BASE=resolveApiBase();
 var LLM_PROXY=normalizeApiBase((typeof process!=="undefined"&&process.env&&process.env.REACT_APP_LLM_PROXY)||"")||(""+API_BASE+"/llm/messages");
 var CREW_COLORS=[C.sky,C.coral,C.grn,C.purp,C.tealL,C.gold];
 
