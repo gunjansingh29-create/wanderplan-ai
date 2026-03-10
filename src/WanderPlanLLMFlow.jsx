@@ -211,7 +211,7 @@ function toTripMember(member, tripStatus){
 
 function isTripInvitePending(member){
   var st=mapTripMemberStatus(member&&(member.trip_status||member.status));
-  return st!=="accepted"&&st!=="invited"&&st!=="declined";
+  return st!=="accepted"&&st!=="invited"&&st!=="declined"&&st!=="link_only";
 }
 
 function parseJsonLoose(txt){
@@ -458,6 +458,7 @@ export default function WanderPlan(){
   var[crewInviteLink,setCIL]=useState("");
   var[crewInviteCopyMsg,setCICM]=useState("");
   var[tripInviteMsg,setTIM]=useState("");
+  var[tripInviteLinks,setTIL]=useState({});
   var[pendingInviteToken,setPIT]=useState("");
   var[pendingInviteAction,setPIA]=useState("accept");
   var[pendingTripJoinId,setPTJ]=useState("");
@@ -591,7 +592,7 @@ export default function WanderPlan(){
   useEffect(function(){if(loaded)sv("wp-t",trips);},[trips,loaded]);
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
   useEffect(function(){if(chatRef.current)chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
-  useEffect(function(){if(sc==="new_trip")setTIM("");},[sc]);
+  useEffect(function(){if(sc==="new_trip"){setTIM("");setTIL({});}},[sc]);
   useEffect(function(){
     if(typeof window==="undefined")return;
     function onResize(){
@@ -667,6 +668,8 @@ export default function WanderPlan(){
     try{
       var peers=await apiJson("/crew/peer-profiles",{method:"GET"},authToken);
       if(peers&&Array.isArray(peers.peers))mergeCrewFromPeers(peers.peers);
+    }catch(e){}
+    try{
       var sent=await apiJson("/crew/invites/sent",{method:"GET"},authToken);
       if(sent&&Array.isArray(sent.invites)){
         var acceptedJustNow=[];
@@ -1027,6 +1030,10 @@ export default function WanderPlan(){
     processPendingTripInvite(authToken);
   },[loaded,authToken,pendingTripJoinId,pendingTripJoinAction]);
   useEffect(function(){
+    if(!loaded||!authToken||sc!=="wizard"||wizStep!==1)return;
+    refreshCrewFromBackend();
+  },[loaded,authToken,sc,wizStep,currentTripId]);
+  useEffect(function(){
     if(!loaded||!authToken||sc!=="wizard"||wizStep!==1||!currentTripId)return;
     var members=(newTrip&&Array.isArray(newTrip.members))?newTrip.members:[];
     var pendingMembers=members.filter(function(m){return isTripInvitePending(m);});
@@ -1375,25 +1382,33 @@ export default function WanderPlan(){
     var failed=[];
     var statusByEmail={};
     var joinedIds={};
+    var newInviteLinks={};
     var skipped=0;
     for(var i=0;i<members.length;i++){
       var m=members[i]||{};
       var email=String(m.email||"").trim().toLowerCase();
       if(!email){failed.push((m.name||("member "+(i+1)))+": missing email");continue;}
       var currentStatus=mapTripMemberStatus(m.trip_status||m.status);
-      if(currentStatus==="accepted"||currentStatus==="invited"){
+      if(currentStatus==="accepted"||currentStatus==="invited"||currentStatus==="link_only"){
         skipped++;
         continue;
       }
       try{
         var ir=await apiJson("/trips/"+tripIdStr+"/members",{method:"POST",body:{email:email,role:"member"}},authToken);
-        var mappedStatus=mapTripMemberStatus(ir&&ir.status);
+        var emailWasSent=!!(ir&&ir.email_sent);
+        var mappedStatus=emailWasSent?mapTripMemberStatus(ir&&ir.status):"link_only";
         statusByEmail[email]=mappedStatus;
         if(mappedStatus==="accepted"&&m.id)joinedIds[m.id]=true;
+        if(!emailWasSent&&ir&&ir.accept_link){
+          newInviteLinks[email]={accept_link:String(ir.accept_link),reject_link:String(ir.reject_link||"")};
+        }
         sent++;
       }catch(e){
         failed.push(email+": "+String(e&&e.message||"invite failed"));
       }
+    }
+    if(Object.keys(newInviteLinks).length>0){
+      setTIL(function(prev){return Object.assign({},prev,newInviteLinks);});
     }
     if(Object.keys(statusByEmail).length>0){
       setNT(function(prev){
@@ -1904,8 +1919,11 @@ export default function WanderPlan(){
       var useNext=(rank[nextSt]||1)>(rank[curSt]||1);
       step2CrewPool[idx]=Object.assign({},cur,m,useNext?{trip_status:nextSt,status:nextSt}:{});
     }
+    var pendingCrewCount=0;
     (crew||[]).forEach(function(m){
-      addStep2CrewMember(m,"selected");
+      var cst=String(m&&m.crew_status||m&&m.status||"").trim().toLowerCase();
+      if(cst==="accepted"){addStep2CrewMember(m,"selected");}
+      else if(cst!=="declined"){pendingCrewCount++;}
     });
     tm.forEach(function(m){
       addStep2CrewMember(m,m.trip_status||m.status);
@@ -2189,8 +2207,12 @@ export default function WanderPlan(){
     {wizStep===1&&(<div>
       {ab("Trip Coordinator",tm.length>0?"Selected members are invited to this specific trip. Waiting for at least 1 acceptance before continuing.":"No trip members selected yet. Select crew members below, or continue solo.")}
       <div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
-        <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:8}}>SELECT FROM MY CREW ({step2CrewPool.length})</p>
-        {step2CrewPool.length===0?(<p style={{fontSize:12,color:C.tx3}}>No crew members available. Invite people in My Crew first.</p>):(
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8}}>
+          <p style={{fontSize:12,fontWeight:700,color:C.tx3}}>SELECT FROM MY CREW ({step2CrewPool.length})</p>
+          <button onClick={function(){refreshCrewFromBackend();}} style={{padding:"5px 10px",borderRadius:8,border:"1px solid "+C.border,background:C.surface,color:C.tx2,fontSize:11,fontWeight:600,cursor:"pointer"}}>Reload My Crew</button>
+        </div>
+        {pendingCrewCount>0&&(<p style={{fontSize:11,color:C.wrn,marginBottom:8}}>{pendingCrewCount} crew member{pendingCrewCount>1?"s":""} not yet registered — they must sign up before being invited to a trip.</p>)}
+        {step2CrewPool.length===0?(<p style={{fontSize:12,color:C.tx3}}>{pendingCrewCount>0?"No registered crew members yet. Waiting for pending invites to be accepted.":"No crew members available. Invite people in My Crew first."}</p>):(
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
             {step2CrewPool.map(function(m){
               var inTrip=findTripMemberFor(m);
@@ -2222,6 +2244,26 @@ export default function WanderPlan(){
       </div>);})}
       {selectedCount>0&&(<button onClick={sendStep2TripInvites} style={{width:"100%",marginTop:12,padding:"10px 12px",borderRadius:10,border:"1px solid "+C.gold+"30",background:C.goldDim,color:C.goldT,fontSize:13,fontWeight:700,cursor:"pointer"}}>Send Trip Invites ({selectedCount})</button>)}
       {tripInviteMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:8}}>{tripInviteMsg}</p>}
+      {tm.filter(function(m){return mapTripMemberStatus(m.trip_status||m.status)==="link_only"&&tripInviteLinks[String(m.email||"").trim().toLowerCase()];}).map(function(m){
+        var em=String(m.email||"").trim().toLowerCase();
+        var links=tripInviteLinks[em]||{};
+        var shareText="Join my trip on WanderPlan!\nAccept: "+links.accept_link+(links.reject_link?"\nDecline: "+links.reject_link:"");
+        return(<div key={em} style={{marginTop:8,padding:"10px 12px",borderRadius:10,background:C.sky+"10",border:"1px solid "+C.sky+"30"}}>
+          <p style={{fontSize:12,fontWeight:600,color:C.sky,marginBottom:4}}>{m.name||em} — email not sent</p>
+          <p style={{fontSize:11,color:C.tx3,marginBottom:6,wordBreak:"break-all"}}>{links.accept_link}</p>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={function(){
+              var txt=links.accept_link;
+              if(navigator&&navigator.clipboard&&typeof navigator.clipboard.writeText==="function"){navigator.clipboard.writeText(txt).catch(function(){});}
+              else{var ta=document.createElement("textarea");ta.value=txt;ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);}
+            }} style={{padding:"5px 12px",borderRadius:8,border:"none",background:C.sky,color:C.bg,fontSize:11,fontWeight:600,cursor:"pointer"}}>Copy Accept Link</button>
+            <button onClick={function(){
+              if(navigator&&navigator.share){navigator.share({title:"WanderPlan Trip Invite",text:shareText}).catch(function(){});}
+              else if(navigator&&navigator.clipboard&&typeof navigator.clipboard.writeText==="function"){navigator.clipboard.writeText(shareText).catch(function(){});}
+            }} style={{padding:"5px 12px",borderRadius:8,border:"1px solid "+C.sky+"40",background:"transparent",color:C.sky,fontSize:11,fontWeight:600,cursor:"pointer"}}>Share (WhatsApp etc.)</button>
+          </div>
+        </div>);
+      })}
       {(invitedCount>0||jc>0)&&(<div style={{marginTop:14,padding:"12px 16px",borderRadius:12,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}><p style={{fontSize:13,color:C.tealL,fontWeight:600}}>{invitedCount} invited, {jc} accepted</p><p style={{fontSize:12,color:C.tx2,marginTop:4}}>Invited members get an email with trip name and inviter. On acceptance, this trip appears in their Trips and moves to Planning.</p></div>)}
       <div style={{marginTop:12,padding:"10px 14px",borderRadius:10,background:canGo?C.grnBg:C.wrnBg}}><p style={{fontSize:12,color:canGo?C.grn:C.wrn}}>{canGo?(jc>0?jc+" joined. Ready!":"No crew - continuing solo."):"Waiting for 1+ to join..."}</p></div>
       {canGo&&goBtn(tm.length>0?"Continue with "+(jc+1)+" people":"Continue Solo")}
