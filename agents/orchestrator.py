@@ -1532,6 +1532,276 @@ def _storyboard_text(platform: str, title_tokens: list[str], destination: str) -
     return f"{base}{hashtags}"
 
 
+async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
+    # Fresh cloud databases need a complete baseline schema before app endpoints run.
+    statements = [
+        """
+        CREATE EXTENSION IF NOT EXISTS pgcrypto
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          email TEXT UNIQUE NOT NULL,
+          name TEXT NOT NULL DEFAULT '',
+          password_hash TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trips (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          owner_id UUID REFERENCES users(id),
+          name TEXT NOT NULL,
+          status TEXT DEFAULT 'planning',
+          duration_days INT,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trip_members (
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          role TEXT DEFAULT 'member',
+          status TEXT DEFAULT 'pending',
+          joined_at TIMESTAMPTZ,
+          PRIMARY KEY (trip_id, user_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS bucket_list_items (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          destination TEXT NOT NULL,
+          country TEXT,
+          category TEXT,
+          added_by UUID REFERENCES users(id),
+          vote_score INT DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trip_destinations (
+          trip_id UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+          destination TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (trip_id, destination)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS timing_results (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          destination TEXT NOT NULL,
+          month_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
+          preferred_months TEXT[] DEFAULT '{}',
+          avoid_months TEXT[] DEFAULT '{}',
+          best_window JSONB,
+          computed_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS interest_profiles (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          categories TEXT[] DEFAULT '{}',
+          intensity TEXT DEFAULT 'moderate',
+          must_do TEXT[] DEFAULT '{}',
+          avoid TEXT[] DEFAULT '{}',
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE (trip_id, user_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS pois (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          category TEXT,
+          city TEXT,
+          country TEXT,
+          tags TEXT[] DEFAULT '{}',
+          rating NUMERIC(3,1),
+          cost_estimate_usd NUMERIC(10,2) DEFAULT 0,
+          approved BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS budgets (
+          trip_id UUID PRIMARY KEY REFERENCES trips(id) ON DELETE CASCADE,
+          currency TEXT DEFAULT 'USD',
+          daily_target NUMERIC(12,2),
+          total_budget NUMERIC(12,2),
+          spent NUMERIC(12,2) DEFAULT 0,
+          remaining NUMERIC(12,2),
+          breakdown JSONB DEFAULT '{}'::jsonb,
+          warning_active BOOLEAN DEFAULT FALSE,
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS flight_options (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          airline TEXT,
+          departure_airport TEXT,
+          arrival_airport TEXT,
+          departure_time TIMESTAMPTZ,
+          arrival_time TIMESTAMPTZ,
+          price_usd NUMERIC(10,2),
+          stops INT DEFAULT 0,
+          duration_min INT,
+          selected BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS itinerary_days (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          day_number INT NOT NULL,
+          date DATE,
+          title TEXT,
+          approved BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS itinerary_activities (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          day_id UUID REFERENCES itinerary_days(id) ON DELETE CASCADE,
+          time_slot TEXT,
+          title TEXT NOT NULL,
+          description TEXT,
+          category TEXT,
+          location_name TEXT,
+          lat DOUBLE PRECISION,
+          lng DOUBLE PRECISION,
+          cost_estimate NUMERIC(10,2) DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS calendar_events (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          activity_id UUID REFERENCES itinerary_activities(id),
+          calendar_id TEXT,
+          event_title TEXT,
+          start_time TIMESTAMPTZ,
+          end_time TIMESTAMPTZ,
+          location TEXT,
+          synced_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS storyboards (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          platform TEXT NOT NULL,
+          content TEXT,
+          word_count INT,
+          generated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS analytics_events (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          session_id TEXT,
+          trip_id UUID,
+          user_id UUID,
+          event_type TEXT NOT NULL,
+          screen_name TEXT,
+          properties JSONB DEFAULT '{}'::jsonb,
+          client_ts TIMESTAMPTZ,
+          server_ts TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS health_acknowledgments (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          activity_id UUID,
+          certification_required TEXT,
+          user_has_cert BOOLEAN,
+          alternative_suggested TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS availability_windows (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          start_date DATE NOT NULL,
+          end_date DATE NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS member_platform_preferences (
+          trip_id UUID NOT NULL,
+          user_id UUID NOT NULL,
+          platform TEXT NOT NULL,
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          PRIMARY KEY (trip_id, user_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS user_profiles (
+          user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          display_name TEXT NOT NULL DEFAULT '',
+          travel_styles TEXT[] NOT NULL DEFAULT '{}',
+          interests JSONB NOT NULL DEFAULT '{}'::jsonb,
+          budget_tier TEXT NOT NULL DEFAULT 'moderate',
+          dietary TEXT[] NOT NULL DEFAULT '{}',
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS personal_bucket_items (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          destination TEXT NOT NULL,
+          country TEXT,
+          tags TEXT[] NOT NULL DEFAULT '{}',
+          best_months INT[] NOT NULL DEFAULT '{}',
+          cost_per_day NUMERIC(10,2) NOT NULL DEFAULT 0,
+          best_time_desc TEXT NOT NULL DEFAULT '',
+          cost_note TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crew_invites (
+          invite_token TEXT PRIMARY KEY,
+          inviter_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          inviter_email TEXT NOT NULL,
+          invitee_email TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          accepted_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          accepted_at TIMESTAMPTZ
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crew_links (
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          peer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, peer_user_id),
+          CHECK (user_id <> peer_user_id)
+        )
+        """,
+    ]
+    for stmt in statements:
+        await conn.execute(stmt)
+
+
 @app.on_event("startup")
 async def _startup_db():
     global db_pool
@@ -1545,71 +1815,7 @@ async def _startup_db():
         dsn=dsn
     )
     async with db_pool.acquire() as conn:
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS member_platform_preferences (
-              trip_id UUID NOT NULL,
-              user_id UUID NOT NULL,
-              platform TEXT NOT NULL,
-              updated_at TIMESTAMPTZ DEFAULT NOW(),
-              PRIMARY KEY (trip_id, user_id)
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_profiles (
-              user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-              display_name TEXT NOT NULL DEFAULT '',
-              travel_styles TEXT[] NOT NULL DEFAULT '{}',
-              interests JSONB NOT NULL DEFAULT '{}'::jsonb,
-              budget_tier TEXT NOT NULL DEFAULT 'moderate',
-              dietary TEXT[] NOT NULL DEFAULT '{}',
-              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS personal_bucket_items (
-              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-              user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-              destination TEXT NOT NULL,
-              country TEXT,
-              tags TEXT[] NOT NULL DEFAULT '{}',
-              best_months INT[] NOT NULL DEFAULT '{}',
-              cost_per_day NUMERIC(10,2) NOT NULL DEFAULT 0,
-              best_time_desc TEXT NOT NULL DEFAULT '',
-              cost_note TEXT NOT NULL DEFAULT '',
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS crew_invites (
-              invite_token TEXT PRIMARY KEY,
-              inviter_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-              inviter_email TEXT NOT NULL,
-              invitee_email TEXT NOT NULL,
-              status TEXT NOT NULL DEFAULT 'pending',
-              accepted_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-              accepted_at TIMESTAMPTZ
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS crew_links (
-              user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-              peer_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-              PRIMARY KEY (user_id, peer_user_id),
-              CHECK (user_id <> peer_user_id)
-            )
-            """
-        )
+        await _bootstrap_schema(conn)
 
 
 @app.on_event("shutdown")
