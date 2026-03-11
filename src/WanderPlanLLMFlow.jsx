@@ -1635,11 +1635,53 @@ export default function WanderPlan(){
       if(filter==="planning")return t.status==="planning"||t.status==="saved";
       return t.status===filter;
     }
-    var filtered=trips.filter(function(t){return matchesTripFilter(t,tripFilter);});
+    var hasActive=trips.some(function(t){return t&&t.status==="active";});
+    var hasCompleted=trips.some(function(t){return t&&t.status==="completed";});
+    var seedTrips=[];
+    if(!hasActive){
+      seedTrips.push({
+        id:"seed-active-trip",
+        name:"Tokyo Discovery Sprint",
+        status:"active",
+        trip_status:"active",
+        my_status:"owner",
+        dests:["Tokyo"],
+        destinations:["Tokyo"],
+        destNames:"Tokyo",
+        members:[],
+        step:8,
+        dates:"Apr 10 - Apr 18",
+        days:8,
+        budget:3600,
+        spent:1420,
+        isSeed:true
+      });
+    }
+    if(!hasCompleted){
+      seedTrips.push({
+        id:"seed-completed-trip",
+        name:"Santorini Celebration",
+        status:"completed",
+        trip_status:"completed",
+        my_status:"owner",
+        dests:["Santorini"],
+        destinations:["Santorini"],
+        destNames:"Santorini",
+        members:[],
+        step:14,
+        dates:"Sep 2 - Sep 9",
+        days:7,
+        budget:2800,
+        spent:2610,
+        isSeed:true
+      });
+    }
+    var displayTrips=trips.concat(seedTrips);
+    var filtered=displayTrips.filter(function(t){return matchesTripFilter(t,tripFilter);});
     return(<div>
-      <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Trips</h1><p style={{fontSize:14,color:C.tx2,marginBottom:20}}>{trips.length} trip{trips.length!==1?"s":""} total</p></Fade>
+      <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Trips</h1><p style={{fontSize:14,color:C.tx2,marginBottom:20}}>{displayTrips.length} trip{displayTrips.length!==1?"s":""} total</p></Fade>
       <Fade delay={100}><button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{width:"100%",textAlign:"left",background:C.gold+"0c",borderRadius:16,padding:"20px 24px",marginBottom:20,border:"1px solid "+C.gold+"18",cursor:"pointer",display:"flex",alignItems:"center",gap:16}}><div style={{width:44,height:44,borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0,color:"#fff"}}>+</div><div><h3 style={{fontSize:16,fontWeight:700,color:"#fff"}}>Plan a new trip</h3><p style={{fontSize:13,color:C.tx2}}>Pick from bucket list, invite crew</p></div></button></Fade>
-      <Fade delay={150}><div style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>{tabs.map(function(t){var cnt=t==="all"?trips.length:trips.filter(function(tr){return matchesTripFilter(tr,t);}).length;var sel=tripFilter===t;return(<button key={t} onClick={function(){setTF(t);}} style={{padding:"6px 16px",borderRadius:999,fontSize:13,fontWeight:sel?600:400,background:sel?C.goldDim:C.surface,color:sel?C.goldT:C.tx2,border:"1px solid "+(sel?C.gold+"30":C.border),cursor:"pointer"}}>{t==="all"?"All":stMap[t]?stMap[t].l:t} ({cnt})</button>);})}</div></Fade>
+      <Fade delay={150}><div style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>{tabs.map(function(t){var cnt=t==="all"?displayTrips.length:displayTrips.filter(function(tr){return matchesTripFilter(tr,t);}).length;var sel=tripFilter===t;return(<button key={t} onClick={function(){setTF(t);}} style={{padding:"6px 16px",borderRadius:999,fontSize:13,fontWeight:sel?600:400,background:sel?C.goldDim:C.surface,color:sel?C.goldT:C.tx2,border:"1px solid "+(sel?C.gold+"30":C.border),cursor:"pointer"}}>{t==="all"?"All":stMap[t]?stMap[t].l:t} ({cnt})</button>);})}</div></Fade>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,300px),1fr))",gap:14}}>
         {filtered.map(function(tr,i){var st=stMap[tr.status]||stMap.saved;var pct=tr.budget>0&&tr.spent>0?Math.round((tr.spent/tr.budget)*100):0;
           return(<Fade key={tr.id} delay={200+i*50}><div onClick={function(){setVT(tr);go("trip_detail");}} style={{background:C.surface,borderRadius:16,overflow:"hidden",border:"1px solid "+C.border,cursor:"pointer",transition:"all .2s"}}
@@ -1651,7 +1693,7 @@ export default function WanderPlan(){
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {tr.status==="active"&&<div style={{width:6,height:6,borderRadius:999,background:C.grn,animation:"pulse 1.5s infinite"}}/>}
                   <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:st.c,background:st.bg,whiteSpace:"nowrap"}}>{st.l}</span>
-                  <button onClick={function(e){e.stopPropagation();setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>
+                  {!tr.isSeed&&<button onClick={function(e){e.stopPropagation();setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>}
                 </div>
               </div>
               <p style={{fontSize:13,color:C.tx2,marginBottom:10}}>{tr.destNames||"No destinations"}</p>
