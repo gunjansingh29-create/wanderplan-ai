@@ -543,6 +543,7 @@ export default function WanderPlan(){
   var tripInviteInFlightRef=useRef(false);
   var inviteTripFilterAppliedRef=useRef(false);
   var planningStateUpdatedAtRef=useRef("");
+  var autoTripAcceptRef=useRef({});
   // Wizard interaction states
   var[destMemberVotes,setDMV]=useState({});
   var[tripJoined,setTJ]=useState({});
@@ -1119,6 +1120,30 @@ export default function WanderPlan(){
       tripInviteInFlightRef.current=false;
     });
   },[loaded,authToken,sc,wizStep,currentTripId,newTrip]);
+  useEffect(function(){
+    if(!loaded||!authToken||sc!=="trip_detail"||!viewTrip)return;
+    var tr=viewTrip||{};
+    if(String(tr.status||"")!=="invited")return;
+    var tripId=String(tr.id||"").trim();
+    if(!tripId||!isUuidLike(tripId))return;
+    if(autoTripAcceptRef.current[tripId])return;
+    autoTripAcceptRef.current[tripId]=1;
+    apiJson("/trips/"+tripId+"/respond",{method:"POST",body:{action:"accept"}},authToken).then(function(){
+      setCM("Trip invite accepted. Moved to Planning.");
+      setTF("planning");
+      setPTJ("");
+      setPTJA("");
+      clearTripJoinFromUrl();
+      setVT(function(prev){
+        if(!prev||String(prev.id||"")!==tripId)return prev;
+        return Object.assign({},prev,{status:"planning"});
+      });
+      refreshTripsFromBackend(authToken);
+    }).catch(function(e){
+      autoTripAcceptRef.current[tripId]=0;
+      setCM("Trip invite could not be accepted: "+String(e&&e.message||"error"));
+    });
+  },[loaded,authToken,sc,viewTrip&&viewTrip.id,viewTrip&&viewTrip.status]);
   function clearInviteTokenFromUrl(){
     try{
       var sp=new URLSearchParams(window.location.search||"");
