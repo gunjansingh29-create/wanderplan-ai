@@ -101,9 +101,6 @@ function normalizeAirportCode(value, fallback = "LAX") {
   return fallback;
 }
 
-function sanitizeAirportInput(value) {
-  return String(value || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3);
-}
 
 function inferAirportCode(destinationName, fallback = "NRT") {
   const normalized = String(destinationName || "").toLowerCase().replace(/[^a-z]/g, "");
@@ -113,6 +110,164 @@ function inferAirportCode(destinationName, fallback = "NRT") {
   const letters = String(destinationName || "").toUpperCase().replace(/[^A-Z]/g, "");
   if (letters.length >= 3) return letters.slice(0, 3);
   return fallback;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AIRPORT CITY INPUT
+   City-name typeahead → airport IATA code picker
+   Props:
+     label       – field label
+     value       – current selected IATA code (3 letters)
+     onChange    – called with new IATA code string
+     authToken   – Bearer token for /airports/search
+     placeholder – input placeholder text
+   ═══════════════════════════════════════════════════════════════════════════ */
+function AirportCityInput({ label, value, onChange, authToken, placeholder = "City or airport" }) {
+  const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const timerRef = useRef(null);
+  const wrapRef = useRef(null);
+
+  // Sync display when value is set externally (e.g. initial hydration)
+  useEffect(() => {
+    if (value && !query) {
+      setQuery(value);
+    }
+  }, []); // only on mount
+
+  // Debounce search
+  useEffect(() => {
+    if (query.length < 2) {
+      setSuggestions([]);
+      setOpen(false);
+      return;
+    }
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => {
+      setBusy(true);
+      try {
+        const res = await fetch(
+          `${API_BASE}/airports/search?q=${encodeURIComponent(query)}`,
+          { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setSuggestions(data.airports || []);
+          setOpen((data.airports || []).length > 0);
+        }
+      } catch (_) {
+        // silently ignore search errors
+      }
+      setBusy(false);
+    }, 320);
+    return () => clearTimeout(timerRef.current);
+  }, [query, authToken]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClick(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  function handleSelect(airport) {
+    onChange(airport.iata);
+    setQuery(`${airport.city} (${airport.iata})`);
+    setOpen(false);
+    setSuggestions([]);
+  }
+
+  // If user manually types a valid 3-letter code, accept it directly
+  function handleBlur() {
+    const raw = query.trim().toUpperCase().replace(/[^A-Z]/g, "");
+    if (raw.length === 3 && raw !== value) {
+      onChange(raw);
+    }
+    setTimeout(() => setOpen(false), 150);
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      {label && (
+        <label className="hd" style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.text2, marginBottom: 6 }}>
+          {label}
+        </label>
+      )}
+      <div style={{ position: "relative" }}>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => suggestions.length > 0 && setOpen(true)}
+          onBlur={handleBlur}
+          placeholder={placeholder}
+          autoComplete="off"
+          style={{
+            width: "100%", minHeight: 42, padding: "10px 36px 10px 12px",
+            borderRadius: 10, border: `1.5px solid ${value ? T.primary : T.border}`,
+            fontSize: 14, background: T.surface, color: T.text,
+            transition: "border-color .2s",
+          }}
+        />
+        {busy && (
+          <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: T.text3 }}>
+            ···
+          </span>
+        )}
+        {!busy && value && (
+          <span style={{
+            position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+            background: T.primary, color: "#fff", borderRadius: 5, fontSize: 11,
+            fontWeight: 700, padding: "2px 5px", fontFamily: "monospace", letterSpacing: 1,
+          }}>
+            {value}
+          </span>
+        )}
+      </div>
+      {open && suggestions.length > 0 && (
+        <div style={{
+          position: "absolute", zIndex: 200, left: 0, right: 0, top: "calc(100% + 4px)",
+          background: T.surface, border: `1.5px solid ${T.border}`, borderRadius: 10,
+          boxShadow: "0 8px 24px rgba(26,26,46,0.12)", overflow: "hidden",
+        }}>
+          {suggestions.map((airport, idx) => (
+            <div
+              key={`${airport.iata}-${idx}`}
+              onMouseDown={() => handleSelect(airport)}
+              style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
+                cursor: "pointer", borderBottom: idx < suggestions.length - 1 ? `1px solid ${T.borderLight}` : "none",
+                transition: "background .15s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = T.borderLight; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = ""; }}
+            >
+              <span style={{
+                background: T.primary + "18", color: T.primary, borderRadius: 6,
+                fontSize: 12, fontWeight: 700, padding: "2px 6px", fontFamily: "monospace",
+                letterSpacing: 1, flexShrink: 0,
+              }}>
+                {airport.iata}
+              </span>
+              <div style={{ minWidth: 0 }}>
+                <p className="hd" style={{ fontSize: 13, fontWeight: 600, color: T.text, lineHeight: 1.3 }}>
+                  {airport.city}
+                </p>
+                <p style={{ fontSize: 11, color: T.text3, lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {airport.name} · {airport.country}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function isoDaysFromNow(offsetDays) {
@@ -127,6 +282,13 @@ function shiftIsoDate(isoDate, daysToAdd) {
   if (Number.isNaN(seed.getTime())) return isoDaysFromNow(daysToAdd);
   seed.setDate(seed.getDate() + daysToAdd);
   return seed.toISOString().slice(0, 10);
+}
+
+function diffIsoDays(startIso, endIso) {
+  const start = new Date(`${startIso}T00:00:00`);
+  const end = new Date(`${endIso}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 86400000));
 }
 
 function formatClock(value) {
@@ -272,21 +434,18 @@ const I = ({n,s=18,c="currentColor"}) => {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const STAGES = [
-  { key:"create",    label:"Create",     icon:"users",    emoji:"👋" },
-  { key:"bucket",    label:"Bucket List", icon:"heart",    emoji:"🌍" },
-  { key:"timing",    label:"Timing",      icon:"sun",      emoji:"📅" },
-  { key:"interests", label:"Interests",   icon:"hiking",   emoji:"🎯" },
-  { key:"health",    label:"Health",      icon:"shield",   emoji:"🏥" },
-  { key:"pois",      label:"POIs",        icon:"camera",   emoji:"📍" },
-  { key:"duration",  label:"Duration",    icon:"clock",    emoji:"⏱️" },
-  { key:"avail",     label:"Dates",       icon:"calendar", emoji:"🗓️" },
-  { key:"budget",    label:"Budget",      icon:"dollar",   emoji:"💰" },
-  { key:"flights",   label:"Flights",     icon:"plane",    emoji:"✈️" },
-  { key:"stays",     label:"Stays",       icon:"hotel",    emoji:"🏨" },
-  { key:"dining",    label:"Dining",      icon:"food",     emoji:"🍽️" },
-  { key:"itinerary", label:"Itinerary",   icon:"clock",    emoji:"📋" },
-  { key:"sync",      label:"Sync",        icon:"send",     emoji:"🎉" },
+  { key:"create",    label:"Create",       phase:"setup",      icon:"users",    emoji:"👋" },
+  { key:"bucket",    label:"Destinations", phase:"setup",      icon:"heart",    emoji:"🌍" },
+  { key:"pois",      label:"POIs",         phase:"group",      icon:"camera",   emoji:"📍" },
+  { key:"duration",  label:"Duration",     phase:"group",      icon:"clock",    emoji:"⏱️" },
+  { key:"stays",     label:"Stays",        phase:"group",      icon:"hotel",    emoji:"🏨" },
+  { key:"avail",     label:"Dates",        phase:"group",      icon:"calendar", emoji:"🗓️" },
+  { key:"budget",    label:"Budget",       phase:"group",      icon:"dollar",   emoji:"💰" },
+  { key:"flights",   label:"My Flights",   phase:"individual", icon:"plane",    emoji:"✈️" },
+  { key:"itinerary", label:"Itinerary",    phase:"individual", icon:"clock",    emoji:"📋" },
+  { key:"sync",      label:"Sync",         phase:"complete",   icon:"send",     emoji:"🎉" },
 ];
+const GROUP_STAGES = STAGES.filter(s => s.phase === "group").map(s => s.key);
 
 /* ═══════════════════════════════════════════════════════════════════════════
    REUSABLE COMPONENTS
@@ -402,6 +561,71 @@ function YN({ title, subtitle, desc, tags=[], agent="AI", onYes, onNo, children 
   );
 }
 
+// ── GROUP ROOM ──────────────────────────────────────────────────────────
+// Wraps each group-phase stage with a member vote bar + "Lock it in" button.
+
+function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLock }) {
+  const votes = memberVotes[stageKey] || {};
+  const others = members.filter(m => m.initials !== "YO");
+  const yesCount = Object.values(votes).filter(v => v === "yes").length;
+  const totalVoters = others.length;
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+      {/* Member vote bar */}
+      <div style={{ background:T.surface, borderRadius:12, padding:"10px 14px", border:`1px solid ${T.borderLight}`,
+        display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+        <span style={{ fontSize:12, color:T.text3, fontWeight:600 }}>Group vote:</span>
+        {members.map(m => {
+          const vote = m.initials === "YO" ? "organizer" : (votes[m.initials] || "pending");
+          return (
+            <div key={m.initials} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+              <div style={{ width:30, height:30, borderRadius:999,
+                background:`linear-gradient(135deg,${T.primary}80,${T.accent}80)`,
+                display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:11, fontWeight:700, color:"#fff",
+                border: vote === "yes" ? `2px solid ${T.success}` : vote === "organizer" ? `2px solid ${T.primary}` : `2px solid ${T.borderLight}`,
+              }}>{m.initials}</div>
+              <span style={{ fontSize:9, color: vote === "yes" ? T.success : vote === "organizer" ? T.primary : T.text3 }}>
+                {vote === "yes" ? "✓" : vote === "organizer" ? "👑" : "…"}
+              </span>
+            </div>
+          );
+        })}
+        {totalVoters > 0 && (
+          <span style={{ fontSize:11, color:T.text2, marginLeft:"auto" }}>
+            {yesCount}/{totalVoters} agreed
+          </span>
+        )}
+      </div>
+
+      {children}
+
+      {isOrganizer ? (
+        <div style={{ animation:"scaleIn .3s ease-out" }}>
+          <button
+            onClick={() => onLock(stageKey)}
+            className="hd"
+            style={{ width:"100%", padding:"13px 20px", borderRadius:12, border:"none",
+              background: yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0 ? T.primary : T.borderLight,
+              color: yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0 ? "#fff" : T.text3,
+              fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
+              boxShadow: yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0 ? `0 2px 8px ${T.primary}30` : "none",
+              transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+          >
+            <I n="check" s={16} c={yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0 ? "#fff" : T.text3}/>
+            Lock it in ({yesCount}/{Math.max(totalVoters, 1)} agreed) →
+          </button>
+        </div>
+      ) : (
+        <p style={{ fontSize:12, color:T.text3, textAlign:"center", padding:"10px 0" }}>
+          Waiting for the organizer to lock this section...
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── BUDGET METER ────────────────────────────────────────────────────────
 
 function BudgetMeter({ spent, allocated, label }) {
@@ -506,6 +730,36 @@ const GROUP_MEMBERS_SEED = [
   { name: "carol@test.com", status: "done", initials: "CA" },
   { name: "dave@test.com", status: "done", initials: "DA" },
 ];
+// Demo MyCrew contacts (mirrors wanderplan-dashboard.jsx MEMBERS seed)
+const MYCREW_DEMO = [
+  { email:"alex@test.com",  initials:"AC", displayName:"Alex Chen",     status:"Joined" },
+  { email:"sarah@test.com", initials:"SW", displayName:"Sarah Wilson",  status:"Joined" },
+  { email:"priya@test.com", initials:"PS", displayName:"Priya Sharma",  status:"Joined" },
+  { email:"james@test.com", initials:"JW", displayName:"James Wilson",  status:"Invited" },
+];
+
+// Local-storage crew helpers (mirrors dashboard.jsx logic without importing it)
+const LOCAL_CREW_LINKS_KEY = "wanderplan.crew.links";
+const LOCAL_PROFILE_BY_EMAIL_KEY = "wanderplan.profile.byEmail";
+const LOCAL_AUTH_USERS_KEY = "wanderplan.auth.users";
+
+function loadCrewForEmail(viewerEmail) {
+  try {
+    const links = JSON.parse(localStorage.getItem(LOCAL_CREW_LINKS_KEY) || "{}");
+    const profiles = JSON.parse(localStorage.getItem(LOCAL_PROFILE_BY_EMAIL_KEY) || "{}");
+    const authUsers = JSON.parse(localStorage.getItem(LOCAL_AUTH_USERS_KEY) || "{}");
+    const viewer = (viewerEmail || "").toLowerCase().trim();
+    const connected = Array.isArray(links[viewer]) ? links[viewer] : [];
+    return connected.map(email => {
+      const p = profiles[email] || {};
+      const u = authUsers[email] || {};
+      const name = p.display_name || u.name || email.split("@")[0];
+      const parts = name.split(/[\s._-]/);
+      const initials = parts.map(w => w[0] || "").join("").slice(0, 2).toUpperCase() || "??";
+      return { email, initials, displayName: name, status: u.id ? "Joined" : "Invited" };
+    });
+  } catch { return []; }
+}
 
 const DEST_RESULTS_SEED = [
   { name:"Santorini, Greece",  score:92, months:[5,6,9,10], votes:4 },
@@ -618,6 +872,7 @@ export default function TripWizard({
   );
   const [flightSegmentDates, setFlightSegmentDates] = useState([isoDaysFromNow(30)]);
   const [flightReturnDate, setFlightReturnDate] = useState(isoDaysFromNow(39));
+  const [flightDestinationAirports, setFlightDestinationAirports] = useState({});
   const [flightSearchBusy, setFlightSearchBusy] = useState(false);
   const [flightSaveBusy, setFlightSaveBusy] = useState(false);
   const [flightSelectionReview, setFlightSelectionReview] = useState(null);
@@ -632,11 +887,26 @@ export default function TripWizard({
   const [diningRows, setDiningRows] = useState([]);
   const [itineraryRows, setItineraryRows] = useState([]);
   const [availabilitySummary, setAvailabilitySummary] = useState(null);
+  const [availabilityRanges, setAvailabilityRanges] = useState([
+    { start: isoDaysFromNow(30), end: isoDaysFromNow(44) },
+  ]);
+  const [availabilityBusy, setAvailabilityBusy] = useState(false);
+  const [availabilityLockBusy, setAvailabilityLockBusy] = useState(false);
+  const [selectedOverlapIndex, setSelectedOverlapIndex] = useState(0);
   const [budgetBreakdown, setBudgetBreakdown] = useState(null);
   const [calendarSyncResult, setCalendarSyncResult] = useState(null);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState("");
   const [inviteStatus, setInviteStatus] = useState("");
+  // Group chatroom state
+  const [memberVotes, setMemberVotes] = useState({});
+  const [lockedStages, setLockedStages] = useState({});
+  const [showGroupToIndividualTransition, setShowGroupToIndividualTransition] = useState(false);
+  // Bucket list — personal items loaded from /me/bucket-list
+  const [personalBucketItems, setPersonalBucketItems] = useState([]);
+  // MyCrew panel in Create stage
+  const [myCrewList, setMyCrewList] = useState([]);
+  const [showMyCrewPanel, setShowMyCrewPanel] = useState(false);
   const handledBackSignalRef = useRef(backSignal);
 
   const next = () => setStep(s => Math.min(s+1, STAGES.length-1));
@@ -648,6 +918,16 @@ export default function TripWizard({
   const stageKey = STAGES[step]?.key;
   const currentUserId = getUserIdFromToken(authToken);
   const joinedCount = members.filter((m) => m.status === "done").length;
+  const isOrganizer = members.length === 0 || members[0]?.initials === "YO";
+
+  // Lock a group stage and advance; last group stage triggers transition screen
+  const lockStage = (key) => {
+    setLockedStages(prev => ({ ...prev, [key]: true }));
+    if (key === "budget") {
+      setShowGroupToIndividualTransition(true);
+    }
+    next();
+  };
 
   const addMember = () => {
     const email = inviteEmail.trim().toLowerCase();
@@ -710,7 +990,7 @@ export default function TripWizard({
     const destinationCodes =
       destinations.length > 0
         ? destinations.map((dest, idx) =>
-            inferAirportCode(dest, idx === 0 ? arrivalAirport : "NRT")
+            flightDestinationAirports[idx] || inferAirportCode(dest, idx === 0 ? arrivalAirport : "NRT")
           )
         : [arrivalAirport];
 
@@ -749,7 +1029,7 @@ export default function TripWizard({
       departDate: firstDepartDate,
       returnDate: normalizedReturnDate,
       segments,
-      routeSummary: [segments[0].from_airport, ...segments.map((seg) => seg.to_airport)].join(" -> "),
+      routeSummary: [segments[0].from_airport, ...segments.map((seg) => seg.to_airport)].join(" \u2192 "),
     };
   };
 
@@ -960,6 +1240,19 @@ export default function TripWizard({
           });
           if (!cancelled) setHealthRequirements(res?.requirements || []);
         }
+        if (stageKey === "avail") {
+          const overlap = await apiJson(`/trips/${tripId}/availability/overlap`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!cancelled) {
+            setAvailabilitySummary(overlap || null);
+            setSelectedOverlapIndex(0);
+            if (overlap?.locked_window?.start && overlap?.locked_window?.end) {
+              setAvailabilityRanges([{ start: overlap.locked_window.start, end: overlap.locked_window.end }]);
+              applyLockedWindowToFlightDates(overlap.locked_window.start, overlap.locked_window.end);
+            }
+          }
+        }
         if (stageKey === "pois") {
           const res = await apiJson(`/trips/${tripId}/pois?limit=20`, {
             headers: { Authorization: `Bearer ${authToken}` },
@@ -1025,6 +1318,14 @@ export default function TripWizard({
           });
           if (!cancelled) setItineraryRows(res?.itinerary?.days || []);
         }
+        if (stageKey === "bucket") {
+          try {
+            const res = await apiJson("/me/bucket-list", {
+              headers: { Authorization: `Bearer ${authToken}` },
+            });
+            if (!cancelled) setPersonalBucketItems(res?.items || []);
+          } catch { /* ok — use empty list */ }
+        }
       } catch {
         // Keep UI fallback data if backend read fails.
       }
@@ -1034,6 +1335,38 @@ export default function TripWizard({
       cancelled = true;
     };
   }, [stageKey, tripId, authToken, demoMode]);
+
+  // ── Simulate group member votes when entering a group stage ─────────────
+  useEffect(() => {
+    if (!GROUP_STAGES.includes(stageKey)) return;
+    const others = members.filter(m => m.initials !== "YO");
+    if (others.length === 0) {
+      // Solo mode: auto-lock after brief delay
+      const t = setTimeout(() => lockStage(stageKey), 400);
+      return () => clearTimeout(t);
+    }
+    const timers = others.map((m, i) =>
+      setTimeout(() => {
+        setMemberVotes(prev => ({
+          ...prev,
+          [stageKey]: { ...(prev[stageKey] || {}), [m.initials]: "yes" },
+        }));
+      }, 1200 + i * 900)
+    );
+    return () => timers.forEach(clearTimeout);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageKey]);
+
+  // ── Load MyCrew from localStorage when entering Create stage ───────────
+  useEffect(() => {
+    if (stageKey !== "create") return;
+    const sessionEmail = hydratedSession?.email || "";
+    const fromStorage = sessionEmail ? loadCrewForEmail(sessionEmail) : [];
+    // Merge with demo contacts for a populated experience
+    const combined = fromStorage.length > 0 ? fromStorage : MYCREW_DEMO;
+    setMyCrewList(combined);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1356,30 +1689,124 @@ export default function TripWizard({
     }
   };
 
-  const handleAvailabilityContinue = async () => {
-    if (!tripId || !authToken || !currentUserId) {
-      next();
+  const applyLockedWindowToFlightDates = (startIso, endIso) => {
+    if (!startIso || !endIso) return;
+    const spanDays = diffIsoDays(startIso, endIso);
+    const legs = Math.max(1, forwardLegCount);
+    setFlightSegmentDates(() => {
+      const next = [];
+      for (let idx = 0; idx < legs; idx += 1) {
+        const offset = spanDays > 0 ? Math.floor((spanDays * idx) / Math.max(1, legs)) : 0;
+        next.push(shiftIsoDate(startIso, offset));
+      }
+      return next;
+    });
+    setFlightReturnDate(endIso);
+  };
+
+  const handleAvailabilityRangeChange = (index, key, value) => {
+    setAvailabilityRanges((prev) => {
+      const next = [...prev];
+      const current = next[index] || { start: "", end: "" };
+      next[index] = { ...current, [key]: value };
+      return next;
+    });
+  };
+
+  const handleAvailabilitySearch = async () => {
+    setApiError("");
+    if (demoMode) {
+      const demoStart = availabilityRanges[0]?.start || isoDaysFromNow(30);
+      const demoEnd = availabilityRanges[0]?.end || isoDaysFromNow(44);
+      setAvailabilitySummary({
+        overlap: { start: demoStart, end: demoEnd },
+        overlapping_windows: [{ start: demoStart, end: demoEnd, overlap_days: Math.max(1, diffIsoDays(demoStart, demoEnd) + 1) }],
+        members_total: 1,
+        member_windows: [],
+        prompt_members_to_adjust: false,
+        message: "Common overlap found",
+        locked_window: null,
+        is_locked: false,
+      });
+      setSelectedOverlapIndex(0);
       return;
     }
+
+    const range = availabilityRanges[0] || { start: "", end: "" };
+    if (!range.start || !range.end) {
+      setApiError("Enter your available start and end dates.");
+      return;
+    }
+    if (range.end < range.start) {
+      setApiError("End date cannot be before start date.");
+      return;
+    }
+
+    setAvailabilityBusy(true);
     try {
-      await apiJson(`/trips/${tripId}/availability`, {
+      const ctx = await ensureTripContext();
+      await apiJson(`/trips/${ctx.tripId}/availability`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
+          Authorization: `Bearer ${ctx.token}`,
         },
-        body: JSON.stringify({
-          date_ranges: [{ start: "2025-06-15", end: "2025-06-28" }],
-        }),
+        body: JSON.stringify({ date_ranges: [{ start: range.start, end: range.end }] }),
       });
-      const overlap = await apiJson(`/trips/${tripId}/availability/overlap`, {
-        headers: { Authorization: `Bearer ${authToken}` },
+      const overlap = await apiJson(`/trips/${ctx.tripId}/availability/overlap`, {
+        headers: { Authorization: `Bearer ${ctx.token}` },
       });
       setAvailabilitySummary(overlap);
-      next();
+      setSelectedOverlapIndex(0);
     } catch (err) {
       setApiError(err?.message || "Failed to save availability");
+    } finally {
+      setAvailabilityBusy(false);
+    }
+  };
+
+  const handleAvailabilityLockAndContinue = async () => {
+    setApiError("");
+    const overlapCandidates = Array.isArray(availabilitySummary?.overlapping_windows)
+      ? availabilitySummary.overlapping_windows
+      : [];
+    const selectedOverlap = overlapCandidates[selectedOverlapIndex] || overlapCandidates[0] || availabilitySummary?.overlap || null;
+    const lockWindow = selectedOverlap?.window || selectedOverlap;
+    if (!lockWindow?.start || !lockWindow?.end) {
+      setApiError("Find a common overlap window before locking dates.");
+      return;
+    }
+
+    if (demoMode) {
+      applyLockedWindowToFlightDates(lockWindow.start, lockWindow.end);
       next();
+      return;
+    }
+
+    setAvailabilityLockBusy(true);
+    try {
+      const ctx = await ensureTripContext();
+      const locked = await apiJson(`/trips/${ctx.tripId}/availability/lock`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${ctx.token}`,
+        },
+        body: JSON.stringify({ start: lockWindow.start, end: lockWindow.end }),
+      });
+      const overlap = await apiJson(`/trips/${ctx.tripId}/availability/overlap`, {
+        headers: { Authorization: `Bearer ${ctx.token}` },
+      });
+      setAvailabilitySummary(overlap);
+      applyLockedWindowToFlightDates(
+        locked?.locked_window?.start || lockWindow.start,
+        locked?.locked_window?.end || lockWindow.end
+      );
+      next();
+    } catch (err) {
+      setApiError(err?.message || "Failed to lock travel window");
+    } finally {
+      setAvailabilityLockBusy(false);
     }
   };
 
@@ -1671,7 +2098,7 @@ export default function TripWizard({
             </p>
           )}
         </div>
-        <Chat agent="Trip Organizer" emoji="👋" msg="Great name! Now invite your travel companions." delay={300}/>
+        <Chat agent="Trip Organizer" emoji="👋" msg="Great name! Now invite your travel companions from MyCrew or by email." delay={300}/>
         <div style={{ animation:"fadeUp .4s ease-out .5s both" }}>
           <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Invite Members</label>
           <div style={{ display:"flex",gap:8 }}>
@@ -1679,6 +2106,55 @@ export default function TripWizard({
               border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,minHeight:44 }}/>
             <Btn onClick={addMember}>Send</Btn>
           </div>
+          {/* MyCrew picker */}
+          <button
+            onClick={() => setShowMyCrewPanel(v => !v)}
+            className="hd"
+            style={{ marginTop:8, background:"none", border:`1px solid ${T.border}`, borderRadius:8,
+              padding:"7px 14px", fontSize:12, fontWeight:600, color:T.primary, cursor:"pointer",
+              display:"flex", alignItems:"center", gap:6 }}>
+            👥 From MyCrew {showMyCrewPanel ? "▲" : "▼"}
+          </button>
+          {showMyCrewPanel && (
+            <div style={{ marginTop:8, background:T.surface, border:`1px solid ${T.borderLight}`, borderRadius:12,
+              overflow:"hidden", animation:"fadeUp .2s ease-out" }}>
+              {myCrewList.length === 0 ? (
+                <p style={{ padding:"12px 14px", fontSize:12, color:T.text3 }}>
+                  No crew yet. Invite people from the MyCrew tab in your dashboard first.
+                </p>
+              ) : (
+                myCrewList.map((c, i) => {
+                  const alreadyAdded = members.some(m => m.name.toLowerCase() === c.email.toLowerCase());
+                  return (
+                    <div key={c.email} style={{ display:"flex", alignItems:"center", gap:10,
+                      padding:"10px 14px", borderBottom: i < myCrewList.length - 1 ? `1px solid ${T.borderLight}` : "none" }}>
+                      <div style={{ width:32, height:32, borderRadius:999, flexShrink:0,
+                        background:`linear-gradient(135deg,${T.primary}70,${T.accent}70)`,
+                        display:"flex", alignItems:"center", justifyContent:"center",
+                        fontSize:11, fontWeight:700, color:"#fff" }}>{c.initials}</div>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <p className="hd" style={{ fontSize:13, fontWeight:600 }}>{c.displayName}</p>
+                        <p style={{ fontSize:11, color:T.text3 }}>{c.email}</p>
+                      </div>
+                      <span style={{ fontSize:10, padding:"2px 7px", borderRadius:999, fontWeight:600,
+                        background: c.status === "Joined" ? T.successBg : T.warningBg,
+                        color: c.status === "Joined" ? T.success : T.warning }}>{c.status}</span>
+                      <button
+                        onClick={() => { if (!alreadyAdded) { setInviteEmail(c.email); addMember(); } }}
+                        disabled={alreadyAdded}
+                        className="hd"
+                        style={{ padding:"5px 10px", borderRadius:7, border:"none",
+                          background: alreadyAdded ? T.borderLight : T.primary,
+                          color: alreadyAdded ? T.text3 : "#fff",
+                          fontSize:11, fontWeight:600, cursor: alreadyAdded ? "default" : "pointer" }}>
+                        {alreadyAdded ? "Added" : "Invite"}
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
         {/* Members joined */}
         <div style={{ background:T.surface,borderRadius:14,padding:16,border:`1px solid ${T.borderLight}`, animation:"fadeUp .4s ease-out .7s both" }}>
@@ -1995,46 +2471,117 @@ export default function TripWizard({
   );
 
   // ── STEP 7: AVAILABILITY ─────────────────────────────────────────────
-  if (stageKey === "avail") return (
-    <Shell step={step}>
-      <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc="Finding dates that work for everyone"/>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Sync Agent" emoji="🗓️" msg="I've collected availability from all members. Here's the overlap:"/>
-        {/* Mini calendar */}
-        <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
-          boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
-          <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:12 }}>June 2025</p>
-          <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,textAlign:"center" }}>
-            {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d=>(
-              <div key={d} style={{ fontSize:11,color:T.text3,fontWeight:600,padding:"4px 0" }}>{d}</div>
-            ))}
-            {Array.from({length:42},(_, i)=>{
-              const day = i - 0; // June starts Sunday in our mock
-              const num = day + 1;
-              if (num < 1 || num > 30) return <div key={i}/>;
-              const inRange = num >= 15 && num <= 28;
-              const isStart = num === 15;
-              const isEnd = num === 28;
-              return (
-                <div key={i} style={{ padding:"8px 2px",borderRadius:8,fontSize:13,fontWeight:inRange?600:400,
-                  background:inRange?`${T.success}15`:"transparent",
-                  color:inRange?T.success:T.text2,
-                  border:isStart||isEnd?`2px solid ${T.success}`:"2px solid transparent",
-                  cursor:"pointer",transition:"all .15s" }}>{num}</div>
-              );
-            })}
+  if (stageKey === "avail") {
+    const overlapCandidates = Array.isArray(availabilitySummary?.overlapping_windows)
+      ? availabilitySummary.overlapping_windows
+      : [];
+    const hasCommonOverlap = Boolean(availabilitySummary?.overlap) || overlapCandidates.length > 0;
+    const selectedOverlap = overlapCandidates[selectedOverlapIndex] || overlapCandidates[0] || availabilitySummary?.overlap || null;
+    const selectedWindow = selectedOverlap?.window || selectedOverlap;
+    const lockedWindow = availabilitySummary?.locked_window || null;
+    return (
+      <Shell step={step}>
+        <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc="Collecting availability and locking the trip window"/>
+        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+          <Chat agent="Sync Agent" emoji="🗓️" msg="Each member should submit an available start and end date. Then we compute overlap and lock one window for the trip."/>
+          <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm,animation:"fadeUp .35s ease-out .2s both" }}>
+            <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10 }}>Your Availability</p>
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8 }}>
+              <div>
+                <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text3,marginBottom:6 }}>Start date</label>
+                <input
+                  type="date"
+                  value={availabilityRanges[0]?.start || ""}
+                  onChange={(e) => handleAvailabilityRangeChange(0, "start", e.target.value)}
+                  style={{ width:"100%",minHeight:40,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.border}`,background:T.bg,color:T.text2,fontSize:13 }}
+                />
+              </div>
+              <div>
+                <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text3,marginBottom:6 }}>End date</label>
+                <input
+                  type="date"
+                  value={availabilityRanges[0]?.end || ""}
+                  onChange={(e) => handleAvailabilityRangeChange(0, "end", e.target.value)}
+                  style={{ width:"100%",minHeight:40,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${T.border}`,background:T.bg,color:T.text2,fontSize:13 }}
+                />
+              </div>
+            </div>
+            <button
+              onClick={handleAvailabilitySearch}
+              disabled={availabilityBusy}
+              style={{ marginTop:12,width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:"none",background:availabilityBusy?T.border:T.primary,color:availabilityBusy?T.text3:"#fff",fontSize:14,fontWeight:600,cursor:availabilityBusy?"default":"pointer" }}
+            >
+              {availabilityBusy ? "Saving and calculating overlap..." : "Save Availability & Find Common Window"}
+            </button>
           </div>
-          <div style={{ display:"flex",alignItems:"center",gap:8,marginTop:12 }}>
-            <div style={{ width:14,height:14,borderRadius:4,background:`${T.success}15`,border:`2px solid ${T.success}` }}/>
-            <span style={{ fontSize:12,color:T.text2 }}>All 4 members available — <strong>14 nights overlap</strong></span>
-          </div>
+
+          {availabilitySummary && (
+            <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm,animation:"fadeUp .35s ease-out .25s both" }}>
+              <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:8 }}>Crew Overlap</p>
+              <p style={{ fontSize:12,color:T.text3,marginBottom:10 }}>
+                Accepted members: {availabilitySummary?.members_total || 0}
+              </p>
+              {hasCommonOverlap && (
+                <div style={{ display:"flex",flexDirection:"column",gap:8,marginBottom:10 }}>
+                  {overlapCandidates.length > 0 ? overlapCandidates.map((win, idx) => {
+                    const windowValue = win?.window || win;
+                    const isSelected = idx === selectedOverlapIndex;
+                    return (
+                      <button
+                        key={`${windowValue?.start || "start"}-${windowValue?.end || "end"}-${idx}`}
+                        onClick={() => setSelectedOverlapIndex(idx)}
+                        style={{ textAlign:"left",padding:"10px 12px",borderRadius:10,border:`2px solid ${isSelected ? T.success : T.borderLight}`,background:isSelected?`${T.success}12`:T.bg,cursor:"pointer" }}
+                      >
+                        <span className="hd" style={{ fontWeight:700,fontSize:13,color:T.text }}>
+                          {windowValue?.start} → {windowValue?.end}
+                        </span>
+                        <span style={{ display:"block",fontSize:11,color:T.text3,marginTop:3 }}>
+                          {win?.overlap_days || Math.max(1, diffIsoDays(windowValue?.start, windowValue?.end) + 1)} day overlap
+                        </span>
+                      </button>
+                    );
+                  }) : (
+                    <div style={{ padding:"10px 12px",borderRadius:10,background:`${T.success}12`,border:`1px solid ${T.success}33` }}>
+                      <span className="hd" style={{ fontWeight:700,fontSize:13,color:T.success }}>
+                        {availabilitySummary?.overlap?.start} → {availabilitySummary?.overlap?.end}
+                      </span>
+                      <span style={{ display:"block",fontSize:11,color:T.text3,marginTop:3 }}>
+                        Common overlap found for all accepted members.
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!hasCommonOverlap && (
+                <div style={{ padding:"10px 12px",borderRadius:10,background:T.errorBg,border:`1px solid ${T.error}33`,marginBottom:10 }}>
+                  <p style={{ fontSize:12,color:T.error,fontWeight:600 }}>No common overlap yet.</p>
+                  <p style={{ fontSize:11,color:T.text3,marginTop:4 }}>
+                    Ask members to submit wider date ranges.
+                  </p>
+                </div>
+              )}
+              {lockedWindow && (
+                <div style={{ padding:"10px 12px",borderRadius:10,background:T.successBg,border:`1px solid ${T.success}33`,marginBottom:10 }}>
+                  <p style={{ fontSize:12,color:T.success,fontWeight:700 }}>
+                    Locked window: {lockedWindow.start} → {lockedWindow.end}
+                  </p>
+                </div>
+              )}
+              <button
+                onClick={handleAvailabilityLockAndContinue}
+                disabled={!selectedWindow?.start || !selectedWindow?.end || availabilityLockBusy || !hasCommonOverlap}
+                style={{ width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:"none",background:(!hasCommonOverlap || availabilityLockBusy)?T.border:T.success,color:(!hasCommonOverlap || availabilityLockBusy)?T.text3:"#fff",fontSize:14,fontWeight:700,cursor:(!hasCommonOverlap || availabilityLockBusy)?"default":"pointer" }}
+              >
+                {availabilityLockBusy ? "Locking travel window..." : "Lock Travel Window & Continue"}
+              </button>
+            </div>
+          )}
+
+          {apiError && <p style={{ fontSize:12,color:T.error }}>{apiError}</p>}
         </div>
-        <YN title="Everyone is free Jun 15 – 28" agent="Sync Agent"
-          desc="All 4 members are available for this 14-day window. Your trip needs 10 days, giving you flexibility on start date. Lock these dates?"
-          onYes={handleAvailabilityContinue} onNo={handleRevise}/>
-      </div>
-    </Shell>
-  );
+      </Shell>
+    );
+  }
 
   // ── STEP 8: BUDGET ───────────────────────────────────────────────────
   if (stageKey === "budget") return (
@@ -2101,35 +2648,45 @@ export default function TripWizard({
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <Chat agent="Flight Agent" emoji="✈️" msg="Do you need flight bookings?"/>
         <Chat isUser msg="Yes!" delay={100}/>
-        <Chat agent="Flight Agent" emoji="✈️" msg="Share your starting airport, first arrival airport, and travel dates. I will assume round trip." delay={200}/>
-        <div style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,animation:"fadeUp .3s ease-out .25s both" }}>
-          <div>
-            <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text2,marginBottom:6 }}>Starting airport</label>
-            <input
+        <Chat agent="Flight Agent" emoji="✈️" msg="Type a city name to find airports. I'll search each leg and show you the best options." delay={200}/>
+        <div style={{ display:"flex",flexDirection:"column",gap:10,animation:"fadeUp .3s ease-out .25s both" }}>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8 }}>
+            <AirportCityInput
+              label="Origin city"
               value={flightStartAirport}
-              onChange={(e) => setFlightStartAirport(sanitizeAirportInput(e.target.value))}
-              placeholder="LAX"
-              maxLength={3}
-              style={{ width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,color:T.text }}
+              onChange={setFlightStartAirport}
+              authToken={authToken}
+              placeholder="e.g. Los Angeles"
             />
-          </div>
-          <div>
-            <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text2,marginBottom:6 }}>First arrival airport</label>
-            <input
+            <AirportCityInput
+              label={destinations[0] ? `Destination: ${destinations[0]}` : "First destination"}
               value={flightArrivalAirport}
-              onChange={(e) => setFlightArrivalAirport(sanitizeAirportInput(e.target.value))}
-              placeholder="NRT"
-              maxLength={3}
-              style={{ width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,color:T.text }}
+              onChange={setFlightArrivalAirport}
+              authToken={authToken}
+              placeholder={destinations[0] || "e.g. Tokyo"}
             />
           </div>
+          {destinations.slice(1).map((dest, idx) => {
+            const legIndex = idx + 1;
+            const overrideCode = flightDestinationAirports[legIndex] || "";
+            return (
+              <AirportCityInput
+                key={`dest-airport-${legIndex}`}
+                label={`Stop ${legIndex + 1}: ${dest}`}
+                value={overrideCode}
+                onChange={(code) => setFlightDestinationAirports((prev) => ({ ...prev, [legIndex]: code }))}
+                authToken={authToken}
+                placeholder={dest}
+              />
+            );
+          })}
         </div>
         <div style={{ background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:12,padding:12,animation:"fadeUp .3s ease-out .3s both" }}>
-          <p className="hd" style={{ fontSize:12,fontWeight:700,color:T.text3,marginBottom:10 }}>Multi-city dates (round trip)</p>
+          <p className="hd" style={{ fontSize:12,fontWeight:700,color:T.text3,marginBottom:10 }}>Arrival dates per leg</p>
           <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
             <div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"center" }}>
               <span style={{ fontSize:12.5,color:T.text2 }}>
-                {activeFlightPlan.startAirport} -> {activeFlightPlan.arrivalAirport}
+                {activeFlightPlan.startAirport} {"\u2192"} {activeFlightPlan.arrivalAirport}
               </span>
               <input
                 type="date"
@@ -2146,11 +2703,11 @@ export default function TripWizard({
             </div>
             {destinations.slice(1).map((dest, idx) => {
               const legIndex = idx + 1;
-              const fromCode = legIndex === 1 ? activeFlightPlan.arrivalAirport : inferAirportCode(destinations[legIndex - 1], "NRT");
-              const toCode = inferAirportCode(dest, "NRT");
+              const fromCode = legIndex === 1 ? activeFlightPlan.arrivalAirport : (flightDestinationAirports[legIndex - 1] || inferAirportCode(destinations[legIndex - 1], "NRT"));
+              const toCode = flightDestinationAirports[legIndex] || inferAirportCode(dest, "NRT");
               return (
                 <div key={`${dest}-${legIndex}`} style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"center" }}>
-                  <span style={{ fontSize:12.5,color:T.text2 }}>{fromCode} -> {toCode}</span>
+                  <span style={{ fontSize:12.5,color:T.text2 }}>{fromCode} {"\u2192"} {toCode}</span>
                   <input
                     type="date"
                     value={flightSegmentDates[legIndex] || ""}
@@ -2168,7 +2725,7 @@ export default function TripWizard({
             })}
             <div style={{ display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"center" }}>
               <span style={{ fontSize:12.5,color:T.text2 }}>
-                {(destinations.length > 0 ? inferAirportCode(destinations[destinations.length - 1], activeFlightPlan.arrivalAirport) : activeFlightPlan.arrivalAirport)} -> {activeFlightPlan.startAirport}
+                {(destinations.length > 0 ? (flightDestinationAirports[destinations.length - 1] || inferAirportCode(destinations[destinations.length - 1], activeFlightPlan.arrivalAirport)) : activeFlightPlan.arrivalAirport)} {"\u2192"} {activeFlightPlan.startAirport} (return)
               </span>
               <input
                 type="date"
@@ -2225,7 +2782,7 @@ export default function TripWizard({
             >
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8 }}>
                 <p className="hd" style={{ fontWeight:700,fontSize:14 }}>
-                  Leg {legIdx + 1}: {leg.from_airport} -> {leg.to_airport}
+                  Leg {legIdx + 1}: {leg.from_airport} {"\u2192"} {leg.to_airport}
                 </p>
                 <span style={{ fontSize:11,color:T.text3 }}>{leg.depart_date || "Date TBD"}</span>
               </div>
@@ -2254,7 +2811,7 @@ export default function TripWizard({
                           <p style={{ fontSize:11,color:T.text3 }}>
                             {option.cls} • {option.dur} • {option.stops===0 ? "Nonstop" : `${option.stops} stop${option.stops > 1 ? "s" : ""}`}
                           </p>
-                          <p style={{ fontSize:11,color:T.text3 }}>{option.dep} -> {option.arr}</p>
+                          <p style={{ fontSize:11,color:T.text3 }}>{option.dep} {"\u2192"} {option.arr}</p>
                           {option.source === "amadeus" ? <p style={{ fontSize:10.5,color:T.success }}>Live fare</p> : null}
                         </div>
                         <div style={{ textAlign:"right",flexShrink:0 }}>
@@ -2286,7 +2843,7 @@ export default function TripWizard({
                   <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
                     {flightSelectionReview.options.map((option, idx) => (
                       <div key={`${option.leg_id}-${idx}`} style={{ display:"flex",justifyContent:"space-between",gap:10,fontSize:12,color:T.text2 }}>
-                        <span>{option.leg_id}: {option.airline} {option.dep} -> {option.arr}</span>
+                        <span>{option.leg_id}: {option.airline} {option.dep} {"\u2192"} {option.arr}</span>
                         <span className="hd" style={{ fontWeight:700,color:T.text }}>${Math.round(option.price).toLocaleString()}</span>
                       </div>
                     ))}
@@ -2564,6 +3121,4 @@ export default function TripWizard({
   return null;
 }
 
-export { getUserIdFromToken, normalizeFlightLegRows };
-
-
+export { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode };

@@ -208,6 +208,11 @@ class AvailabilityRequest(BaseModel):
     date_ranges: list[dict[str, str]]
 
 
+class AvailabilityLockRequest(BaseModel):
+    start: str
+    end: str
+
+
 class PoiApprovalRequest(BaseModel):
     approved: bool
 
@@ -3904,6 +3909,158 @@ async def increase_budget(trip_id: str, body: BudgetIncreaseRequest, user_id: st
     return {"budget": {"daily_target": body.new_daily_budget, "total_budget": total_budget, "spent": spent, "remaining": remaining, "breakdown": breakdown, "warning_active": False}}
 
 
+_AIRPORT_STATIC: list[dict[str, str]] = [
+    {"iata": "ATL", "name": "Hartsfield-Jackson Atlanta International", "city": "Atlanta", "country": "US"},
+    {"iata": "LAX", "name": "Los Angeles International", "city": "Los Angeles", "country": "US"},
+    {"iata": "ORD", "name": "O'Hare International", "city": "Chicago", "country": "US"},
+    {"iata": "MDW", "name": "Chicago Midway International", "city": "Chicago", "country": "US"},
+    {"iata": "DFW", "name": "Dallas/Fort Worth International", "city": "Dallas", "country": "US"},
+    {"iata": "DEN", "name": "Denver International", "city": "Denver", "country": "US"},
+    {"iata": "JFK", "name": "John F. Kennedy International", "city": "New York", "country": "US"},
+    {"iata": "LGA", "name": "LaGuardia Airport", "city": "New York", "country": "US"},
+    {"iata": "EWR", "name": "Newark Liberty International", "city": "New York / Newark", "country": "US"},
+    {"iata": "SFO", "name": "San Francisco International", "city": "San Francisco", "country": "US"},
+    {"iata": "OAK", "name": "Oakland International", "city": "Oakland / San Francisco", "country": "US"},
+    {"iata": "SJC", "name": "San Jose International", "city": "San Jose", "country": "US"},
+    {"iata": "SEA", "name": "Seattle-Tacoma International", "city": "Seattle", "country": "US"},
+    {"iata": "MIA", "name": "Miami International", "city": "Miami", "country": "US"},
+    {"iata": "FLL", "name": "Fort Lauderdale-Hollywood International", "city": "Fort Lauderdale / Miami", "country": "US"},
+    {"iata": "BOS", "name": "Boston Logan International", "city": "Boston", "country": "US"},
+    {"iata": "LAS", "name": "Harry Reid International", "city": "Las Vegas", "country": "US"},
+    {"iata": "PHX", "name": "Phoenix Sky Harbor International", "city": "Phoenix", "country": "US"},
+    {"iata": "IAD", "name": "Washington Dulles International", "city": "Washington D.C.", "country": "US"},
+    {"iata": "DCA", "name": "Ronald Reagan Washington National", "city": "Washington D.C.", "country": "US"},
+    {"iata": "MSP", "name": "Minneapolis-Saint Paul International", "city": "Minneapolis", "country": "US"},
+    {"iata": "DTW", "name": "Detroit Metropolitan Wayne County", "city": "Detroit", "country": "US"},
+    {"iata": "PHL", "name": "Philadelphia International", "city": "Philadelphia", "country": "US"},
+    {"iata": "CLT", "name": "Charlotte Douglas International", "city": "Charlotte", "country": "US"},
+    {"iata": "NRT", "name": "Narita International Airport", "city": "Tokyo", "country": "JP"},
+    {"iata": "HND", "name": "Haneda Airport", "city": "Tokyo", "country": "JP"},
+    {"iata": "KIX", "name": "Kansai International Airport", "city": "Osaka / Kyoto", "country": "JP"},
+    {"iata": "ITM", "name": "Osaka Itami Airport", "city": "Osaka", "country": "JP"},
+    {"iata": "CTS", "name": "New Chitose Airport", "city": "Sapporo", "country": "JP"},
+    {"iata": "LHR", "name": "Heathrow Airport", "city": "London", "country": "GB"},
+    {"iata": "LGW", "name": "Gatwick Airport", "city": "London", "country": "GB"},
+    {"iata": "STN", "name": "Stansted Airport", "city": "London", "country": "GB"},
+    {"iata": "CDG", "name": "Charles de Gaulle Airport", "city": "Paris", "country": "FR"},
+    {"iata": "ORY", "name": "Paris Orly Airport", "city": "Paris", "country": "FR"},
+    {"iata": "AMS", "name": "Amsterdam Schiphol Airport", "city": "Amsterdam", "country": "NL"},
+    {"iata": "FRA", "name": "Frankfurt Airport", "city": "Frankfurt", "country": "DE"},
+    {"iata": "MUC", "name": "Munich Airport", "city": "Munich", "country": "DE"},
+    {"iata": "TXL", "name": "Berlin Tegel Airport", "city": "Berlin", "country": "DE"},
+    {"iata": "BER", "name": "Berlin Brandenburg Airport", "city": "Berlin", "country": "DE"},
+    {"iata": "MAD", "name": "Adolfo Suárez Madrid–Barajas Airport", "city": "Madrid", "country": "ES"},
+    {"iata": "BCN", "name": "Barcelona El Prat Airport", "city": "Barcelona", "country": "ES"},
+    {"iata": "FCO", "name": "Leonardo da Vinci International Airport", "city": "Rome", "country": "IT"},
+    {"iata": "MXP", "name": "Milan Malpensa Airport", "city": "Milan", "country": "IT"},
+    {"iata": "LIN", "name": "Milan Linate Airport", "city": "Milan", "country": "IT"},
+    {"iata": "ATH", "name": "Athens International Airport", "city": "Athens", "country": "GR"},
+    {"iata": "JTR", "name": "Santorini (Thira) National Airport", "city": "Santorini", "country": "GR"},
+    {"iata": "HER", "name": "Heraklion International Airport", "city": "Crete / Heraklion", "country": "GR"},
+    {"iata": "SKG", "name": "Thessaloniki International Airport", "city": "Thessaloniki", "country": "GR"},
+    {"iata": "DXB", "name": "Dubai International Airport", "city": "Dubai", "country": "AE"},
+    {"iata": "AUH", "name": "Abu Dhabi International Airport", "city": "Abu Dhabi", "country": "AE"},
+    {"iata": "SIN", "name": "Singapore Changi Airport", "city": "Singapore", "country": "SG"},
+    {"iata": "BKK", "name": "Suvarnabhumi Airport", "city": "Bangkok", "country": "TH"},
+    {"iata": "DMK", "name": "Don Mueang International Airport", "city": "Bangkok", "country": "TH"},
+    {"iata": "HKG", "name": "Hong Kong International Airport", "city": "Hong Kong", "country": "HK"},
+    {"iata": "PEK", "name": "Beijing Capital International Airport", "city": "Beijing", "country": "CN"},
+    {"iata": "PKX", "name": "Beijing Daxing International Airport", "city": "Beijing", "country": "CN"},
+    {"iata": "PVG", "name": "Shanghai Pudong International Airport", "city": "Shanghai", "country": "CN"},
+    {"iata": "SHA", "name": "Shanghai Hongqiao International Airport", "city": "Shanghai", "country": "CN"},
+    {"iata": "ICN", "name": "Incheon International Airport", "city": "Seoul", "country": "KR"},
+    {"iata": "GMP", "name": "Gimpo International Airport", "city": "Seoul", "country": "KR"},
+    {"iata": "SYD", "name": "Sydney Kingsford Smith Airport", "city": "Sydney", "country": "AU"},
+    {"iata": "MEL", "name": "Melbourne Airport", "city": "Melbourne", "country": "AU"},
+    {"iata": "BNE", "name": "Brisbane Airport", "city": "Brisbane", "country": "AU"},
+    {"iata": "PER", "name": "Perth Airport", "city": "Perth", "country": "AU"},
+    {"iata": "AKL", "name": "Auckland Airport", "city": "Auckland", "country": "NZ"},
+    {"iata": "YYZ", "name": "Toronto Pearson International Airport", "city": "Toronto", "country": "CA"},
+    {"iata": "YVR", "name": "Vancouver International Airport", "city": "Vancouver", "country": "CA"},
+    {"iata": "YUL", "name": "Montréal-Trudeau International Airport", "city": "Montreal", "country": "CA"},
+    {"iata": "GRU", "name": "São Paulo/Guarulhos International Airport", "city": "São Paulo", "country": "BR"},
+    {"iata": "GIG", "name": "Rio de Janeiro/Galeão International Airport", "city": "Rio de Janeiro", "country": "BR"},
+    {"iata": "LIM", "name": "Jorge Chávez International Airport", "city": "Lima", "country": "PE"},
+    {"iata": "BOG", "name": "El Dorado International Airport", "city": "Bogotá", "country": "CO"},
+    {"iata": "MEX", "name": "Mexico City International Airport", "city": "Mexico City", "country": "MX"},
+    {"iata": "CUN", "name": "Cancún International Airport", "city": "Cancún", "country": "MX"},
+    {"iata": "NBO", "name": "Jomo Kenyatta International Airport", "city": "Nairobi", "country": "KE"},
+    {"iata": "JNB", "name": "O.R. Tambo International Airport", "city": "Johannesburg", "country": "ZA"},
+    {"iata": "CPT", "name": "Cape Town International Airport", "city": "Cape Town", "country": "ZA"},
+    {"iata": "CMN", "name": "Mohammed V International Airport", "city": "Casablanca / Marrakech", "country": "MA"},
+    {"iata": "RAK", "name": "Marrakech Menara Airport", "city": "Marrakech", "country": "MA"},
+    {"iata": "CAI", "name": "Cairo International Airport", "city": "Cairo", "country": "EG"},
+    {"iata": "MLE", "name": "Velana International Airport", "city": "Malé / Maldives", "country": "MV"},
+    {"iata": "DPS", "name": "Ngurah Rai International Airport", "city": "Bali / Denpasar", "country": "ID"},
+    {"iata": "CGK", "name": "Soekarno–Hatta International Airport", "city": "Jakarta", "country": "ID"},
+    {"iata": "KUL", "name": "Kuala Lumpur International Airport", "city": "Kuala Lumpur", "country": "MY"},
+    {"iata": "MNL", "name": "Ninoy Aquino International Airport", "city": "Manila", "country": "PH"},
+    {"iata": "DEL", "name": "Indira Gandhi International Airport", "city": "Delhi", "country": "IN"},
+    {"iata": "BOM", "name": "Chhatrapati Shivaji Maharaj International Airport", "city": "Mumbai", "country": "IN"},
+    {"iata": "BLR", "name": "Kempegowda International Airport", "city": "Bangalore", "country": "IN"},
+    {"iata": "IST", "name": "Istanbul Airport", "city": "Istanbul", "country": "TR"},
+    {"iata": "SAW", "name": "Istanbul Sabiha Gökçen International Airport", "city": "Istanbul", "country": "TR"},
+    {"iata": "TLV", "name": "Ben Gurion International Airport", "city": "Tel Aviv", "country": "IL"},
+    {"iata": "PRG", "name": "Václav Havel Airport Prague", "city": "Prague", "country": "CZ"},
+    {"iata": "BUD", "name": "Budapest Ferenc Liszt International Airport", "city": "Budapest", "country": "HU"},
+    {"iata": "VIE", "name": "Vienna International Airport", "city": "Vienna", "country": "AT"},
+    {"iata": "ZRH", "name": "Zurich Airport", "city": "Zurich", "country": "CH"},
+    {"iata": "GVA", "name": "Geneva Airport", "city": "Geneva", "country": "CH"},
+    {"iata": "CPH", "name": "Copenhagen Airport", "city": "Copenhagen", "country": "DK"},
+    {"iata": "ARN", "name": "Stockholm Arlanda Airport", "city": "Stockholm", "country": "SE"},
+    {"iata": "OSL", "name": "Oslo Gardermoen Airport", "city": "Oslo", "country": "NO"},
+    {"iata": "HEL", "name": "Helsinki-Vantaa Airport", "city": "Helsinki", "country": "FI"},
+    {"iata": "WAW", "name": "Warsaw Chopin Airport", "city": "Warsaw", "country": "PL"},
+    {"iata": "LIS", "name": "Lisbon Humberto Delgado Airport", "city": "Lisbon", "country": "PT"},
+    {"iata": "OPO", "name": "Francisco de Sá Carneiro Airport", "city": "Porto", "country": "PT"},
+    {"iata": "SVO", "name": "Sheremetyevo International Airport", "city": "Moscow", "country": "RU"},
+    {"iata": "LED", "name": "Pulkovo Airport", "city": "Saint Petersburg", "country": "RU"},
+]
+
+
+@app.get("/airports/search")
+async def search_airports(
+    q: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Search for airports by city name or keyword, returning IATA code options."""
+    keyword = str(q or "").strip()
+    if len(keyword) < 2:
+        return {"airports": [], "source": "none"}
+
+    # Try Amadeus locations API first
+    if _amadeus_credentials_configured():
+        try:
+            data = _amadeus_request_json(
+                "/v1/reference-data/locations",
+                {"subType": "AIRPORT", "keyword": keyword, "page[limit]": "10", "view": "LIGHT"},
+            )
+            airports: list[dict[str, str]] = []
+            for item in data.get("data", []):
+                iata = str(item.get("iataCode") or "").upper().strip()
+                if len(iata) != 3:
+                    continue
+                name = str(item.get("name") or iata).title()
+                address = item.get("address") or {}
+                city = str(address.get("cityName") or name).title()
+                country = str(address.get("countryCode") or "").upper()
+                airports.append({"iata": iata, "name": name, "city": city, "country": country})
+            if airports:
+                return {"airports": airports[:8], "source": "amadeus"}
+        except Exception:
+            pass  # fall through to static list
+
+    # Static fallback: fuzzy match on city, name, or IATA code
+    kw = keyword.lower()
+    matches = [
+        a for a in _AIRPORT_STATIC
+        if kw in a["city"].lower() or kw in a["name"].lower() or kw == a["iata"].lower()
+    ]
+    # Prioritise exact IATA match at the top
+    matches.sort(key=lambda a: (0 if kw == a["iata"].lower() else 1, a["city"]))
+    return {"airports": matches[:8], "source": "static"}
+
+
 @app.post("/trips/{trip_id}/flights/search")
 async def search_flights(
     trip_id: str,
@@ -3930,7 +4087,7 @@ async def search_flights(
         await _require_trip_member(conn, trip_id, user_id)
         budget = await conn.fetchrow("SELECT breakdown FROM budgets WHERE trip_id = $1", trip_id)
         budget_breakdown = _json_obj(budget["breakdown"]) if budget else {}
-        max_price = float(budget_breakdown.get("flights", 500))
+        budget_flight_hint = float(budget_breakdown.get("flights", 500) or 500)
 
     start_airport = _airport_code(body.origin, "LAX")
     first_arrival = _airport_code(body.destination, "NRT")
@@ -3979,7 +4136,7 @@ async def search_flights(
         live_leg_groups, live_error = await asyncio.to_thread(
             _build_live_leg_option_groups,
             route_segments=route_segments,
-            max_price=max_price,
+            max_price=0.0,  # Do not enforce budget cap on flight searches.
             cabin_class=body.cabin_class or "economy",
         )
         leg_groups = live_leg_groups
@@ -3989,9 +4146,10 @@ async def search_flights(
 
     if not leg_groups:
         option_source = "mock"
+        mock_pricing_budget = max(900.0, budget_flight_hint)
         leg_groups = _build_mock_leg_option_groups(
             route_segments=route_segments,
-            max_price=max_price,
+            max_price=mock_pricing_budget,
             cabin_class=body.cabin_class or "economy",
         )
 
@@ -4055,7 +4213,8 @@ async def search_flights(
         "flights": flights,
         "legs": legs_response,
         "search_params": {
-            "max_price": max_price,
+            "max_price": budget_flight_hint,
+            "price_filter_applied": False,
             "round_trip": bool(body.round_trip),
             "segments": segment_count,
             "total_options": total_options,
@@ -4072,10 +4231,6 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
         budget = await conn.fetchrow("SELECT total_budget, spent, breakdown FROM budgets WHERE trip_id = $1", trip_id)
-        if not budget:
-            raise HTTPException(status_code=422, detail="Budget must be set before selecting flights")
-        budget_breakdown = _json_obj(budget["breakdown"])
-        allocation = float(budget_breakdown.get("flights", 0))
 
         requested_ids: list[str] = []
         if body.leg_selections:
@@ -4107,10 +4262,6 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
             selected_rows = []
 
         if not selected_rows and invalid_count > 0 and body.price_usd is not None:
-            price = float(body.price_usd)
-            if price > allocation and not body.force:
-                await conn.execute("UPDATE budgets SET warning_active = true WHERE trip_id = $1", trip_id)
-                raise HTTPException(status_code=422, detail="Flight exceeds allocation")
             raise HTTPException(status_code=404, detail="Flight not found")
 
         if len(selected_rows) != len(uuid_ids):
@@ -4124,19 +4275,19 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
             if len(leg_keys) != len(selected_rows):
                 raise HTTPException(status_code=422, detail="Select at most one flight per leg")
 
-        selected_total = round(sum(float(row["price_usd"] or 0) for row in selected_rows), 2)
-        if selected_total > allocation and not body.force:
-            await conn.execute("UPDATE budgets SET warning_active = true WHERE trip_id = $1", trip_id)
-            raise HTTPException(status_code=422, detail="Flight exceeds allocation")
-
-        previous_total = float(
-            await conn.fetchval(
-                "SELECT COALESCE(SUM(price_usd), 0) FROM flight_options WHERE trip_id = $1 AND selected = true",
-                trip_id,
+        updated = None
+        if budget:
+            selected_total = round(sum(float(row["price_usd"] or 0) for row in selected_rows), 2)
+            previous_total = float(
+                await conn.fetchval(
+                    "SELECT COALESCE(SUM(price_usd), 0) FROM flight_options WHERE trip_id = $1 AND selected = true",
+                    trip_id,
+                )
+                or 0
             )
-            or 0
-        )
-        delta = round(selected_total - previous_total, 2)
+            delta = round(selected_total - previous_total, 2)
+        else:
+            delta = 0.0
 
         await conn.execute("UPDATE flight_options SET selected = false WHERE trip_id = $1", trip_id)
         if uuid_ids:
@@ -4146,21 +4297,24 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
                 uuid_ids,
             )
 
-        spent = round(float(budget["spent"] or 0) + delta, 2)
-        total_budget = float(budget["total_budget"] or 0)
-        remaining = round(total_budget - spent, 2)
-        await conn.execute(
-            "UPDATE budgets SET spent = $1, remaining = $2, warning_active = false WHERE trip_id = $3",
-            spent,
-            remaining,
+        if budget:
+            spent = round(float(budget["spent"] or 0) + delta, 2)
+            total_budget = float(budget["total_budget"] or 0)
+            remaining = round(total_budget - spent, 2)
+            await conn.execute(
+                "UPDATE budgets SET spent = $1, remaining = $2, warning_active = false WHERE trip_id = $3",
+                spent,
+                remaining,
                 trip_id,
-        )
-        updated = await conn.fetchrow("SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1", trip_id)
-    return {
+            )
+            updated = await conn.fetchrow("SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1", trip_id)
+    response = {
         "selected": True,
         "selected_count": len(selected_rows),
         "selected_flight_ids": [str(row["id"]) for row in selected_rows],
-        "budget": {
+    }
+    if updated:
+        response["budget"] = {
             "currency": updated["currency"],
             "daily_target": float(updated["daily_target"]),
             "total_budget": float(updated["total_budget"]),
@@ -4168,8 +4322,10 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
             "remaining": float(updated["remaining"]),
             "breakdown": _json_obj(updated["breakdown"]),
             "warning_active": bool(updated["warning_active"]),
-        },
-    }
+        }
+    else:
+        response["budget"] = None
+    return response
 
 
 @app.post("/trips/{trip_id}/stays/search")
@@ -4224,12 +4380,29 @@ async def select_stay(trip_id: str, body: StaySelectRequest, user_id: str = Depe
 async def submit_availability(trip_id: str, body: AvailabilityRequest, user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
+
+    if not body.date_ranges:
+        raise HTTPException(status_code=422, detail="Provide at least one date range")
+
+    normalized_ranges: list[tuple[date, date]] = []
+    for idx, window in enumerate(body.date_ranges):
+        start_raw = str((window or {}).get("start") or "").strip()[:10]
+        end_raw = str((window or {}).get("end") or "").strip()[:10]
+        if not start_raw or not end_raw:
+            raise HTTPException(status_code=422, detail=f"Range {idx + 1} is missing start/end")
+        try:
+            start_date = date.fromisoformat(start_raw)
+            end_date = date.fromisoformat(end_raw)
+        except Exception:
+            raise HTTPException(status_code=422, detail=f"Range {idx + 1} has invalid dates")
+        if end_date < start_date:
+            raise HTTPException(status_code=422, detail=f"Range {idx + 1} has end before start")
+        normalized_ranges.append((start_date, end_date))
+
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
         await conn.execute("DELETE FROM availability_windows WHERE trip_id = $1 AND user_id = $2", trip_id, user_id)
-        for window in body.date_ranges:
-            start_date = date.fromisoformat(window["start"])
-            end_date = date.fromisoformat(window["end"])
+        for start_date, end_date in normalized_ranges:
             await conn.execute(
                 """
                 INSERT INTO availability_windows (trip_id, user_id, start_date, end_date)
@@ -4243,31 +4416,118 @@ async def submit_availability(trip_id: str, body: AvailabilityRequest, user_id: 
     return {"user_id": user_id}
 
 
+def _intersect_date_ranges(
+    left: list[tuple[date, date]],
+    right: list[tuple[date, date]],
+) -> list[tuple[date, date]]:
+    intersections: list[tuple[date, date]] = []
+    for l_start, l_end in left:
+        for r_start, r_end in right:
+            start = max(l_start, r_start)
+            end = min(l_end, r_end)
+            if start <= end:
+                intersections.append((start, end))
+    intersections.sort(key=lambda item: (item[0], item[1]))
+    return intersections
+
+
+def _common_overlap_windows(
+    member_ids: list[str],
+    by_member: dict[str, list[tuple[date, date]]],
+) -> list[tuple[date, date]]:
+    if not member_ids:
+        return []
+    current = sorted(by_member.get(member_ids[0], []), key=lambda item: (item[0], item[1]))
+    for uid in member_ids[1:]:
+        current = _intersect_date_ranges(current, by_member.get(uid, []))
+        if not current:
+            break
+    return current
+
+
 @app.get("/trips/{trip_id}/availability/overlap")
 async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
-        members = await conn.fetch("SELECT user_id FROM trip_members WHERE trip_id = $1 AND status = 'accepted'", trip_id)
+        members = await conn.fetch(
+            """
+            SELECT tm.user_id, u.name, u.email
+            FROM trip_members tm
+            JOIN users u ON u.id = tm.user_id
+            WHERE tm.trip_id = $1 AND tm.status = 'accepted'
+            """,
+            trip_id,
+        )
         windows = await conn.fetch("SELECT user_id, start_date, end_date FROM availability_windows WHERE trip_id = $1", trip_id)
+        planning_state_row = await conn.fetchrow(
+            "SELECT state FROM trip_planning_states WHERE trip_id = $1",
+            trip_id,
+        )
+    planning_state = (planning_state_row["state"] or {}) if planning_state_row else {}
+    locked_window = planning_state.get("availability_locked_window") if isinstance(planning_state, dict) else None
+    if not isinstance(locked_window, dict):
+        locked_window = None
+
     if not members:
-        return {"overlap": None, "closest_windows": [], "prompt_members_to_adjust": True, "message": "No members found"}
+        return {
+            "overlap": None,
+            "overlapping_windows": [],
+            "closest_windows": [],
+            "member_windows": [],
+            "members_total": 0,
+            "prompt_members_to_adjust": True,
+            "message": "No members found",
+            "locked_window": locked_window,
+            "is_locked": bool(locked_window),
+        }
+
     member_ids = [str(row["user_id"]) for row in members]
     by_member: dict[str, list[tuple[date, date]]] = {uid: [] for uid in member_ids}
     for row in windows:
-        by_member[str(row["user_id"])].append((row["start_date"], row["end_date"]))
+        uid = str(row["user_id"])
+        if uid in by_member:
+            by_member[uid].append((row["start_date"], row["end_date"]))
 
+    member_windows_payload = [
+        {
+            "user_id": uid,
+            "name": str(row["name"] or "").strip() or str(row["email"] or ""),
+            "email": row["email"],
+            "windows": [
+                {"start": start.isoformat(), "end": end.isoformat()}
+                for start, end in sorted(by_member.get(uid, []), key=lambda item: (item[0], item[1]))
+            ],
+        }
+        for row, uid in zip(members, member_ids)
+    ]
+
+    full_overlap_windows = []
     if all(by_member.get(uid) for uid in member_ids):
-        overlap_start = max(min(w[0] for w in by_member[uid]) for uid in member_ids)
-        overlap_end = min(max(w[1] for w in by_member[uid]) for uid in member_ids)
-        if overlap_start <= overlap_end:
-            return {
-                "overlap": {"start": overlap_start.isoformat(), "end": overlap_end.isoformat()},
-                "closest_windows": [],
-                "prompt_members_to_adjust": False,
-                "message": "Common overlap found",
+        full_overlap_windows = _common_overlap_windows(member_ids, by_member)
+    if full_overlap_windows:
+        full_overlap_windows.sort(key=lambda item: (-(item[1] - item[0]).days, item[0]))
+        best_start, best_end = full_overlap_windows[0]
+        overlapping_windows = [
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "overlap_days": max(1, (end - start).days + 1),
             }
+            for start, end in full_overlap_windows[:5]
+        ]
+        return {
+            "overlap": {"start": best_start.isoformat(), "end": best_end.isoformat()},
+            "overlapping_windows": overlapping_windows,
+            "closest_windows": [],
+            "member_windows": member_windows_payload,
+            "members_total": len(member_ids),
+            "prompt_members_to_adjust": False,
+            "message": "Common overlap found",
+            "locked_window": locked_window,
+            "is_locked": bool(locked_window),
+        }
 
     all_windows = [
         {"user_id": uid, "start": start, "end": end}
@@ -4297,9 +4557,107 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
     suggestions.sort(key=lambda item: (-len(item["members_available"]), len(item["members_to_adjust"])))
     return {
         "overlap": None,
+        "overlapping_windows": [],
         "closest_windows": suggestions[:5],
+        "member_windows": member_windows_payload,
+        "members_total": len(member_ids),
         "prompt_members_to_adjust": True,
         "message": "No common overlap found. Ask some members to adjust dates.",
+        "locked_window": locked_window,
+        "is_locked": bool(locked_window),
+    }
+
+
+@app.post("/trips/{trip_id}/availability/lock")
+async def lock_availability_window(
+    trip_id: str,
+    body: AvailabilityLockRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    start_raw = str(body.start or "").strip()[:10]
+    end_raw = str(body.end or "").strip()[:10]
+    if not start_raw or not end_raw:
+        raise HTTPException(status_code=422, detail="Missing start/end dates")
+    try:
+        lock_start = date.fromisoformat(start_raw)
+        lock_end = date.fromisoformat(end_raw)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid lock date format")
+    if lock_end < lock_start:
+        raise HTTPException(status_code=422, detail="Lock end date cannot be before start date")
+
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        if str(trip["owner_id"]) != str(user_id):
+            raise HTTPException(status_code=403, detail="Only the trip owner can lock travel dates")
+
+        members = await conn.fetch(
+            "SELECT user_id FROM trip_members WHERE trip_id = $1 AND status = 'accepted'",
+            trip_id,
+        )
+        windows = await conn.fetch(
+            "SELECT user_id, start_date, end_date FROM availability_windows WHERE trip_id = $1",
+            trip_id,
+        )
+        member_ids = [str(row["user_id"]) for row in members]
+        by_member: dict[str, list[tuple[date, date]]] = {uid: [] for uid in member_ids}
+        for row in windows:
+            uid = str(row["user_id"])
+            if uid in by_member:
+                by_member[uid].append((row["start_date"], row["end_date"]))
+
+        if not member_ids or not all(by_member.get(uid) for uid in member_ids):
+            raise HTTPException(status_code=422, detail="Every accepted member must submit availability before locking dates")
+
+        overlaps = _common_overlap_windows(member_ids, by_member)
+        is_within_overlap = any(lock_start >= start and lock_end <= end for start, end in overlaps)
+        if not is_within_overlap:
+            raise HTTPException(status_code=422, detail="Locked dates must be inside a common overlap window")
+
+        existing = await conn.fetchrow(
+            """
+            SELECT current_step, state
+            FROM trip_planning_states
+            WHERE trip_id = $1
+            """,
+            trip_id,
+        )
+        existing_state = (existing["state"] or {}) if existing else {}
+        if not isinstance(existing_state, dict):
+            existing_state = {}
+        existing_state["availability_locked_window"] = {
+            "start": lock_start.isoformat(),
+            "end": lock_end.isoformat(),
+        }
+        existing_state["availability_locked_by"] = str(user_id)
+        existing_state["availability_locked_at"] = datetime.now(timezone.utc).isoformat()
+        current_step = int((existing["current_step"] if existing else 0) or 0)
+        await conn.execute(
+            """
+            INSERT INTO trip_planning_states (trip_id, current_step, state, updated_by, updated_at)
+            VALUES ($1, $2, $3::jsonb, $4, NOW())
+            ON CONFLICT (trip_id)
+            DO UPDATE SET current_step = EXCLUDED.current_step,
+                          state = EXCLUDED.state,
+                          updated_by = EXCLUDED.updated_by,
+                          updated_at = NOW()
+            """,
+            trip_id,
+            current_step,
+            json.dumps(existing_state),
+            user_id,
+        )
+
+    return {
+        "locked": True,
+        "locked_window": {"start": lock_start.isoformat(), "end": lock_end.isoformat()},
+        "locked_by": str(user_id),
     }
 
 
