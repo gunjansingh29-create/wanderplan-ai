@@ -453,6 +453,8 @@ const GROUP_STAGES = STAGES.filter(s => s.phase === "group").map(s => s.key);
 
 // ── STEPPER ────────────────────────────────────────────────────────────
 
+const PHASE_BADGES = { group:"👥 Group", individual:"👤 Solo" };
+
 function Stepper({ current }) {
   const idx = typeof current === "number" ? current : STAGES.findIndex(s=>s.key===current);
   const ref = useRef(null);
@@ -463,15 +465,24 @@ function Stepper({ current }) {
     }
   }, [idx]);
   return (
-    <div style={{ background:T.surface, borderBottom:`1px solid ${T.borderLight}`, padding:"14px 12px 12px", overflowX:"auto" }}>
-      <div ref={ref} style={{ display:"flex", alignItems:"center", minWidth:"fit-content", gap:0, justifyContent:"center" }}>
+    <div style={{ background:T.surface, borderBottom:`1px solid ${T.borderLight}`, padding:"10px 12px 12px", overflowX:"auto" }}>
+      <div ref={ref} style={{ display:"flex", alignItems:"flex-end", minWidth:"fit-content", gap:0, justifyContent:"center" }}>
         {STAGES.map((st,i) => {
           const state = i<idx?"done":i===idx?"active":"todo";
           const bg = state==="done"?T.primary:state==="active"?T.secondary:T.borderLight;
           const fg = state==="todo"?T.text3:"#fff";
+          const isFirstOfPhase = i===0 || STAGES[i-1].phase !== st.phase;
+          const badge = isFirstOfPhase ? PHASE_BADGES[st.phase] : null;
           return (
-            <div key={st.key} style={{ display:"flex", alignItems:"center" }}>
-              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, minWidth:44 }}>
+            <div key={st.key} style={{ display:"flex", alignItems:"flex-end" }}>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3, minWidth:44 }}>
+                {badge ? (
+                  <span style={{ fontSize:8.5,fontWeight:700,color:st.phase==="group"?T.accent:st.phase==="individual"?T.secondary:T.text3,
+                    background:st.phase==="group"?`${T.accent}15`:st.phase==="individual"?`${T.secondary}15`:"transparent",
+                    padding:"1px 5px",borderRadius:999,whiteSpace:"nowrap",marginBottom:2 }}>{badge}</span>
+                ) : (
+                  <span style={{ fontSize:8.5,color:"transparent",marginBottom:2 }}>·</span>
+                )}
                 <div style={{ width:28,height:28,borderRadius:999,background:bg, display:"flex",alignItems:"center",justifyContent:"center",
                   transition:"all .3s", boxShadow:state==="active"?`0 0 0 3px ${T.secondary}30`:"none",
                   animation:state==="active"?"bounceIn .4s ease":"none" }}>
@@ -481,7 +492,11 @@ function Stepper({ current }) {
                   color:state==="todo"?T.text3:state==="active"?T.secondary:T.primary,
                   textAlign:"center",lineHeight:1.1,maxWidth:48,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{st.label}</span>
               </div>
-              {i<STAGES.length-1 && <div style={{ width:12,height:2,background:i<idx?T.primary:T.borderLight, marginBottom:16,flexShrink:0, transition:"background .4s" }}/>}
+              {i<STAGES.length-1 && (
+                <div style={{ width:12,height:2,background:i<idx?T.primary:T.borderLight, marginBottom:20,flexShrink:0, transition:"background .4s",
+                  borderTop: STAGES[i+1].phase !== st.phase ? `1px dashed ${T.border}` : "none",
+                  opacity: STAGES[i+1].phase !== st.phase ? 0.5 : 1 }}/>
+              )}
             </div>
           );
         })}
@@ -864,6 +879,7 @@ export default function TripWizard({
   const [selectedFlightsByLeg, setSelectedFlightsByLeg] = useState({});
   const [stayPicks, setStayPicks] = useState({});
   const [diningApproved, setDiningApproved] = useState({});
+  const [diningSelections, setDiningSelections] = useState({});
   const [budgetPerDay, setBudgetPerDay] = useState(200);
   const [flightClass, setFlightClass] = useState("economy");
   const [flightStartAirport, setFlightStartAirport] = useState("LAX");
@@ -921,30 +937,43 @@ export default function TripWizard({
   const isOrganizer = members.length === 0 || members[0]?.initials === "YO";
 
   // Lock a group stage and advance; last group stage triggers transition screen
-  const lockStage = (key) => {
+  const lockStage = async (key) => {
     setLockedStages(prev => ({ ...prev, [key]: true }));
     if (key === "budget") {
+      if (tripId && authToken) {
+        try {
+          await apiJson(`/trips/${tripId}/budget`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ daily_budget: budgetPerDay, currency: "USD" }),
+          });
+          const br = await apiJson(`/trips/${tripId}/budget/breakdown`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          setBudgetBreakdown(br?.breakdown || null);
+        } catch {}
+      }
       setShowGroupToIndividualTransition(true);
+      return;
+    }
+    if (key === "avail") {
+      await handleAvailabilityLockAndContinue();
+      return;
     }
     next();
   };
 
+  const addMemberByEmail = (email) => {
+    const e = (email || "").trim().toLowerCase();
+    if (!e || !e.includes("@")) return;
+    if (members.some((m) => m.name.toLowerCase() === e)) return;
+    const user = e.split("@")[0];
+    const initials = user.split(/[._-]/).map((p) => p[0] || "").join("").slice(0, 2).toUpperCase();
+    setMembers((prev) => [...prev, { name: e, status: "pending", initials: initials || "TR" }]);
+  };
+
   const addMember = () => {
-    const email = inviteEmail.trim().toLowerCase();
-    if (!email || !email.includes("@")) return;
-    const exists = members.some((m) => m.name.toLowerCase() === email);
-    if (exists) return;
-    const user = email.split("@")[0];
-    const initials = user
-      .split(/[._-]/)
-      .map((p) => p[0] || "")
-      .join("")
-      .slice(0, 2)
-      .toUpperCase();
-    setMembers((prev) => [
-      ...prev,
-      { name: email, status: "pending", initials: initials || "TR" },
-    ]);
+    addMemberByEmail(inviteEmail);
     setInviteEmail("");
   };
 
@@ -1158,15 +1187,61 @@ export default function TripWizard({
       }))
     : STAYS;
   const diningDisplay = diningRows.length > 0
-    ? diningRows.map((d) => ({
+    ? diningRows.map((d, idx) => {
+        const normalizedOptions = Array.isArray(d.options) && d.options.length > 0
+          ? d.options
+          : [{
+              option_id: d.id || `fallback-${idx + 1}`,
+              name: d.name,
+              city: d.city,
+              country: d.country,
+              tags: d.tags || [],
+              cost: Number(d.cost || 20),
+              cuisine: d.cuisine || ((d.tags || [])[0] || "Local"),
+              near_poi: d.near_poi || "",
+              travel_minutes: Number(d.travel_from_poi_minutes || 0),
+            }];
+        return {
+          slotId: d.slot_id || `${Number(d.day || 1)}-${String(d.meal || "meal").toLowerCase()}-${idx}`,
+          day: Number(d.day || 1),
+          date: d.date || null,
+          meal: d.meal || "Lunch",
+          time: d.time || "",
+          nearPoi: d.near_poi || "",
+          travelBetweenPoisMinutes: Number(d.travel_between_pois_minutes || 0),
+          options: normalizedOptions.map((option, optionIdx) => ({
+            optionId: option.option_id || `opt-${idx + 1}-${optionIdx + 1}`,
+            name: option.name || d.name || "Restaurant",
+            city: option.city || d.city || "",
+            country: option.country || d.country || "",
+            cuisine: option.cuisine || ((option.tags || d.tags || [])[0] || "Local"),
+            cost: Number(option.cost ?? d.cost ?? 20),
+            tags: option.tags || d.tags || [],
+            nearPoi: option.near_poi || d.near_poi || "",
+            travelMinutes: Number(option.travel_minutes ?? d.travel_from_poi_minutes ?? 0),
+          })),
+        };
+      })
+    : DINING.map((d, idx) => ({
+        slotId: `demo-${d.day}-${String(d.meal).toLowerCase()}-${idx}`,
         day: Number(d.day || 1),
+        date: null,
         meal: d.meal || "Lunch",
-        name: d.name,
-        cuisine: (d.tags || [])[0] || "Local",
-        cost: Number(d.cost || 20),
-        diet: [],
-      }))
-    : DINING;
+        time: "",
+        nearPoi: "",
+        travelBetweenPoisMinutes: 0,
+        options: [{
+          optionId: `demo-opt-${idx + 1}`,
+          name: d.name,
+          city: "",
+          country: "",
+          cuisine: d.cuisine || "Local",
+          cost: Number(d.cost || 20),
+          tags: d.diet || [],
+          nearPoi: "",
+          travelMinutes: 0,
+        }],
+      }));
   const itineraryDisplay = itineraryRows.length > 0
     ? itineraryRows.map((d) => ({
         day: d.day_number,
@@ -1354,7 +1429,6 @@ export default function TripWizard({
       }, 1200 + i * 900)
     );
     return () => timers.forEach(clearTimeout);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageKey]);
 
   // ── Load MyCrew from localStorage when entering Create stage ───────────
@@ -1365,7 +1439,6 @@ export default function TripWizard({
     // Merge with demo contacts for a populated experience
     const combined = fromStorage.length > 0 ? fromStorage : MYCREW_DEMO;
     setMyCrewList(combined);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageKey]);
 
   useEffect(() => {
@@ -2007,6 +2080,12 @@ export default function TripWizard({
     }
   };
 
+  useEffect(() => {
+    if (stageKey !== "dining") return;
+    setDiningApproved({});
+    setDiningSelections({});
+  }, [stageKey, diningRows]);
+
   const handleItineraryApprove = async () => {
     if (!tripId || !authToken) {
       next();
@@ -2140,7 +2219,7 @@ export default function TripWizard({
                         background: c.status === "Joined" ? T.successBg : T.warningBg,
                         color: c.status === "Joined" ? T.success : T.warning }}>{c.status}</span>
                       <button
-                        onClick={() => { if (!alreadyAdded) { setInviteEmail(c.email); addMember(); } }}
+                        onClick={() => { if (!alreadyAdded) addMemberByEmail(c.email); }}
                         disabled={alreadyAdded}
                         className="hd"
                         style={{ padding:"5px 10px", borderRadius:7, border:"none",
@@ -2197,246 +2276,136 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 1: BUCKET LIST ──────────────────────────────────────────────
+  // ── STEP 1: DESTINATIONS (Bucket List) ───────────────────────────────
   if (stageKey === "bucket") return (
     <Shell step={step}>
-      <AgentHeader emoji="🌍" name="Bucket List Agent" desc="Collecting your dream destinations"/>
+      <AgentHeader emoji="🌍" name="Destinations" desc="Pick destinations from your bucket list"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Bucket List Agent" emoji="🌍" msg="What places have you always dreamed of visiting? Type as many as you'd like!"/>
-        <Chat isUser msg={destinations.join(", ") || "Tokyo, Kyoto"} delay={200}/>
-        <Chat agent="Bucket List Agent" emoji="🌍" msg="Love those picks! 🇬🇷🇯🇵 I've ranked them by your preferences and destination quality." delay={500}/>
-        <div style={{ display:"flex",gap:8 }}>
-          <input
-            value={destinationInput}
-            onChange={e=>setDestinationInput(e.target.value)}
-            onKeyDown={(e)=>{ if (e.key === "Enter") addDestination(); }}
-            placeholder="Add a destination"
-            style={{ flex:1,padding:"11px 14px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,minHeight:44 }}
-          />
-          <Btn onClick={addDestination}>Add</Btn>
+        <Chat agent="Destinations" emoji="🌍" msg="Select destinations from your personal bucket list, or add new ones below."/>
+        {/* Personal bucket list cards */}
+        {personalBucketItems.length > 0 && (
+          <div style={{ display:"flex",flexDirection:"column",gap:8,animation:"fadeUp .4s ease-out .2s both" }}>
+            <p className="hd" style={{ fontSize:12,fontWeight:600,color:T.text3 }}>Your Bucket List</p>
+            {personalBucketItems.map((item, i) => {
+              const selected = destinations.includes(item.destination);
+              return (
+                <div key={i} onClick={() => {
+                  if (selected) setDestinations(prev => prev.filter(d => d !== item.destination));
+                  else setDestinations(prev => [...prev, item.destination]);
+                }} style={{ background:T.surface,borderRadius:12,padding:"12px 16px",
+                  border:`2px solid ${selected ? T.primary : T.borderLight}`,
+                  display:"flex",alignItems:"center",gap:12,cursor:"pointer",transition:"all .2s" }}>
+                  <div style={{ width:36,height:36,borderRadius:10,flexShrink:0,
+                    background:selected?`${T.primary}18`:`${T.accent}10`,
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:20 }}>🌍</div>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <p className="hd" style={{ fontWeight:600,fontSize:14 }}>{item.destination}</p>
+                    {item.country && <p style={{ fontSize:11,color:T.text3 }}>{item.country}</p>}
+                    {item.tags?.length > 0 && (
+                      <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginTop:3 }}>
+                        {item.tags.slice(0,3).map(t=><span key={t} style={{ fontSize:10,background:T.bg,color:T.text3,padding:"1px 6px",borderRadius:999 }}>{t}</span>)}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ width:22,height:22,borderRadius:999,border:`2px solid ${selected?T.primary:T.borderLight}`,
+                    background:selected?T.primary:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
+                    {selected && <I n="check" s={12} c="#fff"/>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {/* Add new destination manually */}
+        <div>
+          <p className="hd" style={{ fontSize:12,fontWeight:600,color:T.text3,marginBottom:6 }}>Add a destination</p>
+          <div style={{ display:"flex",gap:8 }}>
+            <input
+              value={destinationInput}
+              onChange={e=>setDestinationInput(e.target.value)}
+              onKeyDown={(e)=>{ if (e.key === "Enter") addDestination(); }}
+              placeholder="e.g. Bali, Iceland"
+              style={{ flex:1,padding:"11px 14px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,minHeight:44 }}
+            />
+            <Btn onClick={addDestination}>Add</Btn>
+          </div>
         </div>
         {destinations.length > 0 && (
           <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
             {destinations.map((d)=>(
-              <span key={d} style={{ background:`${T.accent}14`,color:T.accent,padding:"4px 10px",borderRadius:999,fontSize:12 }}>{d}</span>
+              <span key={d} style={{ background:`${T.accent}14`,color:T.accent,padding:"4px 10px",borderRadius:999,fontSize:12,display:"flex",alignItems:"center",gap:4 }}>
+                {d}
+                <button onClick={()=>setDestinations(prev=>prev.filter(x=>x!==d))} style={{ background:"none",border:"none",cursor:"pointer",color:T.accent,fontSize:14,lineHeight:1,padding:0 }}>×</button>
+              </span>
             ))}
           </div>
         )}
-        {/* Ranked destinations */}
-        <div style={{ display:"flex",flexDirection:"column",gap:10,animation:"fadeUp .4s ease-out .6s both" }}>
-          {destResults.map((d,i)=>(
-            <div key={i} style={{ background:T.surface,borderRadius:14,padding:"14px 18px",border:`1px solid ${T.borderLight}`,
-              display:"flex",alignItems:"center",gap:14,boxShadow:shadow.sm }}>
-              <div className="hd" style={{ width:36,height:36,borderRadius:10,
-                background:`linear-gradient(135deg,${T.primary}20,${T.accent}30)`,
-                display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15,color:T.primary }}>
-                #{i+1}
-              </div>
-              <div style={{ flex:1 }}>
-                <p className="hd" style={{ fontWeight:600,fontSize:15 }}>{d.name}</p>
-                <p style={{ fontSize:12,color:T.text3 }}>{d.score}% confidence match</p>
-              </div>
-              <div style={{ display:"flex",gap:4 }}>
-                <button style={{ width:32,height:32,borderRadius:999,border:"none",background:T.successBg,
-                  color:T.success,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>
-                  <I n="thumb" s={14} c={T.success}/></button>
-              </div>
-            </div>
-          ))}
-        </div>
-        {destResults.length > 0 ? (
-          <div style={{ marginTop:6 }}>
-            <YN
-              title="Approve these destinations?"
-              agent="Bucket List Agent"
-              subtitle="Ready to move into timing analysis"
-              desc={`Top picks: ${destResults.slice(0, 3).map((d) => d.name).join(", ")}`}
-              onYes={handleBucketContinue}
-              onNo={handleRevise}
-            />
-          </div>
+        {destinations.length > 0 ? (
+          <Btn onClick={handleBucketContinue} full>Continue with {destinations.length} destination{destinations.length!==1?"s":""} →</Btn>
         ) : (
-          <p style={{ fontSize:12,color:T.text3 }}>
-            Add at least one destination to continue.
-          </p>
+          <p style={{ fontSize:12,color:T.text3 }}>Select or add at least one destination to continue.</p>
         )}
       </div>
     </Shell>
   );
 
-  // ── STEP 2: TIMING ───────────────────────────────────────────────────
-  if (stageKey === "timing") return (
-    <Shell step={step}>
-      <AgentHeader emoji="📅" name="Timing Agent" desc="Finding the perfect travel window"/>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        {timingDisplay.length === 0 && (
-          <div style={{ background:T.warningBg, border:`1px solid ${T.warning}`, borderRadius:12, padding:12 }}>
-            <p style={{ fontSize:13, color:T.text2 }}>
-              Add and save destinations in Bucket List first so timing analysis can run.
-            </p>
-            <div style={{ marginTop:8 }}>
-              <Btn onClick={back}>Back to Bucket List</Btn>
-            </div>
-          </div>
-        )}
-        {timingDisplay.length > 0 && (
-          <>
-        <Chat agent="Timing Agent" emoji="📅" msg="I've analyzed weather, crowds, and prices for your destinations. Here's the calendar heatmap:"/>
-        {/* Calendar heatmap */}
-        <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
-          boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
-          <p className="hd" style={{ fontWeight:700,fontSize:14,marginBottom:12 }}>Best Travel Months</p>
-          {timingDisplay.map((d,di)=>(
-            <div key={di} style={{ marginBottom:di<2?14:0 }}>
-              <p style={{ fontSize:12,color:T.text2,fontWeight:600,marginBottom:6 }}>{d.name}</p>
-              <div style={{ display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:3 }}>
-                {["J","F","M","A","M","J","J","A","S","O","N","D"].map((m,mi)=>{
-                  const good = d.months.includes(mi+1);
-                  const ok = d.months.includes(mi) || d.months.includes(mi+2);
-                  const bg = good?T.success:ok?T.warning:`${T.error}30`;
-                  const fg = good?"#fff":ok?"#fff":T.text3;
-                  return <div key={mi} style={{ textAlign:"center",padding:"6px 0",borderRadius:6,
-                    background:good?`${T.success}`:ok?`${T.warning}80`:`${T.borderLight}`,
-                    color:fg,fontSize:10,fontWeight:600 }}>{m}</div>;
-                })}
-              </div>
-            </div>
-          ))}
-          <div style={{ display:"flex",gap:12,marginTop:14,fontSize:11,color:T.text3 }}>
-            <span style={{ display:"flex",alignItems:"center",gap:4 }}><div style={{ width:10,height:10,borderRadius:3,background:T.success }}/> Ideal</span>
-            <span style={{ display:"flex",alignItems:"center",gap:4 }}><div style={{ width:10,height:10,borderRadius:3,background:`${T.warning}80` }}/> Okay</span>
-            <span style={{ display:"flex",alignItems:"center",gap:4 }}><div style={{ width:10,height:10,borderRadius:3,background:T.borderLight }}/> Avoid</span>
-          </div>
-        </div>
-        <YN title="June is your sweet spot" agent="Timing Agent"
-          subtitle="Jun 15 – Jun 28"
-          desc={`All ${timingDisplay.length} destinations have great weather, manageable crowds, and reasonable prices in mid-June.`}
-          onYes={handleTimingContinue} onNo={handleRevise}/>
-          </>
-        )}
-      </div>
-    </Shell>
-  );
-
-  // ── STEP 3: INTERESTS ────────────────────────────────────────────────
-  if (stageKey === "interests") return (
-    <Shell step={step}>
-      <AgentHeader emoji="🎯" name="Interest Profiler" desc="Quick quiz to match activities to your group"/>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Interest Profiler" emoji="🎯" msg="Quick fire round! I'll ask yes/no questions to understand your group's interests."/>
-        {INTEREST_QUESTIONS.map((q,i)=>(
-          <div key={i} style={{ display:"flex",flexDirection:"column",gap:8,
-            animation:`fadeUp .35s ease-out ${.15+i*.12}s both` }}>
-            <Chat agent="Interest Profiler" emoji="🎯" msg={q}/>
-            <div style={{ display:"flex",gap:8,justifyContent:"flex-end" }}>
-              {["Yes","No"].map(opt=>{
-                const value = opt==="Yes"?"yes":"no";
-                const selected = interestAnswers[i] === value;
-                return (
-                  <button key={opt} style={{ padding:"8px 24px",borderRadius:10,
-                    border:selected?`2px solid ${T.primary}`:`2px solid ${T.border}`,
-                    background:selected?`${T.primary}10`:T.surface,
-                    color:selected?T.primary:T.text2,
-                    fontWeight:600,fontSize:14,cursor:"pointer",minHeight:40 }} className="hd"
-                    onClick={()=>setInterestAnswers(p=>({ ...p, [i]: value }))}>
-                    {opt==="Yes"?"👍":"👎"} {opt}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-        {Object.keys(interestAnswers).length === INTEREST_QUESTIONS.length && (
-          <>
-            <Chat
-              agent="Interest Profiler"
-              emoji="🎯"
-              msg={`Profile complete! Top interests: ${selectedInterests.length ? selectedInterests.join(", ") : "No strong preferences selected"}.`}
-              delay={200}
-            />
-            <div style={{ marginTop:4 }}><Btn onClick={handleInterestsContinue} full>Continue →</Btn></div>
-          </>
-        )}
-      </div>
-    </Shell>
-  );
-
-  // ── STEP 4: HEALTH ─────────────────────────────────────────────────── ───────────────────────────────────────────────────
-  if (stageKey === "health") return (
-    <Shell step={step}>
-      <AgentHeader emoji="🏥" name="Health & Safety Agent" desc="Checking requirements for your activities"/>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Health Agent" emoji="🏥" msg="I've reviewed health requirements for your destinations and planned activities. A couple of things to note:"/>
-        <YN title="Travel Insurance Recommended" agent="Health Agent" subtitle="For Greece & Japan"
-          desc="Standard travel insurance covering medical emergencies is recommended for both destinations. Does everyone have this?"
-          tags={["Recommended","All destinations"]} onYes={()=>{}} onNo={handleRevise}/>
-        <YN title="No Vaccinations Required" agent="Health Agent"
-          desc="Neither Greece nor Japan require special vaccinations for travelers from your home country. Standard vaccines (Tetanus, Hep A) are recommended but not mandatory."
-          tags={["Optional","Low risk"]} onYes={handleHealthContinue} onNo={handleRevise}/>
-      </div>
-    </Shell>
-  );
-
-  // ── STEP 5: POIs ─────────────────────────────────────────────────────
+  // ── STEP 2: POIs (group chatroom) ────────────────────────────────────
   if (stageKey === "pois") return (
     <Shell step={step}>
-      <AgentHeader emoji="📍" name="POI Discovery Agent" desc="Curated places matched to your group's interests"/>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="POI Agent" emoji="📍" msg="Based on your interests in hiking, food, history, and photography, here are my top picks. Approve or skip each one!"/>
-        {poiDisplay.map((poi,i)=>{
-          const catColors = { nature:T.success, food:T.primary, culture:T.warning };
-          const approved = poiApproved[i];
-          return (
-            <div key={i} style={{ background:T.surface,borderRadius:14,overflow:"hidden",border:`1px solid ${T.borderLight}`,
-              boxShadow:shadow.sm,display:"flex",gap:0,animation:`fadeUp .35s ease-out ${i*.08}s both`,
-              opacity:approved===false?.45:1,transition:"opacity .3s" }}>
-              <div style={{ width:80,minHeight:100,flexShrink:0,
-                background:`linear-gradient(135deg,${catColors[poi.cat]||T.primary}25,${catColors[poi.cat]||T.primary}08)`,
-                display:"flex",alignItems:"center",justifyContent:"center" }}>
-                <I n={poi.cat==="food"?"food":poi.cat==="culture"?"hotel":"camera"} s={24} c={catColors[poi.cat]||T.primary}/>
-              </div>
-              <div style={{ padding:"12px 14px",flex:1,minWidth:0 }}>
-                <div style={{ display:"flex",alignItems:"center",gap:5,marginBottom:3 }}>
-                  <span style={{ background:`${catColors[poi.cat]}18`,color:catColors[poi.cat],
-                    padding:"1px 7px",borderRadius:999,fontSize:10,fontWeight:600,textTransform:"capitalize" }}>{poi.cat}</span>
-                  <span style={{ fontSize:11,color:T.warning,display:"flex",alignItems:"center",gap:2 }}>
-                    <I n="star" s={11} c={T.warning}/> {poi.rating}</span>
-                  <span style={{ fontSize:10.5,color:T.text3,marginLeft:"auto" }}>{poi.dest}</span>
+      <AgentHeader emoji="📍" name="POI Discovery" desc="Vote on activities — organizer locks the list"/>
+      <GroupRoom stageKey="pois" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
+        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+          <Chat agent="POI Agent" emoji="📍" msg="Here are top activity picks for your destinations. Approve or skip each one — your crew can also vote!"/>
+          {poiDisplay.map((poi,i)=>{
+            const catColors = { nature:T.success, food:T.primary, culture:T.warning };
+            const approved = poiApproved[i];
+            return (
+              <div key={i} style={{ background:T.surface,borderRadius:14,overflow:"hidden",border:`1px solid ${T.borderLight}`,
+                boxShadow:shadow.sm,display:"flex",gap:0,animation:`fadeUp .35s ease-out ${i*.08}s both`,
+                opacity:approved===false?.45:1,transition:"opacity .3s" }}>
+                <div style={{ width:80,minHeight:100,flexShrink:0,
+                  background:`linear-gradient(135deg,${catColors[poi.cat]||T.primary}25,${catColors[poi.cat]||T.primary}08)`,
+                  display:"flex",alignItems:"center",justifyContent:"center" }}>
+                  <I n={poi.cat==="food"?"food":poi.cat==="culture"?"hotel":"camera"} s={24} c={catColors[poi.cat]||T.primary}/>
                 </div>
-                <h4 className="hd" style={{ fontWeight:600,fontSize:14,marginBottom:5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{poi.name}</h4>
-                <div style={{ display:"flex",gap:10,marginBottom:6,fontSize:12,color:T.text2 }}>
-                  <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="clock" s={12} c={T.text3}/> {poi.dur}h</span>
-                  <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="dollar" s={12} c={T.text3}/> {poi.cost>0?`$${poi.cost}`:"Free"}</span>
-                </div>
-                <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginBottom:8 }}>
-                  {poi.tags.map(t=><span key={t} style={{ background:T.bg,color:T.text2,padding:"1px 7px",borderRadius:999,fontSize:10 }}>{t}</span>)}
-                </div>
-                {approved===undefined && (
-                  <div style={{ display:"flex",gap:8 }}>
-                    <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
-                      border:`1.5px solid ${T.error}40`,background:"transparent",color:T.error,fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Skip</button>
-                    <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
-                      border:"none",background:T.primary,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
-                      boxShadow:`0 2px 6px ${T.primary}30` }} className="hd">Include ✓</button>
+                <div style={{ padding:"12px 14px",flex:1,minWidth:0 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:5,marginBottom:3 }}>
+                    <span style={{ background:`${catColors[poi.cat]}18`,color:catColors[poi.cat],
+                      padding:"1px 7px",borderRadius:999,fontSize:10,fontWeight:600,textTransform:"capitalize" }}>{poi.cat}</span>
+                    <span style={{ fontSize:11,color:T.warning,display:"flex",alignItems:"center",gap:2 }}>
+                      <I n="star" s={11} c={T.warning}/> {poi.rating}</span>
+                    <span style={{ fontSize:10.5,color:T.text3,marginLeft:"auto" }}>{poi.dest}</span>
                   </div>
-                )}
-                {approved!==undefined && (
-                  <div style={{ padding:"6px 12px",borderRadius:8,
-                    background:approved?T.successBg:T.errorBg,
-                    color:approved?T.success:T.error,fontSize:12,fontWeight:600,textAlign:"center" }} className="hd">
-                    {approved?"✓ Included":"✗ Skipped"}
+                  <h4 className="hd" style={{ fontWeight:600,fontSize:14,marginBottom:5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{poi.name}</h4>
+                  <div style={{ display:"flex",gap:10,marginBottom:6,fontSize:12,color:T.text2 }}>
+                    <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="clock" s={12} c={T.text3}/> {poi.dur}h</span>
+                    <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="dollar" s={12} c={T.text3}/> {poi.cost>0?`$${poi.cost}`:"Free"}</span>
                   </div>
-                )}
+                  <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginBottom:8 }}>
+                    {poi.tags.map(t=><span key={t} style={{ background:T.bg,color:T.text2,padding:"1px 7px",borderRadius:999,fontSize:10 }}>{t}</span>)}
+                  </div>
+                  {approved===undefined && (
+                    <div style={{ display:"flex",gap:8 }}>
+                      <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
+                        border:`1.5px solid ${T.error}40`,background:"transparent",color:T.error,fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Skip</button>
+                      <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
+                        border:"none",background:T.primary,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
+                        boxShadow:`0 2px 6px ${T.primary}30` }} className="hd">Include ✓</button>
+                    </div>
+                  )}
+                  {approved!==undefined && (
+                    <div style={{ padding:"6px 12px",borderRadius:8,
+                      background:approved?T.successBg:T.errorBg,
+                      color:approved?T.success:T.error,fontSize:12,fontWeight:600,textAlign:"center" }} className="hd">
+                      {approved?"✓ Included":"✗ Skipped"}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-        {Object.keys(poiApproved).length >= poiDisplay.length && (
-          <div style={{ animation:"scaleIn .3s ease-out" }}>
-            <Btn onClick={next} full>{Object.values(poiApproved).filter(v=>v).length} activities selected — Continue →</Btn>
-          </div>
-        )}
-      </div>
+            );
+          })}
+        </div>
+      </GroupRoom>
     </Shell>
   );
 
@@ -2444,13 +2413,13 @@ export default function TripWizard({
   if (stageKey === "duration") return (
     <Shell step={step}>
       <AgentHeader emoji="⏱️" name="Duration Calculator" desc="How many days you need"/>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+      <GroupRoom stageKey="duration" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
         <Chat agent="Duration Agent" emoji="⏱️" msg="Let me calculate the optimal trip length based on your approved activities..."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .3s both" }}>
           <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:12 }}>Trip Duration Breakdown</p>
           {[{ label:"Santorini activities",days:3 },{ label:"Kyoto activities",days:4 },
-            { label:"Travel days (flights + transfers)",days:2 },{ label:"Buffer / rest days",days:1 }].map((r,i)=>(
+            { label:"Travel days",days:2 },{ label:"Buffer / rest days",days:1 }].map((r,i)=>(
             <div key={i} style={{ display:"flex",justifyContent:"space-between",padding:"8px 0",
               borderBottom:i<3?`1px solid ${T.borderLight}`:"none" }}>
               <span style={{ fontSize:14,color:T.text2 }}>{r.label}</span>
@@ -2463,10 +2432,7 @@ export default function TripWizard({
             <span className="hd" style={{ fontWeight:700,fontSize:16,color:T.primary }}>10 days</span>
           </div>
         </div>
-        <YN title="10 days covers everything" agent="Duration Agent"
-          desc="To fully enjoy all 6 approved activities across Santorini and Kyoto with travel and rest days, you need 10 days. Does this work?"
-          onYes={handleDurationContinue} onNo={handleRevise}/>
-      </div>
+      </GroupRoom>
     </Shell>
   );
 
@@ -2482,7 +2448,7 @@ export default function TripWizard({
     return (
       <Shell step={step}>
         <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc="Collecting availability and locking the trip window"/>
-        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        <GroupRoom stageKey="avail" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
           <Chat agent="Sync Agent" emoji="🗓️" msg="Each member should submit an available start and end date. Then we compute overlap and lock one window for the trip."/>
           <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm,animation:"fadeUp .35s ease-out .2s both" }}>
             <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10 }}>Your Availability</p>
@@ -2567,18 +2533,11 @@ export default function TripWizard({
                   </p>
                 </div>
               )}
-              <button
-                onClick={handleAvailabilityLockAndContinue}
-                disabled={!selectedWindow?.start || !selectedWindow?.end || availabilityLockBusy || !hasCommonOverlap}
-                style={{ width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:"none",background:(!hasCommonOverlap || availabilityLockBusy)?T.border:T.success,color:(!hasCommonOverlap || availabilityLockBusy)?T.text3:"#fff",fontSize:14,fontWeight:700,cursor:(!hasCommonOverlap || availabilityLockBusy)?"default":"pointer" }}
-              >
-                {availabilityLockBusy ? "Locking travel window..." : "Lock Travel Window & Continue"}
-              </button>
             </div>
           )}
 
           {apiError && <p style={{ fontSize:12,color:T.error }}>{apiError}</p>}
-        </div>
+        </GroupRoom>
       </Shell>
     );
   }
@@ -2587,7 +2546,7 @@ export default function TripWizard({
   if (stageKey === "budget") return (
     <Shell step={step}>
       <AgentHeader emoji="💰" name="Budget Agent" desc="Setting your spending plan"/>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+      <GroupRoom stageKey="budget" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
         <Chat agent="Budget Agent" emoji="💰" msg="What's your per-person daily budget? Drag the slider to set it."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
@@ -2605,13 +2564,13 @@ export default function TripWizard({
             <span>$50</span><span>$200</span><span>$400</span><span>$800</span>
           </div>
         </div>
-        {/* Pie chart approximation */}
+        {/* Budget allocation — flights removed (individual cost) */}
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .4s both" }}>
-          <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:14 }}>Budget Allocation</p>
+          <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:14 }}>Shared Budget Allocation</p>
           <div style={{ display:"flex",gap:12,alignItems:"center" }}>
             <div style={{ width:100,height:100,borderRadius:999,position:"relative",flexShrink:0,
-              background:`conic-gradient(${T.accent} 0% 30%, ${T.primary} 30% 65%, ${T.secondary} 65% 85%, ${T.warning} 85% 95%, ${T.text3} 95% 100%)` }}>
+              background:`conic-gradient(${T.primary} 0% 40%, ${T.secondary} 40% 65%, ${T.warning} 65% 85%, ${T.accent} 85% 95%, ${T.text3} 95% 100%)` }}>
               <div style={{ position:"absolute",inset:18,borderRadius:999,background:T.surface,
                 display:"flex",alignItems:"center",justifyContent:"center" }}>
                 <span className="hd" style={{ fontWeight:700,fontSize:14,color:T.text }}>${budgetPerDay*10}</span>
@@ -2619,10 +2578,10 @@ export default function TripWizard({
             </div>
             <div style={{ display:"flex",flexDirection:"column",gap:6,flex:1 }}>
               {[
-                { label:"Flights",pct:30,color:T.accent,amt:budgetBreakdown?.flights ?? budgetPerDay*10*.3 },
-                { label:"Stays",pct:35,color:T.primary,amt:budgetBreakdown?.accommodation ?? budgetPerDay*10*.35 },
-                { label:"Food",pct:20,color:T.secondary,amt:budgetBreakdown?.dining ?? budgetPerDay*10*.2 },
-                { label:"Activities",pct:10,color:T.warning,amt:budgetBreakdown?.activities ?? budgetPerDay*10*.1 },
+                { label:"Stays",pct:40,color:T.primary,amt:budgetBreakdown?.accommodation ?? budgetPerDay*10*.4 },
+                { label:"Food",pct:25,color:T.secondary,amt:budgetBreakdown?.dining ?? budgetPerDay*10*.25 },
+                { label:"Activities",pct:20,color:T.warning,amt:budgetBreakdown?.activities ?? budgetPerDay*10*.2 },
+                { label:"Transport",pct:10,color:T.accent,amt:budgetBreakdown?.transport ?? budgetPerDay*10*.1 },
                 { label:"Buffer",pct:5,color:T.text3,amt:budgetBreakdown?.misc ?? budgetPerDay*10*.05 },
               ].map((c,i)=>(
                 <div key={i} style={{ display:"flex",alignItems:"center",gap:8 }}>
@@ -2633,11 +2592,11 @@ export default function TripWizard({
               ))}
             </div>
           </div>
+          <p style={{ fontSize:11,color:T.text3,marginTop:12,padding:"8px 10px",background:T.borderLight,borderRadius:8 }}>
+            ✈️ Flights are selected individually and not included in this shared budget.
+          </p>
         </div>
-        <YN title={`$${(budgetPerDay*10).toLocaleString()} total per person`} agent="Budget Agent"
-          desc={`At $${budgetPerDay}/day for 10 days, your total budget is $${(budgetPerDay*10).toLocaleString()} per person ($${(budgetPerDay*10*4).toLocaleString()} for the group). Confirm?`}
-          onYes={handleBudgetContinue} onNo={handleRevise}/>
-      </div>
+      </GroupRoom>
     </Shell>
   );
 
@@ -2646,6 +2605,13 @@ export default function TripWizard({
     <Shell step={step}>
       <AgentHeader emoji="✈️" name="Flight Agent" desc="Finding the best flights for your dates"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        <div style={{ background:`${T.primary}08`,border:`1px solid ${T.primary}33`,borderRadius:10,padding:"10px 14px" }}>
+          <p className="hd" style={{ fontSize:13,fontWeight:700,color:T.primary,marginBottom:3 }}>✈️ Individual Selection</p>
+          <p style={{ fontSize:12,color:T.text3,lineHeight:1.5 }}>
+            Each traveler picks flights that fit their own schedule.
+            Flight costs are personal and not part of the shared group budget.
+          </p>
+        </div>
         <Chat agent="Flight Agent" emoji="✈️" msg="Do you need flight bookings?"/>
         <Chat isUser msg="Yes!" delay={100}/>
         <Chat agent="Flight Agent" emoji="✈️" msg="Type a city name to find airports. I'll search each leg and show you the best options." delay={200}/>
@@ -2876,7 +2842,7 @@ export default function TripWizard({
   if (stageKey === "stays") return (
     <Shell step={step}>
       <AgentHeader emoji="🏨" name="Stays Agent" desc="Finding perfect accommodations"/>
-      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+      <GroupRoom stageKey="stays" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
         <Chat agent="Stays Agent" emoji="🏨" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
         {stayDisplay.map((s,i)=>{
           const picked = stayPicks[i];
@@ -2920,10 +2886,7 @@ export default function TripWizard({
             </div>
           );
         })}
-        <div style={{ animation:"scaleIn .3s ease-out" }}>
-          <Btn onClick={handleStaysContinue} full>Continue to Dining →</Btn>
-        </div>
-      </div>
+      </GroupRoom>
     </Shell>
   );
 
@@ -2932,44 +2895,106 @@ export default function TripWizard({
     <Shell step={step}>
       <AgentHeader emoji="🍽️" name="Dining Agent" desc="Restaurant picks matching your diet & budget"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Dining Agent" emoji="🍽️" msg="Here are restaurant suggestions for each day, matching your group's dietary needs and budget:"/>
-        {[1,2].map(day=>(
-          <div key={day} style={{ animation:`fadeUp .35s ease-out ${day*.15}s both` }}>
-            <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10,color:T.text }}>Day {day} — {day===1?"Santorini":"Santorini"}</p>
-            {diningDisplay.filter(d=>d.day===day).map((d,i)=>{
-              const k = `${day}-${i}`;
-              const approved = diningApproved[k];
-              return (
-                <div key={k} style={{ background:T.surface,borderRadius:12,padding:"12px 16px",marginBottom:8,
-                  border:`1px solid ${T.borderLight}`,display:"flex",alignItems:"center",gap:12,
-                  opacity:approved===false?.4:1,transition:"opacity .3s" }}>
-                  <div style={{ fontSize:22,width:36,textAlign:"center" }}>{d.meal==="Breakfast"?"🌅":d.meal==="Lunch"?"☀️":"🌙"}</div>
-                  <div style={{ flex:1,minWidth:0 }}>
-                    <div style={{ display:"flex",alignItems:"baseline",gap:6 }}>
-                      <span className="hd" style={{ fontWeight:600,fontSize:14 }}>{d.name}</span>
-                      <span style={{ fontSize:11,color:T.text3 }}>{d.cuisine}</span>
+        <Chat agent="Dining Agent" emoji="🍽️" msg="Date-based meal options are planned near your POIs, including travel-time estimates between activities and restaurants."/>
+        {[...new Set(diningDisplay.map((d) => d.day))].sort((a, b) => a - b).map((day) => {
+          const dayRows = diningDisplay.filter((d) => d.day === day);
+          const dayFirst = dayRows[0] || {};
+          const dayDateLabel = dayFirst.date
+            ? new Date(`${dayFirst.date}T00:00:00`).toLocaleDateString(undefined, {
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+              })
+            : null;
+          const dayCity = dayFirst?.options?.[0]?.city || "";
+          return (
+            <div key={day} style={{ animation:`fadeUp .35s ease-out ${day*.12}s both` }}>
+              <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10,color:T.text }}>
+                Day {day}{dayDateLabel ? ` — ${dayDateLabel}` : ""}{dayCity ? ` · ${dayCity}` : ""}
+              </p>
+              {dayRows.map((slot, slotIdx) => {
+                const k = slot.slotId || `${day}-${slotIdx}`;
+                const approved = diningApproved[k];
+                const options = Array.isArray(slot.options) ? slot.options : [];
+                const selectedIdx = Number.isInteger(diningSelections[k]) && diningSelections[k] >= 0 && diningSelections[k] < options.length
+                  ? diningSelections[k]
+                  : 0;
+                const selectedOption = options[selectedIdx] || options[0] || null;
+                return (
+                  <div key={k} data-testid="dining-item" style={{ background:T.surface,borderRadius:12,padding:"12px 16px",marginBottom:8,
+                    border:`1px solid ${T.borderLight}`,display:"flex",flexDirection:"column",gap:10,
+                    opacity:approved===false?.42:1,transition:"opacity .3s" }}>
+                    <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                      <div style={{ fontSize:22,width:36,textAlign:"center" }}>{slot.meal==="Breakfast"?"🌅":slot.meal==="Lunch"?"☀️":"🌙"}</div>
+                      <div style={{ flex:1,minWidth:0 }}>
+                        <div style={{ display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap" }}>
+                          <span className="hd" style={{ fontWeight:700,fontSize:14 }}>{slot.meal}</span>
+                          {slot.time && <span style={{ fontSize:11,color:T.text3 }}>{slot.time}</span>}
+                          {slot.nearPoi && <span style={{ fontSize:11,color:T.text3 }}>near {slot.nearPoi}</span>}
+                        </div>
+                        {slot.travelBetweenPoisMinutes > 0 && (
+                          <div style={{ fontSize:11,color:T.text3,marginTop:2 }}>
+                            Approx. transfer between POIs before this meal: {slot.travelBetweenPoisMinutes} min
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ display:"flex",gap:8,marginTop:3 }}>
-                      <span style={{ fontSize:12,color:T.text2 }}>{d.meal} · ${d.cost}</span>
-                      {d.diet.map(tag=><span key={tag} style={{ fontSize:10,background:`${T.success}12`,color:T.success,
-                        padding:"1px 6px",borderRadius:999 }}>{tag}</span>)}
+                    <div style={{ display:"grid",gridTemplateColumns:"1fr",gap:6 }}>
+                      {options.map((opt, optIdx) => {
+                        const picked = optIdx === selectedIdx;
+                        return (
+                          <button
+                            key={opt.optionId || `${k}-opt-${optIdx}`}
+                            type="button"
+                            onClick={() => setDiningSelections((prev) => ({ ...prev, [k]: optIdx }))}
+                            style={{
+                              textAlign:"left",
+                              borderRadius:10,
+                              border:`1.5px solid ${picked ? T.primary : T.borderLight}`,
+                              background:picked ? `${T.primary}10` : T.bg,
+                              padding:"8px 10px",
+                              cursor:"pointer",
+                              display:"grid",
+                              gridTemplateColumns:"1fr auto",
+                              gap:8,
+                            }}
+                          >
+                            <div style={{ minWidth:0 }}>
+                              <div className="hd" style={{ fontSize:13,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>
+                                {opt.name}
+                              </div>
+                              <div style={{ fontSize:11,color:T.text3,marginTop:2 }}>
+                                {opt.cuisine || "Local"}{opt.city ? ` · ${opt.city}` : ""}{opt.travelMinutes ? ` · ~${opt.travelMinutes} min from POI` : ""}
+                              </div>
+                            </div>
+                            <div style={{ alignSelf:"center",fontSize:12,fontWeight:700,color:T.warning }}>
+                              ${Number(opt.cost || 0)}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:10 }}>
+                      <div style={{ fontSize:12,color:T.text2 }}>
+                        Selected: {selectedOption ? `${selectedOption.name} (${selectedOption.city || "destination"})` : "None"}
+                      </div>
+                      {approved===undefined ? (
+                        <div style={{ display:"flex",gap:4 }}>
+                          <button aria-label="reject-dining" onClick={()=>setDiningApproved((p)=>({...p,[k]:false}))} style={{ width:32,height:32,borderRadius:999,border:`1.5px solid ${T.error}30`,background:"transparent",
+                            color:T.error,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><I n="x" s={14} c={T.error}/></button>
+                          <button aria-label="approve-dining" onClick={()=>setDiningApproved((p)=>({...p,[k]:true}))} style={{ width:32,height:32,borderRadius:999,border:"none",background:T.primary,
+                            color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><I n="check" s={14} c="#fff"/></button>
+                        </div>
+                      ) : (
+                        <span style={{ fontSize:16 }}>{approved?"✅":"❌"}</span>
+                      )}
                     </div>
                   </div>
-                  {approved===undefined ? (
-                    <div style={{ display:"flex",gap:4 }}>
-                      <button onClick={()=>setDiningApproved(p=>({...p,[k]:false}))} style={{ width:32,height:32,borderRadius:999,border:`1.5px solid ${T.error}30`,background:"transparent",
-                        color:T.error,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><I n="x" s={14} c={T.error}/></button>
-                      <button onClick={()=>setDiningApproved(p=>({...p,[k]:true}))} style={{ width:32,height:32,borderRadius:999,border:"none",background:T.primary,
-                        color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><I n="check" s={14} c="#fff"/></button>
-                    </div>
-                  ) : (
-                    <span style={{ fontSize:16 }}>{approved?"✅":"❌"}</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ))}
+                );
+              })}
+            </div>
+          );
+        })}
         {Object.keys(diningApproved).length>=diningDisplay.length && <Btn onClick={handleDiningContinue} full>Continue to Itinerary →</Btn>}
       </div>
     </Shell>
@@ -2980,7 +3005,28 @@ export default function TripWizard({
     <Shell step={step}>
       <AgentHeader emoji="📋" name="Itinerary Agent" desc="Your complete day-by-day plan"/>
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
-        <BudgetMeter spent={1480} allocated={budgetPerDay*10} label="Total Budget"/>
+        <BudgetMeter spent={1480} allocated={budgetPerDay*10} label="Shared Budget"/>
+        {/* Personal flight summary */}
+        {flightLegDisplay.length > 0 && (
+          <div style={{ background:`${T.accent}08`,border:`1px solid ${T.accent}33`,borderRadius:12,padding:"12px 14px" }}>
+            <p className="hd" style={{ fontSize:13,fontWeight:700,color:T.accent,marginBottom:8 }}>✈️ Your Flights</p>
+            {flightLegDisplay.map((leg,li) => {
+              const selId = selectedFlightsByLeg[leg.leg_id];
+              const opt = (leg.options||[]).find(o=>o.option_id===selId);
+              return opt ? (
+                <div key={li} style={{ display:"flex",justifyContent:"space-between",fontSize:12,color:T.text2,
+                  padding:"4px 0",borderBottom:li<flightLegDisplay.length-1?`1px solid ${T.borderLight}`:"none" }}>
+                  <span>{leg.from_airport} → {leg.to_airport} · {opt.airline} · {opt.dep}</span>
+                  <span className="hd" style={{ fontWeight:600,color:T.text }}>${Math.round(opt.price)}</span>
+                </div>
+              ) : (
+                <div key={li} style={{ fontSize:12,color:T.text3,padding:"4px 0" }}>
+                  Leg {li+1}: {leg.from_airport} → {leg.to_airport} — not selected
+                </div>
+              );
+            })}
+          </div>
+        )}
         {itineraryDisplay.map((day,di)=>{
           const typeColors = { flight:T.accent,checkin:T.success,activity:T.secondary,meal:T.primary,rest:"#6366F1" };
           return (
@@ -3113,6 +3159,30 @@ export default function TripWizard({
         <button onClick={()=>setStep(0)} style={{ marginTop:12,background:"none",border:"none",
           color:T.text3,fontSize:13,cursor:"pointer",textDecoration:"underline",minHeight:32,padding:"8px 10px" }}>
           Restart demo
+        </button>
+      </div>
+    </Shell>
+  );
+
+  // ── GROUP → INDIVIDUAL TRANSITION ────────────────────────────────────
+  if (showGroupToIndividualTransition) return (
+    <Shell step={step}>
+      <div style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+        padding:"40px 24px",textAlign:"center",animation:"scaleIn .5s ease-out" }}>
+        <div style={{ fontSize:64,marginBottom:24,animation:"bounceIn .6s ease" }}>🎉</div>
+        <h2 className="hd" style={{ fontWeight:700,fontSize:26,color:T.text,marginBottom:8 }}>Group Plan Locked!</h2>
+        <p style={{ color:T.text2,fontSize:15,maxWidth:360,lineHeight:1.6,marginBottom:8 }}>
+          POIs, stays, and dates are confirmed for all travelers.
+        </p>
+        <p style={{ color:T.text3,fontSize:13,maxWidth:360,lineHeight:1.6,marginBottom:32 }}>
+          Now each traveler picks their own flights that fit their schedule.
+          Flight costs are personal and are not part of the shared group budget.
+        </p>
+        <button onClick={() => { setShowGroupToIndividualTransition(false); next(); }} className="hd"
+          style={{ padding:"14px 32px",borderRadius:12,border:"none",
+            background:T.primary,color:"#fff",fontSize:16,fontWeight:700,
+            cursor:"pointer",minHeight:50,boxShadow:`0 4px 16px ${T.primary}35` }}>
+          Find My Flights ✈️
         </button>
       </div>
     </Shell>

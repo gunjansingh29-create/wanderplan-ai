@@ -538,14 +538,13 @@ async def _require_trip_owner(conn: asyncpg.Connection, trip_id: str, user_id: s
 
 
 def _budget_breakdown(total_budget: float) -> dict[str, float]:
-    flights = round(total_budget * 0.30, 2)
-    accommodation = round(total_budget * 0.30, 2)
-    dining = round(total_budget * 0.20, 2)
-    activities = round(total_budget * 0.10, 2)
-    transport = round(total_budget * 0.05, 2)
-    misc = round(total_budget - (flights + accommodation + dining + activities + transport), 2)
+    # Flights removed — each traveler selects flights individually (personal cost)
+    accommodation = round(total_budget * 0.40, 2)
+    dining = round(total_budget * 0.25, 2)
+    activities = round(total_budget * 0.20, 2)
+    transport = round(total_budget * 0.10, 2)
+    misc = round(total_budget - (accommodation + dining + activities + transport), 2)
     return {
-        "flights": flights,
         "accommodation": accommodation,
         "dining": dining,
         "activities": activities,
@@ -4087,7 +4086,7 @@ async def search_flights(
         await _require_trip_member(conn, trip_id, user_id)
         budget = await conn.fetchrow("SELECT breakdown FROM budgets WHERE trip_id = $1", trip_id)
         budget_breakdown = _json_obj(budget["breakdown"]) if budget else {}
-        budget_flight_hint = float(budget_breakdown.get("flights", 500) or 500)
+        budget_flight_hint = 500.0  # flights are personal; use a reasonable default
 
     start_airport = _airport_code(body.origin, "LAX")
     first_arrival = _airport_code(body.destination, "NRT")
@@ -4878,36 +4877,502 @@ async def get_itinerary(trip_id: str, user_id: str = Depends(get_current_user_id
     return {"itinerary": {"days": days}}
 
 
+_MEAL_SLOTS = ("Breakfast", "Lunch", "Dinner")
+_MEAL_DEFAULT_TIME = {"Breakfast": "08:00", "Lunch": "13:00", "Dinner": "19:00"}
+_MEAL_KEYWORD_BOOSTS = {
+    "Breakfast": {"breakfast", "brunch", "bakery", "coffee", "cafe"},
+    "Lunch": {"lunch", "market", "street", "ramen", "bistro"},
+    "Dinner": {"dinner", "fine", "seafood", "steak", "wine"},
+}
+
+
+def _safe_iso_date(raw: Any) -> Optional[date]:
+    text = str(raw or "").strip()[:10]
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _safe_time_hhmm(raw: Any) -> Optional[time]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return time.fromisoformat(text[:5])
+    except Exception:
+        return None
+
+
+def _slot_times(slot: Any) -> tuple[Optional[time], Optional[time]]:
+    text = str(slot or "").strip()
+    if "-" not in text:
+        return (_safe_time_hhmm(text), None)
+    start_raw, end_raw = text.split("-", 1)
+    return (_safe_time_hhmm(start_raw), _safe_time_hhmm(end_raw))
+
+
+def _minutes_of_day(t: Optional[time]) -> Optional[int]:
+    if not t:
+        return None
+    return int(t.hour) * 60 + int(t.minute)
+
+
+def _hhmm_from_minutes(total_minutes: int) -> str:
+    bounded = max(0, min(total_minutes, 23 * 60 + 59))
+    h = bounded // 60
+    m = bounded % 60
+    return f"{h:02d}:{m:02d}"
+
+
+def _extract_location_hint(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    normalized = (
+        text.replace("→", "->")
+        .replace("|", ",")
+        .replace("/", ",")
+        .replace(";", ",")
+    )
+    if "->" in normalized:
+        normalized = normalized.split("->", 1)[0]
+    if "," in normalized:
+        normalized = normalized.split(",", 1)[0]
+    return normalized.strip()
+
+
+def _normalize_place(city: Any, country: Any, fallback: str = "") -> tuple[str, str]:
+    c = str(city or "").strip()
+    k = str(country or "").strip()
+    if not c and fallback:
+        c = str(fallback).strip()
+    return (c, k)
+
+
+def _estimate_travel_minutes(
+    from_city: str,
+    from_country: str,
+    to_city: str,
+    to_country: str,
+) -> int:
+    fc = from_city.strip().lower()
+    tc = to_city.strip().lower()
+    fk = from_country.strip().lower()
+    tk = to_country.strip().lower()
+    if fc and tc and fc == tc:
+        return 12 + (sum(ord(ch) for ch in fc) % 16)  # 12-27 min local transit
+    if fk and tk and fk == tk:
+        seed = (sum(ord(ch) for ch in (fc + tc + fk)) % 46)
+        return 45 + seed  # 45-90 min regional transit
+    seed = (sum(ord(ch) for ch in (fc + tc + fk + tk)) % 121)
+    return 120 + seed  # 120-240 min major transfer
+
+
+def _cuisine_from_tags(tags: list[str], default_value: str = "Local") -> str:
+    if not tags:
+        return default_value
+    first = str(tags[0] or "").strip()
+    if not first:
+        return default_value
+    return first.replace("_", " ").replace("-", " ").title()
+
+
+def _fallback_meal_options(
+    meal: str,
+    city: str,
+    country: str,
+    near_poi: str,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    base_names = {
+        "Breakfast": ["Sunrise Cafe", "Morning Bakery", "Local Breakfast House"],
+        "Lunch": ["Market Bistro", "Street Kitchen", "Local Lunch Spot"],
+        "Dinner": ["Evening Table", "Harbor Grill", "Chef's Local Kitchen"],
+    }
+    base_cost = {"Breakfast": 18.0, "Lunch": 32.0, "Dinner": 52.0}
+    out: list[dict[str, Any]] = []
+    for idx, base in enumerate(base_names.get(meal, [])):
+        if len(out) >= limit:
+            break
+        label_city = city or "City"
+        name = f"{label_city} {base}"
+        cost = float(base_cost.get(meal, 30.0) + idx * 8)
+        out.append(
+            {
+                "option_id": f"fallback-{meal.lower()}-{idx + 1}",
+                "name": name,
+                "city": city,
+                "country": country,
+                "tags": [meal.lower(), "local"],
+                "cost": cost,
+                "cuisine": "Local",
+                "near_poi": near_poi,
+            }
+        )
+    return out
+
+
+def _meal_candidate_score(
+    meal: str,
+    candidate: dict[str, Any],
+    anchor_city: str,
+    anchor_country: str,
+) -> float:
+    city = str(candidate.get("city") or "").strip().lower()
+    country = str(candidate.get("country") or "").strip().lower()
+    anchor_city_l = anchor_city.strip().lower()
+    anchor_country_l = anchor_country.strip().lower()
+    tags = [str(t or "").strip().lower() for t in (candidate.get("tags") or []) if str(t or "").strip()]
+    rating = float(candidate.get("rating") or 0)
+    cost = float(candidate.get("cost") or 0)
+
+    score = rating * 12.0
+    if city and anchor_city_l and city == anchor_city_l:
+        score += 80.0
+    elif country and anchor_country_l and country == anchor_country_l:
+        score += 35.0
+    score -= min(cost, 250.0) * 0.06
+    if any(token in _MEAL_KEYWORD_BOOSTS.get(meal, set()) for token in tags):
+        score += 12.0
+    if "food" in tags or "dining" in tags:
+        score += 8.0
+    return score
+
+
+def _select_meal_options(
+    meal: str,
+    anchor_city: str,
+    anchor_country: str,
+    near_poi: str,
+    food_candidates: list[dict[str, Any]],
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    scored = sorted(
+        food_candidates,
+        key=lambda c: (-_meal_candidate_score(meal, c, anchor_city, anchor_country), str(c.get("name") or "").lower()),
+    )
+    picked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in scored:
+        if len(picked) >= limit:
+            break
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append(
+            {
+                "option_id": str(row.get("id") or f"synthetic-{meal.lower()}-{len(picked)+1}"),
+                "name": name,
+                "city": str(row.get("city") or "").strip(),
+                "country": str(row.get("country") or "").strip(),
+                "tags": row.get("tags") or [],
+                "cost": float(row.get("cost") or 0),
+                "cuisine": _cuisine_from_tags(row.get("tags") or []),
+                "near_poi": near_poi,
+            }
+        )
+    if len(picked) < limit:
+        for extra in _fallback_meal_options(meal, anchor_city, anchor_country, near_poi, limit=limit - len(picked)):
+            picked.append(extra)
+    return picked[:limit]
+
+
 @app.get("/trips/{trip_id}/dining/suggestions")
 async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
-        rows = await conn.fetch(
+        trip_row = await conn.fetchrow(
+            "SELECT duration_days, created_at FROM trips WHERE id = $1",
+            trip_id,
+        )
+        planning_state_row = await conn.fetchrow(
+            "SELECT state FROM trip_planning_states WHERE trip_id = $1",
+            trip_id,
+        )
+        destination_rows = await conn.fetch(
             """
-            SELECT id, name, city, tags, cost_estimate_usd
-            FROM pois
-            WHERE trip_id = $1 AND category IN ('food', 'dining', 'snorkeling')
-            ORDER BY rating DESC NULLS LAST, created_at ASC
-            LIMIT 12
+            SELECT destination, country
+            FROM bucket_list_items
+            WHERE trip_id = $1
+            ORDER BY vote_score DESC, created_at ASC
+            LIMIT 20
             """,
             trip_id,
         )
-    suggestions = []
-    for idx, row in enumerate(rows):
-        suggestions.append(
+        itinerary_rows = await conn.fetch(
+            """
+            SELECT idy.day_number, idy.date, ia.title, ia.category, ia.location_name, ia.time_slot
+            FROM itinerary_days idy
+            LEFT JOIN itinerary_activities ia ON ia.day_id = idy.id
+            WHERE idy.trip_id = $1
+            ORDER BY idy.day_number ASC, ia.time_slot ASC NULLS LAST, ia.created_at ASC
+            """,
+            trip_id,
+        )
+        poi_rows = await conn.fetch(
+            """
+            SELECT id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+            FROM pois
+            WHERE trip_id = $1
+            ORDER BY approved DESC, rating DESC NULLS LAST, created_at ASC
+            """,
+            trip_id,
+        )
+
+    planning_state = (planning_state_row["state"] or {}) if planning_state_row else {}
+    if not isinstance(planning_state, dict):
+        planning_state = {}
+    locked_window = planning_state.get("availability_locked_window")
+    locked_start = _safe_iso_date((locked_window or {}).get("start")) if isinstance(locked_window, dict) else None
+    locked_end = _safe_iso_date((locked_window or {}).get("end")) if isinstance(locked_window, dict) else None
+
+    default_duration = int((trip_row["duration_days"] if trip_row else 0) or 0)
+    default_duration = max(1, min(default_duration or 3, 21))
+
+    ordered_day_dates: list[date] = []
+    day_by_number: dict[int, date] = {}
+    for row in itinerary_rows:
+        try:
+            day_number = int(row["day_number"] or 0)
+        except Exception:
+            day_number = 0
+        day_date = row["date"]
+        if day_number > 0 and isinstance(day_date, date):
+            if day_number not in day_by_number:
+                day_by_number[day_number] = day_date
+    if day_by_number:
+        ordered_day_dates = [day_by_number[k] for k in sorted(day_by_number.keys())]
+    elif locked_start and locked_end and locked_end >= locked_start:
+        days_in_window = (locked_end - locked_start).days + 1
+        capped_days = max(1, min(days_in_window, default_duration))
+        ordered_day_dates = [locked_start + timedelta(days=i) for i in range(capped_days)]
+    else:
+        base_date = (trip_row["created_at"].date() if trip_row and trip_row["created_at"] else date.today())
+        ordered_day_dates = [base_date + timedelta(days=i) for i in range(default_duration)]
+
+    fallback_destinations = [
+        {
+            "city": str(row["destination"] or "").strip(),
+            "country": str(row["country"] or "").strip(),
+        }
+        for row in destination_rows
+        if str(row["destination"] or "").strip()
+    ]
+
+    poi_candidates: list[dict[str, Any]] = []
+    food_candidates: list[dict[str, Any]] = []
+    for row in poi_rows:
+        item = {
+            "id": str(row["id"]),
+            "name": str(row["name"] or "").strip(),
+            "category": str(row["category"] or "").strip().lower(),
+            "city": str(row["city"] or "").strip(),
+            "country": str(row["country"] or "").strip(),
+            "tags": row["tags"] or [],
+            "rating": float(row["rating"] or 0),
+            "cost": float(row["cost_estimate_usd"] or 0),
+            "approved": bool(row["approved"]),
+        }
+        if item["name"]:
+            poi_candidates.append(item)
+            if item["category"] in {"food", "dining"}:
+                food_candidates.append(item)
+
+    if not food_candidates:
+        for idx, seed in enumerate(POI_CATALOG.get("food", [])):
+            food_candidates.append(
+                {
+                    "id": f"seed-food-{idx+1}",
+                    "name": str(seed.get("name") or "").strip(),
+                    "category": "food",
+                    "city": str(seed.get("city") or "").strip(),
+                    "country": str(seed.get("country") or "").strip(),
+                    "tags": list(seed.get("tags") or []),
+                    "rating": float(seed.get("rating") or 4.3),
+                    "cost": float(seed.get("cost") or 22),
+                    "approved": True,
+                }
+            )
+
+    if not poi_candidates:
+        for idx, seed in enumerate(POI_CATALOG.get("culture", [])[:3]):
+            poi_candidates.append(
+                {
+                    "id": f"seed-poi-{idx+1}",
+                    "name": str(seed.get("name") or "").strip(),
+                    "category": str(seed.get("category") or "culture").lower(),
+                    "city": str(seed.get("city") or "").strip(),
+                    "country": str(seed.get("country") or "").strip(),
+                    "tags": list(seed.get("tags") or []),
+                    "rating": float(seed.get("rating") or 4.2),
+                    "cost": float(seed.get("cost") or 0),
+                    "approved": True,
+                }
+            )
+
+    activities_by_date: dict[date, list[dict[str, Any]]] = {}
+    for row in itinerary_rows:
+        title = str(row["title"] or "").strip()
+        category = str(row["category"] or "").strip().lower()
+        if not title or category == "dining":
+            continue
+        try:
+            day_number = int(row["day_number"] or 0)
+        except Exception:
+            day_number = 0
+        day_date = row["date"]
+        if not isinstance(day_date, date) and day_number > 0 and day_number <= len(ordered_day_dates):
+            day_date = ordered_day_dates[day_number - 1]
+        if not isinstance(day_date, date):
+            continue
+        start_t, end_t = _slot_times(row["time_slot"])
+        location_hint = _extract_location_hint(row["location_name"])
+        city_hint = location_hint
+        country_hint = ""
+        if not city_hint and fallback_destinations:
+            city_hint = fallback_destinations[0]["city"]
+            country_hint = fallback_destinations[0]["country"]
+        activities_by_date.setdefault(day_date, []).append(
             {
-                "id": str(row["id"]),
-                "day": (idx // 3) + 1,
-                "meal": ["Breakfast", "Lunch", "Dinner"][idx % 3],
-                "name": row["name"],
-                "city": row["city"],
-                "tags": row["tags"] or [],
-                "cost": float(row["cost_estimate_usd"] or 0),
+                "title": title,
+                "city": city_hint,
+                "country": country_hint,
+                "start": start_t,
+                "end": end_t,
             }
         )
-    return {"suggestions": suggestions}
+
+    for day_key in list(activities_by_date.keys()):
+        activities_by_date[day_key].sort(
+            key=lambda item: (_minutes_of_day(item.get("start")) or 0, str(item.get("title") or "").lower())
+        )
+
+    suggestions: list[dict[str, Any]] = []
+    for day_idx, day_date in enumerate(ordered_day_dates):
+        day_number = day_idx + 1
+        day_activities = activities_by_date.get(day_date, [])
+        fallback_poi = poi_candidates[day_idx % len(poi_candidates)] if poi_candidates else None
+        fallback_dest = fallback_destinations[day_idx % len(fallback_destinations)] if fallback_destinations else {"city": "", "country": ""}
+        fallback_city = str((fallback_poi or {}).get("city") or fallback_dest.get("city") or "").strip()
+        fallback_country = str((fallback_poi or {}).get("country") or fallback_dest.get("country") or "").strip()
+
+        def anchor_for_meal(meal_name: str) -> dict[str, Any]:
+            if day_activities:
+                if meal_name == "Breakfast":
+                    return day_activities[0]
+                if meal_name == "Lunch":
+                    return day_activities[len(day_activities) // 2]
+                return day_activities[-1]
+            poi_name = str((fallback_poi or {}).get("name") or f"{fallback_city or 'Destination'} highlights").strip()
+            return {
+                "title": poi_name,
+                "city": fallback_city,
+                "country": fallback_country,
+                "start": None,
+                "end": None,
+            }
+
+        prev_anchor = None
+        for meal_name in _MEAL_SLOTS:
+            anchor = anchor_for_meal(meal_name)
+            anchor_city, anchor_country = _normalize_place(
+                anchor.get("city"),
+                anchor.get("country"),
+                fallback_city,
+            )
+            near_poi = str(anchor.get("title") or fallback_city or "trip highlights").strip()
+
+            default_minutes = _minutes_of_day(_safe_time_hhmm(_MEAL_DEFAULT_TIME[meal_name])) or 12 * 60
+            anchor_start = _minutes_of_day(anchor.get("start"))
+            anchor_end = _minutes_of_day(anchor.get("end"))
+            meal_minutes = default_minutes
+            if meal_name == "Breakfast" and anchor_start is not None:
+                meal_minutes = max(6 * 60 + 30, anchor_start - 90)
+            elif meal_name == "Lunch" and anchor_end is not None:
+                meal_minutes = max(11 * 60, anchor_end + 45)
+            elif meal_name == "Dinner" and anchor_end is not None:
+                meal_minutes = max(18 * 60, anchor_end + 75)
+            meal_time = _hhmm_from_minutes(meal_minutes)
+
+            transfer_between_pois = 0
+            if prev_anchor:
+                transfer_between_pois = _estimate_travel_minutes(
+                    str(prev_anchor.get("city") or ""),
+                    str(prev_anchor.get("country") or ""),
+                    anchor_city,
+                    anchor_country,
+                )
+
+            options = _select_meal_options(
+                meal_name,
+                anchor_city,
+                anchor_country,
+                near_poi,
+                food_candidates,
+                limit=3,
+            )
+            enriched_options = []
+            for option in options:
+                option_city, option_country = _normalize_place(option.get("city"), option.get("country"), anchor_city)
+                travel_minutes = _estimate_travel_minutes(anchor_city, anchor_country, option_city, option_country)
+                tags = option.get("tags") or []
+                enriched_options.append(
+                    {
+                        "option_id": str(option.get("option_id") or ""),
+                        "name": str(option.get("name") or "").strip(),
+                        "city": option_city,
+                        "country": option_country,
+                        "tags": tags,
+                        "cost": float(option.get("cost") or 0),
+                        "cuisine": _cuisine_from_tags(tags),
+                        "near_poi": near_poi,
+                        "travel_minutes": int(travel_minutes),
+                    }
+                )
+            if not enriched_options:
+                prev_anchor = anchor
+                continue
+
+            top = enriched_options[0]
+            slot_id = f"{day_date.isoformat()}-{meal_name.lower()}"
+            suggestions.append(
+                {
+                    "id": str(top["option_id"] or slot_id),
+                    "slot_id": slot_id,
+                    "day": day_number,
+                    "date": day_date.isoformat(),
+                    "meal": meal_name,
+                    "time": meal_time,
+                    "name": top["name"],
+                    "city": top["city"],
+                    "country": top["country"],
+                    "tags": top["tags"],
+                    "cost": float(top["cost"]),
+                    "cuisine": top["cuisine"],
+                    "near_poi": near_poi,
+                    "travel_from_poi_minutes": int(top["travel_minutes"]),
+                    "travel_between_pois_minutes": int(transfer_between_pois),
+                    "options": enriched_options,
+                }
+            )
+            prev_anchor = anchor
+
+    window = None
+    if ordered_day_dates:
+        window = {
+            "start": ordered_day_dates[0].isoformat(),
+            "end": ordered_day_dates[-1].isoformat(),
+        }
+    return {"window": window, "suggestions": suggestions}
 
 
 @app.post("/analytics/event", status_code=202)

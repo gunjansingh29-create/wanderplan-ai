@@ -933,6 +933,30 @@ export default function WanderPlan(){
       return r;
     }).catch(function(){return null;});
   }
+  function chooseMealOption(dayIndex, mealIndex, optionIndex){
+    setMeals(function(prev){
+      var next=(Array.isArray(prev)?prev:[]).map(function(day){return Object.assign({},day,{meals:Array.isArray(day.meals)?day.meals.slice():[]});});
+      if(!next[dayIndex]||!next[dayIndex].meals||!next[dayIndex].meals[mealIndex])return prev;
+      var meal=Object.assign({},next[dayIndex].meals[mealIndex]);
+      var opts=Array.isArray(meal.options)?meal.options:[];
+      if(!(optionIndex>=0&&optionIndex<opts.length))return prev;
+      var picked=opts[optionIndex]||{};
+      meal.selectedOption=optionIndex;
+      meal.name=String(picked.name||meal.name||"");
+      meal.cuisine=String(picked.cuisine||meal.cuisine||"Local");
+      meal.cost=Number((picked.cost!==undefined)?picked.cost:meal.cost)||0;
+      meal.note=String(picked.note||picked.near_poi||meal.note||"");
+      meal.city=String(picked.city||meal.city||"");
+      meal.travelMinutes=Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(picked.travelMinutes!==undefined)?picked.travelMinutes:meal.travelMinutes)||0;
+      next[dayIndex].meals[mealIndex]=meal;
+      return next;
+    });
+    setMS(function(prev){
+      var n=Object.assign({},prev||{});
+      delete n[dayIndex+"-"+mealIndex];
+      return n;
+    });
+  }
   async function refreshCurrentTripSharedState(token,tripId){
     var tok=token||authToken;
     var tid=String(tripId||currentTripId||"").trim();
@@ -2914,8 +2938,44 @@ export default function WanderPlan(){
               if(sug.length>0){
                 var byDay={};
                 sug.forEach(function(s){
-                  var d=s.day||1;if(!byDay[d])byDay[d]={day:d,destination:s.city||"City",meals:[]};
-                  byDay[d].meals.push({type:s.meal||"Meal",name:s.name,cuisine:(s.tags&&s.tags[0])||"Local",cost:s.cost||0,dietaryOk:true,note:(s.tags||[]).join(", ")});
+                  var d=Number(s.day||1)||1;
+                  if(!byDay[d])byDay[d]={day:d,date:s.date||"",destination:s.city||s.poi_city||"City",meals:[]};
+                  var options=(Array.isArray(s.options)&&s.options.length>0?s.options:[{
+                    option_id:s.id||("meal-"+d+"-"+String(s.meal||"meal").toLowerCase()),
+                    name:s.name||"Restaurant",
+                    city:s.city||"",
+                    cuisine:s.cuisine||((s.tags&&s.tags[0])||"Local"),
+                    cost:s.cost||0,
+                    tags:s.tags||[],
+                    near_poi:s.near_poi||"",
+                    travel_minutes:s.travel_from_poi_minutes||0
+                  }]).map(function(o,oi){
+                    return {
+                      option_id:o.option_id||("opt-"+d+"-"+oi),
+                      name:o.name||"Restaurant",
+                      city:o.city||"",
+                      cuisine:o.cuisine||((o.tags&&o.tags[0])||"Local"),
+                      cost:Number((o.cost!==undefined)?o.cost:0)||0,
+                      tags:Array.isArray(o.tags)?o.tags:[],
+                      near_poi:o.near_poi||s.near_poi||"",
+                      travel_minutes:Number((o.travel_minutes!==undefined)?o.travel_minutes:0)||0
+                    };
+                  });
+                  var top=options[0]||{};
+                  byDay[d].meals.push({
+                    type:s.meal||"Meal",
+                    time:s.time||"",
+                    date:s.date||"",
+                    options:options,
+                    selectedOption:0,
+                    name:top.name||s.name||"Restaurant",
+                    city:top.city||s.city||"",
+                    cuisine:top.cuisine||((s.tags&&s.tags[0])||"Local"),
+                    cost:Number((top.cost!==undefined)?top.cost:(s.cost||0))||0,
+                    dietaryOk:true,
+                    note:top.near_poi||s.near_poi||((s.tags||[]).join(", ")),
+                    travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s.travel_from_poi_minutes||0))||0
+                  });
                 });
                 var rows=Object.keys(byDay).sort(function(a,b){return Number(a)-Number(b);}).map(function(k){return byDay[k];});
                 setMeals(rows);setML(false);setMD(true);return;
@@ -2930,21 +2990,39 @@ export default function WanderPlan(){
         {mealDone&&meals.length>0&&(<div>
           {meals.map(function(day,di){
             return(<div key={di} style={{marginBottom:16}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>Day {day.day}</span><span style={{fontSize:12,color:C.tx3}}>{day.destination}</span></div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>Day {day.day}</span><span style={{fontSize:12,color:C.tx3}}>{day.destination}{day.date?(" · "+day.date):""}</span></div>
               {(day.meals||[]).map(function(m,mi){var k=di+"-"+mi;var st=mealStatus[k];var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
-                return(<div key={mi} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:mi<(day.meals||[]).length-1?"1px solid "+C.border:"none",opacity:st==="no"?.35:1}}>
-                  <div style={{width:6,height:6,borderRadius:999,background:typeCol,flexShrink:0}}/>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:10,color:typeCol,fontWeight:600}}>{m.type}</span><span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span></div>
-                    <div style={{display:"flex",gap:8,fontSize:11,color:C.tx3}}><span>{m.cuisine}</span>{m.note&&<span style={{fontStyle:"italic"}}>{m.note}</span>}</div>
+                var opts=Array.isArray(m.options)?m.options:[];
+                var selectedOpt=(m.selectedOption!==undefined&&m.selectedOption!==null)?m.selectedOption:0;
+                return(<div key={mi} style={{display:"flex",flexDirection:"column",gap:6,padding:"8px 0",borderBottom:mi<(day.meals||[]).length-1?"1px solid "+C.border:"none",opacity:st==="no"?.35:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{width:6,height:6,borderRadius:999,background:typeCol,flexShrink:0}}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                        <span style={{fontSize:10,color:typeCol,fontWeight:600}}>{m.type}</span>
+                        {m.time&&<span style={{fontSize:10,color:C.tx3}}>{m.time}</span>}
+                        <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>
+                      </div>
+                      <div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,flexWrap:"wrap"}}>
+                        <span>{m.cuisine}</span>
+                        {m.travelMinutes? <span>{"~"+m.travelMinutes+" min from POI"}</span> : null}
+                        {m.note&&<span style={{fontStyle:"italic"}}>{m.note}</span>}
+                      </div>
+                    </div>
+                    <span style={{fontSize:13,fontWeight:600,color:C.goldT,flexShrink:0}}>{"$"+(m.cost||0)}</span>
+                    {!st&&(<div style={{display:"flex",gap:4,flexShrink:0}}>
+                      <button onClick={function(e){e.stopPropagation();setMS(function(p){var n=Object.assign({},p);n[k]="yes";return n;});}} style={{width:22,height:22,borderRadius:6,border:"1px solid "+C.grn+"30",background:"transparent",color:C.grn,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center"}}>Y</button>
+                      <button onClick={function(e){e.stopPropagation();setMS(function(p){var n=Object.assign({},p);n[k]="no";return n;});}} style={{width:22,height:22,borderRadius:6,border:"1px solid "+C.red+"30",background:"transparent",color:C.red,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center"}}>N</button>
+                    </div>)}
+                    {st==="yes"&&<span style={{fontSize:10,color:C.grn,flexShrink:0}}>OK</span>}
+                    {st==="no"&&<span style={{fontSize:10,color:C.red,flexShrink:0}}>X</span>}
                   </div>
-                  <span style={{fontSize:13,fontWeight:600,color:C.goldT,flexShrink:0}}>{"$"+(m.cost||0)}</span>
-                  {!st&&(<div style={{display:"flex",gap:4,flexShrink:0}}>
-                    <button onClick={function(e){e.stopPropagation();setMS(function(p){var n=Object.assign({},p);n[k]="yes";return n;});}} style={{width:22,height:22,borderRadius:6,border:"1px solid "+C.grn+"30",background:"transparent",color:C.grn,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center"}}>Y</button>
-                    <button onClick={function(e){e.stopPropagation();setMS(function(p){var n=Object.assign({},p);n[k]="no";return n;});}} style={{width:22,height:22,borderRadius:6,border:"1px solid "+C.red+"30",background:"transparent",color:C.red,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center"}}>N</button>
+                  {opts.length>1&&(<div style={{display:"flex",gap:6,flexWrap:"wrap",paddingLeft:16}}>
+                    {opts.map(function(opt,oi){
+                      var picked=selectedOpt===oi;
+                      return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{opt.name}{" · $"+(opt.cost||0)}</button>;
+                    })}
                   </div>)}
-                  {st==="yes"&&<span style={{fontSize:10,color:C.grn,flexShrink:0}}>OK</span>}
-                  {st==="no"&&<span style={{fontSize:10,color:C.red,flexShrink:0}}>X</span>}
                 </div>);
               })}
             </div>);
