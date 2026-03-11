@@ -421,6 +421,58 @@ function normalizeStays(rows,dests,budgetTier,totalNights){
   return out;
 }
 
+function formatDateISO(d){
+  var dt=d instanceof Date?d:new Date(d);
+  if(Number.isNaN(dt.getTime()))dt=new Date();
+  return dt.toISOString().slice(0,10);
+}
+
+async function askStaysBackend(tripId,destinations,budgetTier,totalNights,token){
+  var tid=String(tripId||"").trim();
+  if(!(token&&tid&&isUuidLike(tid)))return [];
+  var dests=Array.isArray(destinations)?destinations:[];
+  if(dests.length===0)return [];
+
+  var budgetCaps={budget:130,moderate:260,premium:420,luxury:700};
+  var maxPrice=budgetCaps[budgetTier]||budgetCaps.moderate;
+  var nightsEach=Math.max(1,Math.round((totalNights||10)/Math.max(dests.length,1)));
+  var today=new Date();
+  var checkIn=formatDateISO(today);
+  var checkOut=formatDateISO(new Date(today.getTime()+nightsEach*24*60*60*1000));
+
+  var out=[];
+  for(var i=0;i<dests.length;i++){
+    var d=dests[i]||{};
+    var city=String(d.name||d.destination||"").trim();
+    if(!city)continue;
+    try{
+      var r=await apiJson("/trips/"+tid+"/stays/search",{method:"POST",body:{
+        city:city,
+        check_in:checkIn,
+        check_out:checkOut,
+        max_price:maxPrice
+      }},token);
+      var rows=(r&&Array.isArray(r.stays))?r.stays:[];
+      rows.forEach(function(s){
+        out.push({
+          name:String(s&&s.name||"").trim(),
+          destination:city,
+          type:String(s&&s.type||"Hotel"),
+          rating:Number(s&&s.rating||4.3)||4.3,
+          ratePerNight:Number(s&&s.price_per_night_usd||0)||0,
+          totalNights:Number(s&&s.nights||nightsEach)||nightsEach,
+          amenities:["WiFi"],
+          neighborhood:"",
+          bookingSource:"WanderPlan Search",
+          whyThisOne:"Matches your trip budget and destination.",
+          cancellation:"Check provider policy"
+        });
+      });
+    }catch(e){}
+  }
+  return out;
+}
+
 async function askDining(destinations, budgetTier, dietary, days, groupSize) {
   var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
   var destStr = (destinations || []).map(function(d) { return d.name + ", " + d.country; }).join("; ") || "Kyoto, Japan";
@@ -2722,21 +2774,37 @@ export default function WanderPlan(){
       var pickedStays=[];destList.forEach(function(d){if(stayPick[d]!==undefined){var s=destGroups[d][stayPick[d]];if(s)pickedStays.push(s);}});
       var totalCost=pickedStays.reduce(function(s,st){return s+(st.ratePerNight||0)*(st.totalNights||1);},0);
 
-      function runStayLLM(){
+      async function runStayLLM(){
         setSL(true);
-        askStays(dests,user.budget,totalN,grpSize).then(function(res){
+        setSD(false);
+        try{
+          var res=await askStays(dests,user.budget,totalN,grpSize);
           var norm=normalizeStays(res,dests,user.budget,totalN);
+          if(norm.length===0){
+            var fbRows=await askStaysBackend(currentTripId,dests,user.budget,totalN,authToken);
+            norm=normalizeStays(fbRows,dests,user.budget,totalN);
+            if(norm.length>0){
+              setSChat(function(p){return p.concat([{from:"agent",text:"Live stay search fallback used. Review and select one per destination."}]);});
+            }
+          }
           setStays(norm);
           setSL(false);
           setSD(true);
           if(norm.length===0){
             setSChat(function(p){return p.concat([{from:"agent",text:"I need more detail. Try: 'boutique hotels with pool in Kyoto under $180'."}]);});
           }
-        }).catch(function(){
+        }catch(e){
+          var fallbackRows=await askStaysBackend(currentTripId,dests,user.budget,totalN,authToken);
+          var fallbackNorm=normalizeStays(fallbackRows,dests,user.budget,totalN);
+          setStays(fallbackNorm);
           setSL(false);
           setSD(true);
-          setSChat(function(p){return p.concat([{from:"agent",text:"Could not generate stays right now. Please try again."}]);});
-        });
+          if(fallbackNorm.length>0){
+            setSChat(function(p){return p.concat([{from:"agent",text:"LLM was unavailable, so I pulled stay options from backend search."}]);});
+          }else{
+            setSChat(function(p){return p.concat([{from:"agent",text:"Could not generate stays right now. Please try again."}]);});
+          }
+        }
       }
 
       function sendStayChat(){
