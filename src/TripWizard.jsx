@@ -73,8 +73,25 @@ function mapMemberFromApi(member) {
 
 function getUserIdFromToken(token) {
   if (!token || typeof token !== "string") return "";
-  if (!token.startsWith("test-token:")) return "";
-  return token.split(":", 2)[1] || "";
+  if (token.startsWith("test-token:")) return token.split(":", 2)[1] || "";
+  const parts = token.split(".");
+  if (parts.length !== 3) return "";
+  try {
+    let payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (payload.length % 4 !== 0) payload += "=";
+    let decoded = "";
+    if (typeof atob === "function") {
+      decoded = atob(payload);
+    } else if (typeof Buffer !== "undefined") {
+      decoded = Buffer.from(payload, "base64").toString("utf8");
+    } else {
+      return "";
+    }
+    const parsed = JSON.parse(decoded);
+    return String(parsed?.sub || parsed?.user_id || parsed?.userId || parsed?.id || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 const AIRPORT_BY_DESTINATION = {
@@ -122,7 +139,7 @@ function inferAirportCode(destinationName, fallback = "NRT") {
      authToken   – Bearer token for /airports/search
      placeholder – input placeholder text
    ═══════════════════════════════════════════════════════════════════════════ */
-function AirportCityInput({ label, value, onChange, authToken, placeholder = "City or airport" }) {
+function AirportCityInput({ label, value, onChange, authToken, placeholder = "City or airport", cityHint }) {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [open, setOpen] = useState(false);
@@ -130,9 +147,33 @@ function AirportCityInput({ label, value, onChange, authToken, placeholder = "Ci
   const timerRef = useRef(null);
   const wrapRef = useRef(null);
 
-  // Sync display when value is set externally (e.g. initial hydration)
+  // Auto-resolve city hint via /airports/search on mount (only when no value is pre-set)
   useEffect(() => {
-    if (value && !query) {
+    if (!cityHint || value) return;
+    let cancelled = false;
+    setBusy(true);
+    fetch(
+      `${API_BASE}/airports/search?q=${encodeURIComponent(cityHint)}`,
+      { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} }
+    )
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (cancelled) return;
+        const airports = data?.airports || [];
+        if (airports.length > 0) {
+          const best = airports[0];
+          onChange(best.iata);
+          setQuery(`${best.city} (${best.iata})`);
+        }
+        setBusy(false);
+      })
+      .catch(() => { if (!cancelled) setBusy(false); });
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync display when value is set externally but no city hint resolved it
+  useEffect(() => {
+    if (value && !query && !cityHint) {
       setQuery(value);
     }
   }, []); // only on mount
@@ -824,6 +865,22 @@ function mapInterestAnswersToCategories(answers = {}) {
   return out;
 }
 
+function mapInterestAnswersToProfileInterests(answers = {}) {
+  const out = {};
+  INTEREST_CATEGORIES.forEach((cat, idx) => {
+    if (!cat) return;
+    const ans = answers[idx];
+    if (ans === "yes") {
+      out[cat] = true;
+      return;
+    }
+    if (ans === "no" && out[cat] !== true) {
+      out[cat] = false;
+    }
+  });
+  return out;
+}
+
 const FLIGHTS = [
   { airline:"Japan Airlines", dep:"10:30", arr:"14:45+1", dur:"14h 15m", stops:0, price:1247, cls:"Premium Economy" },
   { airline:"Emirates", dep:"22:15", arr:"07:30+1", dur:"16h 15m", stops:1, price:980, cls:"Economy" },
@@ -904,10 +961,8 @@ export default function TripWizard({
   const [diningSelections, setDiningSelections] = useState({});
   const [budgetPerDay, setBudgetPerDay] = useState(200);
   const [flightClass, setFlightClass] = useState("economy");
-  const [flightStartAirport, setFlightStartAirport] = useState("LAX");
-  const [flightArrivalAirport, setFlightArrivalAirport] = useState(() =>
-    inferAirportCode((hydratedSession.destinations || [])[0] || "Tokyo", "NRT")
-  );
+  const [flightStartAirport, setFlightStartAirport] = useState("");
+  const [flightArrivalAirport, setFlightArrivalAirport] = useState("");
   const [flightSegmentDates, setFlightSegmentDates] = useState([isoDaysFromNow(30)]);
   const [flightReturnDate, setFlightReturnDate] = useState(isoDaysFromNow(39));
   const [flightDestinationAirports, setFlightDestinationAirports] = useState({});
@@ -1704,29 +1759,50 @@ export default function TripWizard({
   };
 
   const handleInterestsContinue = async () => {
-    if (!tripId || !authToken || !currentUserId) {
+    if (!tripId || !authToken) {
       next();
       return;
     }
+    setApiBusy(true);
+    setApiError("");
     const categories = mapInterestAnswersToCategories(interestAnswers);
+    const profileInterests = mapInterestAnswersToProfileInterests(interestAnswers);
     try {
-      await apiJson(`/trips/${tripId}/members/${currentUserId}/interests`, {
+      // Persist account-level profile interests so POI fallbacks can use them for all users.
+      await apiJson("/me/profile", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
-          categories: categories.length > 0 ? categories : ["culture", "food"],
-          intensity: "moderate",
-          must_do: [],
-          avoid: [],
+          interests: profileInterests,
         }),
       });
+    } catch {}
+
+    try {
+      if (currentUserId) {
+        await apiJson(`/trips/${tripId}/members/${currentUserId}/interests`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            categories: categories.length > 0 ? categories : ["culture", "food"],
+            intensity: "moderate",
+            must_do: [],
+            avoid: [],
+          }),
+        });
+      }
       next();
     } catch (err) {
       setApiError(err?.message || "Failed to save interests");
       next();
+    } finally {
+      setApiBusy(false);
     }
   };
 
@@ -2650,6 +2726,7 @@ export default function TripWizard({
               onChange={setFlightArrivalAirport}
               authToken={authToken}
               placeholder={destinations[0] || "e.g. Tokyo"}
+              cityHint={flightArrivalAirport ? undefined : destinations[0]}
             />
           </div>
           {destinations.slice(1).map((dest, idx) => {
@@ -2663,6 +2740,7 @@ export default function TripWizard({
                 onChange={(code) => setFlightDestinationAirports((prev) => ({ ...prev, [legIndex]: code }))}
                 authToken={authToken}
                 placeholder={dest}
+                cityHint={overrideCode ? undefined : dest}
               />
             );
           })}
@@ -3211,4 +3289,4 @@ export default function TripWizard({
   return null;
 }
 
-export { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode, mapInterestAnswersToCategories };
+export { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode, mapInterestAnswersToCategories, mapInterestAnswersToProfileInterests };
