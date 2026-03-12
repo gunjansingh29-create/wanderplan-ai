@@ -586,16 +586,22 @@ async function askDining(destinations, budgetTier, dietary, days, groupSize) {
   return Array.isArray(res) ? res : [];
 }
 
-async function askItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, budgetTier, days, groupSize) {
+async function askItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, budgetTier, days, groupSize, startDateIso) {
   var dNames = (destinations || []).map(function(d) { return d.name; });
   var destStr = dNames.join(", ") || "the destinations";
   var actList = (acceptedPOIs || []).slice(0, 8).map(function(p) { return p.name + " in " + (p.destination || ""); }).join(", ") || "sightseeing";
   var stayList = (pickedStays || []).map(function(s) { return s.name + " (" + (s.destination || "") + ")"; }).join(", ") || "hotel";
   var mealList = (approvedMeals || []).slice(0, 6).map(function(m) { return m.type + " at " + m.name; }).join(", ") || "local restaurants";
-  var numDays = days || 5;
-  var showDays = Math.min(numDays, 4);
-  var sys = "Build a " + showDays + "-day travel itinerary sample. Return ONLY a JSON array. No markdown.\n\nFormat: [{\"day\":1,\"date\":\"Oct 8\",\"destination\":\"City\",\"theme\":\"Theme\",\"items\":[{\"time\":\"09:00\",\"type\":\"activity\",\"title\":\"Name\",\"cost\":0}]}]\n\ntype must be one of: flight, checkin, checkout, activity, meal, travel, rest\nPlan " + showDays + " days for " + destStr + ".\nUse these activities: " + actList + "\nStays: " + stayList + "\nMeals: " + mealList + "\n5-6 items per day. Day 1 starts with arrival. ONLY JSON array.";
-  var msg = "Create " + showDays + "-day itinerary for " + (groupSize || 2) + " people visiting " + destStr;
+  var numDays = Math.max(1, Number(days || 5) || 5);
+  var showDays = Math.min(numDays, 21);
+  var startDate = String(startDateIso || "").trim().slice(0,10);
+  var hasIsoStart = /^\d{4}-\d{2}-\d{2}$/.test(startDate);
+  if(!hasIsoStart)startDate="";
+  var dateRule = startDate
+    ? ("Start date is " + startDate + ". Increment one day for each itinerary day.")
+    : "Use consecutive ISO dates in YYYY-MM-DD format.";
+  var sys = "Build a " + showDays + "-day travel itinerary. Return ONLY a JSON array. No markdown.\n\nFormat: [{\"day\":1,\"date\":\"YYYY-MM-DD\",\"destination\":\"City\",\"theme\":\"Theme\",\"items\":[{\"time\":\"09:00\",\"type\":\"activity\",\"title\":\"Name\",\"cost\":0}]}]\n\ntype must be one of: flight, checkin, checkout, activity, meal, travel, rest\nPlan " + showDays + " days for " + destStr + ".\n" + dateRule + "\nUse these activities: " + actList + "\nStays: " + stayList + "\nMeals: " + mealList + "\n5-6 items per day. Day 1 starts with arrival. ONLY JSON array.";
+  var msg = "Create " + showDays + "-day itinerary for " + (groupSize || 2) + " people visiting " + destStr + (startDate?(". Start on "+startDate+"."):"");
   var res = await callLLM(sys, msg, 1500);
   return Array.isArray(res) ? res : [];
 }
@@ -2556,20 +2562,20 @@ export default function WanderPlan(){
             setID(true);
             return;
           }
-          return askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize).then(function(res){
+          return askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(function(res){
             setItin(res&&res.length?res:[]);
             setIL(false);
             setID(true);
           });
         }).catch(function(){
-          askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize).then(function(res){
+          askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(function(res){
             setItin(res&&res.length?res:[]);
             setIL(false);
             setID(true);
           });
         });
       }else{
-        askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize).then(function(res){
+        askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(function(res){
           setItin(res&&res.length?res:[]);
           setIL(false);
           setID(true);
