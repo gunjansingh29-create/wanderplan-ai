@@ -1687,7 +1687,7 @@ export default function TripWizard({
     if (votedCount >= poiDisplay.length && !myVotes["pois"]) {
       handleMemberVote("pois");
     }
-  }, [poiApproved, poiDisplay.length, stageKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [poiApproved, poiDisplay.length, stageKey]);
 
   // ── Poll POI vote counts every 5 s so all members see live tallies ──────────
   useEffect(() => {
@@ -1708,7 +1708,7 @@ export default function TripWizard({
     }
     const interval = setInterval(syncPoiVotes, 5000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [stageKey, tripId, authToken, demoMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stageKey, tripId, authToken, demoMode]);
 
   // ── Load MyCrew from localStorage when entering Create stage ───────────
   useEffect(() => {
