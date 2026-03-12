@@ -254,6 +254,82 @@ function readPoiVoteRow(votesMap,poi,idx){
   return {key:key,row:row};
 }
 
+function readPoiSelectionRow(selectionMap,poi,idx){
+  var map=(selectionMap&&typeof selectionMap==="object")?selectionMap:{};
+  var key=canonicalPoiVoteKey(poi,idx);
+  var row=map[key];
+  if(!(row&&typeof row==="object")){
+    row=map[idx];
+    if(!(row&&typeof row==="object")){
+      row=map[String(idx)];
+    }
+  }
+  if(!(row&&typeof row==="object"))row={};
+  return {key:key,row:row};
+}
+
+function hasAnyYesInPoiSelectionRow(row){
+  var src=(row&&typeof row==="object")?row:{};
+  var yes=false;
+  Object.keys(src).forEach(function(k){
+    if(yes)return;
+    var v=String(src[k]||"").trim().toLowerCase();
+    if(v==="yes")yes=true;
+  });
+  return yes;
+}
+
+function normalizePoiForSharedPool(poi){
+  var src=(poi&&typeof poi==="object")?poi:{};
+  var name=String(src.name||"").trim();
+  if(!name)return null;
+  var rawCat=String(src.category||"Culture").trim();
+  var category=rawCat?rawCat.charAt(0).toUpperCase()+rawCat.slice(1).toLowerCase():"Culture";
+  return {
+    poi_id:String(src.poi_id||src.id||"").trim(),
+    name:name,
+    destination:String(src.destination||src.city||src.country||"").trim(),
+    country:String(src.country||"").trim(),
+    category:category,
+    duration:String(src.duration||"2-3h"),
+    cost:Number((src.cost!==undefined)?src.cost:((src.cost_estimate_usd!==undefined)?src.cost_estimate_usd:0))||0,
+    rating:Number((src.rating!==undefined)?src.rating:4.5)||4.5,
+    matchReason:String(src.matchReason||""),
+    tags:Array.isArray(src.tags)?src.tags:[],
+    approved:typeof src.approved==="boolean"?src.approved:null
+  };
+}
+
+function mergePoiListsByCanonical(localRows, sharedPool){
+  var out=[];
+  var seen={};
+  function addPoi(raw,fallback){
+    var normalized=normalizePoiForSharedPool(raw);
+    if(!normalized)return;
+    var key=canonicalPoiVoteKey(normalized,fallback);
+    if(seen[key])return;
+    seen[key]=1;
+    out.push(normalized);
+  }
+  (Array.isArray(localRows)?localRows:[]).forEach(function(p,idx){addPoi(p,idx);});
+  var pool=(sharedPool&&typeof sharedPool==="object")?sharedPool:{};
+  Object.keys(pool).forEach(function(k){addPoi(pool[k],k);});
+  return out;
+}
+
+function buildPoiOptionPoolPatch(rows, existingPool){
+  var patch={};
+  var pool=(existingPool&&typeof existingPool==="object")?existingPool:{};
+  (Array.isArray(rows)?rows:[]).forEach(function(raw,idx){
+    var normalized=normalizePoiForSharedPool(raw);
+    if(!normalized)return;
+    var key=canonicalPoiVoteKey(normalized,idx);
+    if(pool[key]&&typeof pool[key]==="object")return;
+    patch[key]=normalized;
+  });
+  return patch;
+}
+
 function summarizeInterestConsensus(catId,myInterests,members,tripJoinedMap){
   var yesCount=0;
   var totalCount=0;
@@ -664,6 +740,8 @@ export default function WanderPlan(){
   var[poiDone,setPD]=useState(false);
   var[poiStatus,setPS]=useState({});
   var[poiVotes,setPV]=useState({});
+  var[poiMemberChoices,setPMC]=useState({});
+  var[poiOptionPool,setPOP]=useState({});
   var[poiAsk,setPA]=useState("");
   var[poiAskLoad,setPAL]=useState(false);
   var[flightDates,setFD]=useState({origin:"",depart:"",arrive:"",ret:""});
@@ -1181,6 +1259,30 @@ export default function WanderPlan(){
       var st=(ps&&ps.state&&typeof ps.state==="object")?ps.state:{};
       if(st.dest_member_votes&&typeof st.dest_member_votes==="object")setDMV(st.dest_member_votes);
       if(st.poi_votes&&typeof st.poi_votes==="object")setPV(st.poi_votes);
+      if(st.poi_option_pool&&typeof st.poi_option_pool==="object"){
+        setPOP(st.poi_option_pool);
+        setPois(function(prev){
+          var base=Array.isArray(prev)?prev:[];
+          var merged=mergePoiListsByCanonical(base,st.poi_option_pool);
+          if(merged.length===base.length)return base;
+          return merged;
+        });
+      }
+      if(st.poi_member_choices&&typeof st.poi_member_choices==="object"){
+        setPMC(st.poi_member_choices);
+        var me=getCurrentPlannerId();
+        if(me){
+          setPS(function(prev){
+            var next=Object.assign({},prev||{});
+            (pois||[]).forEach(function(p,idx){
+              var rowMeta=readPoiSelectionRow(st.poi_member_choices,p,idx);
+              var v=String((rowMeta.row&&rowMeta.row[me])||"").trim().toLowerCase();
+              if(v==="yes"||v==="no")next[idx]=v;
+            });
+            return next;
+          });
+        }
+      }
     }catch(e){}
   }
   function saveTripPlanningState(patch){
@@ -1290,6 +1392,18 @@ export default function WanderPlan(){
     },syncMs);
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,currentTripId,user.email,wizStep]);
+  useEffect(function(){
+    if(!loaded||!authToken||sc!=="wizard"||!currentTripId||!isUuidLike(currentTripId))return;
+    if(wizStep<5)return;
+    if(!Array.isArray(pois)||pois.length===0)return;
+    var patch=buildPoiOptionPoolPatch(pois,poiOptionPool);
+    var keys=Object.keys(patch);
+    if(keys.length===0)return;
+    setPOP(function(prev){return Object.assign({},prev||{},patch);});
+    saveTripPlanningState({state:{poi_option_pool:patch}}).then(function(){
+      refreshTripPlanningState(authToken,currentTripId).catch(function(){});
+    });
+  },[loaded,authToken,sc,currentTripId,wizStep,pois,poiOptionPool]);
   useEffect(function(){
     if(!loaded)return;
     if(!pendingTripJoinId)return;
@@ -2753,9 +2867,35 @@ export default function WanderPlan(){
     </div>)}
 
     {wizStep===5&&(function(){
+      function hasAnyCrewYesForIdx(idx){
+        var rowMeta=readPoiSelectionRow(poiMemberChoices,pois[idx],idx);
+        return hasAnyYesInPoiSelectionRow(rowMeta.row)||poiStatus[idx]==="yes";
+      }
+      function setPoiDecisionForCurrentUser(idx,decision){
+        if(!(decision==="yes"||decision==="no"))return;
+        setPS(function(prev){
+          var next=Object.assign({},prev||{});
+          next[idx]=decision;
+          return next;
+        });
+        if(!currentPlannerId)return;
+        setPMC(function(prev){
+          var next=Object.assign({},prev||{});
+          var rowMeta=readPoiSelectionRow(next,pois[idx],idx);
+          var row=Object.assign({},rowMeta.row||{});
+          row[currentPlannerId]=decision;
+          next[rowMeta.key]=row;
+          next[idx]=row;
+          saveTripPlanningState({state:{poi_member_choices:next}}).then(function(){
+            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          });
+          return next;
+        });
+      }
       var accepted=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var rejected=pois.filter(function(p,i){return poiStatus[i]==="no";});
       var pending=pois.filter(function(p,i){return !poiStatus[i];});
+      var combinedAccepted=pois.filter(function(_,i){return hasAnyCrewYesForIdx(i);});
       var allDecided=poiDone&&pois.length>0&&pending.length===0;
       function revisePOISelection(){
         setPS({});
@@ -2783,7 +2923,9 @@ export default function WanderPlan(){
           });
         });
         var acceptedIdx=[];
-        pois.forEach(function(_,i){if(poiStatus[i]==="yes")acceptedIdx.push(i);});
+        pois.forEach(function(_,i){
+          if(hasAnyCrewYesForIdx(i))acceptedIdx.push(i);
+        });
         setPV(function(prev){
           var next=Object.assign({},prev||{});
           acceptedIdx.forEach(function(idx){
@@ -2806,7 +2948,9 @@ export default function WanderPlan(){
         if(authToken&&wizSessionId){
           apiJson("/wizard/sessions/"+wizSessionId+"/actions",{method:"POST",body:{action_type:"approve_step",payload:{step:wizStep,scope:"poi.selection",accepted_count:accepted.length,rejected_count:rejected.length}}},authToken).catch(function(){});
         }
-        syncTripPoisToBackend(poiStatus).finally(function(){adv();});
+        var syncStatus=Object.assign({},poiStatus||{});
+        acceptedIdx.forEach(function(i){syncStatus[i]="yes";});
+        syncTripPoisToBackend(syncStatus).finally(function(){adv();});
       }
       function buildPOIGroupPrefs(){
         var yesMap={},noMap={},dietMap={},summaries=[];
@@ -2867,8 +3011,9 @@ export default function WanderPlan(){
               <div style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}><span style={{fontSize:10,padding:"1px 8px",borderRadius:999,background:cc+"18",color:cc,fontWeight:600}}>{p.category}</span><span style={{fontSize:11,color:C.wrn}}>{"*"+(p.rating||4.5)}</span><span style={{fontSize:11,color:C.tx3,marginLeft:"auto"}}>{p.destination}</span></div>
               <p style={{fontSize:14,fontWeight:600,marginBottom:2,textDecoration:st==="no"?"line-through":"none"}}>{p.name}</p>
               <div style={{display:"flex",gap:12,fontSize:12,color:C.tx3,marginBottom:4}}><span>{p.duration}</span><span>{p.cost>0?"$"+p.cost:"Free"}</span></div>
+              <p style={{fontSize:11,color:C.tx3,marginBottom:6}}>{Object.keys((readPoiSelectionRow(poiMemberChoices,p,i).row)||{}).filter(function(k){return String(readPoiSelectionRow(poiMemberChoices,p,i).row[k]||"").trim().toLowerCase()==="yes";}).length} crew accept{Object.keys((readPoiSelectionRow(poiMemberChoices,p,i).row)||{}).filter(function(k){return String(readPoiSelectionRow(poiMemberChoices,p,i).row[k]||"").trim().toLowerCase()==="yes";}).length===1?"":"s"}</p>
               {p.matchReason&&<p style={{fontSize:12,color:C.tealL,fontStyle:"italic",marginBottom:6}}>{p.matchReason}</p>}
-              {!st&&(<div style={{display:"flex",gap:8}}><button onClick={function(){setPS(function(prev){var n=Object.assign({},prev);n[i]="yes";return n;});}} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid "+C.grn+"30",background:"transparent",color:C.grn,fontWeight:600,fontSize:13,cursor:"pointer"}}>Accept</button><button onClick={function(){setPS(function(prev){var n=Object.assign({},prev);n[i]="no";return n;});}} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid "+C.red+"30",background:"transparent",color:C.red,fontWeight:600,fontSize:13,cursor:"pointer"}}>Reject</button></div>)}
+              {!st&&(<div style={{display:"flex",gap:8}}><button onClick={function(){setPoiDecisionForCurrentUser(i,"yes");}} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid "+C.grn+"30",background:"transparent",color:C.grn,fontWeight:600,fontSize:13,cursor:"pointer"}}>Accept</button><button onClick={function(){setPoiDecisionForCurrentUser(i,"no");}} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid "+C.red+"30",background:"transparent",color:C.red,fontWeight:600,fontSize:13,cursor:"pointer"}}>Reject</button></div>)}
               {st==="yes"&&<span style={{fontSize:12,fontWeight:600,color:C.grn}}>Accepted</span>}
               {st==="no"&&<span style={{fontSize:12,fontWeight:600,color:C.red}}>Rejected</span>}
             </div>);
@@ -2878,11 +3023,11 @@ export default function WanderPlan(){
           {poiAskLoad&&<div style={{display:"flex",gap:4,marginTop:8}}><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:6,height:6,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div>}
           {allDecided&&(<div style={{marginTop:14}}>
             <div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}>
-              <p style={{fontSize:12,color:C.grn}}>{accepted.length} activities selected across {dests.length} destination{dests.length>1?"s":""}. Total est. cost: ${accepted.reduce(function(s,p){return s+(p.cost||0);},0)}</p>
+              <p style={{fontSize:12,color:C.grn}}>{combinedAccepted.length} crew-selected activities across {dests.length} destination{dests.length>1?"s":""}. Total est. cost: ${combinedAccepted.reduce(function(s,p){return s+(p.cost||0);},0)}</p>
             </div>
             <div style={{marginTop:10,padding:"10px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"18"}}>
               <p style={{fontSize:12,color:C.tealL,fontWeight:600,marginBottom:4}}>Consolidated crew shortlist</p>
-              <p style={{fontSize:12,color:C.tx2}}>{accepted.length>0?accepted.map(function(p){return p.name;}).join(", "):"No accepted activities yet."}</p>
+              <p style={{fontSize:12,color:C.tx2}}>{combinedAccepted.length>0?combinedAccepted.map(function(p){return p.name;}).join(", "):"No accepted activities yet."}</p>
             </div>
             <div style={{display:"flex",gap:10,marginTop:12}}>
               <button onClick={revisePOISelection} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
@@ -2914,7 +3059,12 @@ export default function WanderPlan(){
         });
       });
       var candidates=[];
-      pois.forEach(function(p,i){if(poiStatus[i]==="yes")candidates.push({idx:i,poi:p});});
+      pois.forEach(function(p,i){
+        var rowMeta=readPoiSelectionRow(poiMemberChoices,p,i);
+        if(hasAnyYesInPoiSelectionRow(rowMeta.row)||poiStatus[i]==="yes"){
+          candidates.push({idx:i,poi:p});
+        }
+      });
       if(candidates.length===0){
         pois.forEach(function(p,i){if(poiStatus[i]!=="no")candidates.push({idx:i,poi:p});});
       }
