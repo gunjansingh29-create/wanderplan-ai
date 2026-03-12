@@ -239,6 +239,14 @@ class TripPlanningStateUpdateRequest(BaseModel):
     merge: bool = True
 
 
+class StageVoteRequest(BaseModel):
+    vote: str = "yes"
+
+
+class StageFinalizeRequest(BaseModel):
+    action: str = "approve"
+
+
 class HealthAcknowledgmentItem(BaseModel):
     activity_id: str
     certification_required: Optional[str] = None
@@ -564,6 +572,106 @@ def _json_obj(value: Any) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+_CONSENSUS_STAGE_ALIASES = {
+    "bucket": "destinations",
+    "destination": "destinations",
+    "destinations": "destinations",
+    "invite": "invite_crew",
+    "invite_crew": "invite_crew",
+    "invite-crew": "invite_crew",
+    "vote": "vote_destinations",
+    "vote_destinations": "vote_destinations",
+    "vote-destinations": "vote_destinations",
+    "interests": "interests",
+    "health": "health",
+    "activities": "activities",
+    "pois": "poi_voting",
+    "poi_voting": "poi_voting",
+    "poi-voting": "poi_voting",
+    "budget": "budget",
+    "dates": "dates",
+    "duration": "dates",
+    "availability": "dates",
+    "stays": "stays",
+    "dining": "dining",
+    "itinerary": "itinerary",
+}
+
+
+def _normalize_consensus_stage_key(stage_key: str) -> str:
+    raw = str(stage_key or "").strip().lower().replace(" ", "_")
+    if not raw:
+        raise HTTPException(status_code=422, detail="Missing stage key")
+    mapped = _CONSENSUS_STAGE_ALIASES.get(raw, raw)
+    if mapped not in set(_CONSENSUS_STAGE_ALIASES.values()):
+        raise HTTPException(status_code=422, detail=f"Unsupported stage: {stage_key}")
+    return mapped
+
+
+def _normalize_stage_vote(vote: str) -> str:
+    raw = str(vote or "").strip().lower()
+    if raw in {"approve", "approved", "yes", "y", "up", "thumbs_up"}:
+        return "yes"
+    if raw in {"revise", "revised", "no", "n", "down", "thumbs_down"}:
+        return "no"
+    raise HTTPException(status_code=422, detail="vote must be yes/no (or approve/revise)")
+
+
+def _normalize_stage_finalize_action(action: str) -> str:
+    raw = str(action or "").strip().lower()
+    if raw in {"approve", "approved", "yes"}:
+        return "approved"
+    if raw in {"revise", "revised", "reject", "no"}:
+        return "revised"
+    raise HTTPException(status_code=422, detail="action must be approve or revise")
+
+
+def _build_stage_consensus_summary(
+    stage_key: str,
+    stage_state: dict[str, Any],
+    accepted_members: list[dict[str, Any]],
+    owner_id: str,
+    user_id: str,
+) -> dict[str, Any]:
+    votes_raw = stage_state.get("votes")
+    votes = votes_raw if isinstance(votes_raw, dict) else {}
+    accepted_ids = [str(m["user_id"]) for m in accepted_members]
+    yes_count = 0
+    no_count = 0
+    pending_count = 0
+    for uid in accepted_ids:
+        val = str(votes.get(uid, "")).strip().lower()
+        if val == "yes":
+            yes_count += 1
+        elif val == "no":
+            no_count += 1
+        else:
+            pending_count += 1
+    member_count = len(accepted_ids)
+    majority_needed = max(1, (member_count // 2) + 1)
+    is_solo = member_count <= 1
+    decision = str(stage_state.get("final_decision") or "").strip().lower() or None
+    return {
+        "stage_key": stage_key,
+        "consensus_mode": "majority_with_organizer_final_say",
+        "organizer_user_id": owner_id,
+        "is_organizer": str(owner_id) == str(user_id),
+        "is_solo": is_solo,
+        "member_count": member_count,
+        "majority_needed": majority_needed,
+        "votes": votes,
+        "yes_count": yes_count,
+        "no_count": no_count,
+        "pending_count": pending_count,
+        "has_majority_yes": yes_count >= majority_needed,
+        "has_majority_no": no_count >= majority_needed,
+        "final_decision": decision,
+        "finalized_by": stage_state.get("finalized_by"),
+        "finalized_at": stage_state.get("finalized_at"),
+        "members": accepted_members,
+    }
 
 
 def _amadeus_settings() -> tuple[str, str, str]:
@@ -2770,6 +2878,257 @@ async def put_trip_planning_state(
     }
 
 
+@app.get("/trips/{trip_id}/consensus/stages/{stage_key}")
+async def get_stage_consensus(
+    trip_id: str,
+    stage_key: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    stage = _normalize_consensus_stage_key(stage_key)
+
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        membership = await conn.fetchrow(
+            "SELECT status, role FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        accepted_rows = await conn.fetch(
+            """
+            SELECT tm.user_id, tm.role, tm.status, u.name, u.email
+            FROM trip_members tm
+            JOIN users u ON u.id = tm.user_id
+            WHERE tm.trip_id = $1 AND tm.status = 'accepted'
+            ORDER BY tm.joined_at NULLS FIRST, u.email ASC
+            """,
+            trip_id,
+        )
+        planning_row = await conn.fetchrow(
+            """
+            SELECT current_step, state
+            FROM trip_planning_states
+            WHERE trip_id = $1
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            trip_id,
+        )
+
+    state = _json_obj((planning_row["state"] if planning_row else {}) or {})
+    consensus_root = state.get("stage_consensus")
+    if not isinstance(consensus_root, dict):
+        consensus_root = {}
+    stage_state = consensus_root.get(stage)
+    if not isinstance(stage_state, dict):
+        stage_state = {}
+
+    accepted_members = [
+        {
+            "user_id": str(r["user_id"]),
+            "role": str(r["role"] or "member"),
+            "status": str(r["status"] or "accepted"),
+            "name": str(r["name"] or ""),
+            "email": str(r["email"] or ""),
+        }
+        for r in accepted_rows
+    ]
+    owner_id = str(trip["owner_id"])
+    summary = _build_stage_consensus_summary(stage, stage_state, accepted_members, owner_id, user_id)
+    my_status = str((membership["status"] if membership else "") or "").lower()
+    return {
+        "consensus": summary,
+        "can_vote": my_status == "accepted",
+        "can_finalize": owner_id == str(user_id),
+        "current_step": int((planning_row["current_step"] if planning_row else 0) or 0),
+    }
+
+
+@app.post("/trips/{trip_id}/consensus/stages/{stage_key}/vote")
+async def vote_stage_consensus(
+    trip_id: str,
+    stage_key: str,
+    body: StageVoteRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    stage = _normalize_consensus_stage_key(stage_key)
+    normalized_vote = _normalize_stage_vote(body.vote)
+
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        membership = await conn.fetchrow(
+            "SELECT status FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not membership or str(membership["status"] or "").lower() != "accepted":
+            raise HTTPException(status_code=403, detail="Only accepted trip members can vote")
+        accepted_rows = await conn.fetch(
+            """
+            SELECT tm.user_id, tm.role, tm.status, u.name, u.email
+            FROM trip_members tm
+            JOIN users u ON u.id = tm.user_id
+            WHERE tm.trip_id = $1 AND tm.status = 'accepted'
+            ORDER BY tm.joined_at NULLS FIRST, u.email ASC
+            """,
+            trip_id,
+        )
+        planning_row = await conn.fetchrow(
+            """
+            SELECT current_step, state
+            FROM trip_planning_states
+            WHERE trip_id = $1
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            trip_id,
+        )
+        state = _json_obj((planning_row["state"] if planning_row else {}) or {})
+        consensus_root = state.get("stage_consensus")
+        if not isinstance(consensus_root, dict):
+            consensus_root = {}
+        stage_state = consensus_root.get(stage)
+        if not isinstance(stage_state, dict):
+            stage_state = {}
+        if stage_state.get("final_decision"):
+            raise HTTPException(status_code=409, detail="Stage already finalized by organizer")
+
+        votes = stage_state.get("votes")
+        if not isinstance(votes, dict):
+            votes = {}
+        votes[str(user_id)] = normalized_vote
+        stage_state["votes"] = votes
+        stage_state["last_vote_at"] = datetime.now(timezone.utc).isoformat()
+        stage_state["last_vote_by"] = str(user_id)
+        consensus_root[stage] = stage_state
+        state["stage_consensus"] = consensus_root
+        current_step = int((planning_row["current_step"] if planning_row else 0) or 0)
+
+        await conn.execute(
+            """
+            INSERT INTO trip_planning_states (trip_id, current_step, state, updated_by, updated_at)
+            VALUES ($1, $2, $3::jsonb, $4, NOW())
+            ON CONFLICT (trip_id)
+            DO UPDATE SET current_step = EXCLUDED.current_step,
+                          state = EXCLUDED.state,
+                          updated_by = EXCLUDED.updated_by,
+                          updated_at = NOW()
+            """,
+            trip_id,
+            current_step,
+            json.dumps(state),
+            user_id,
+        )
+
+    accepted_members = [
+        {
+            "user_id": str(r["user_id"]),
+            "role": str(r["role"] or "member"),
+            "status": str(r["status"] or "accepted"),
+            "name": str(r["name"] or ""),
+            "email": str(r["email"] or ""),
+        }
+        for r in accepted_rows
+    ]
+    summary = _build_stage_consensus_summary(stage, stage_state, accepted_members, str(trip["owner_id"]), user_id)
+    return {"ok": True, "consensus": summary}
+
+
+@app.post("/trips/{trip_id}/consensus/stages/{stage_key}/finalize")
+async def finalize_stage_consensus(
+    trip_id: str,
+    stage_key: str,
+    body: StageFinalizeRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    stage = _normalize_consensus_stage_key(stage_key)
+    decision = _normalize_stage_finalize_action(body.action)
+
+    async with db_pool.acquire() as conn:
+        await _require_trip_owner(conn, trip_id, user_id)
+        membership = await conn.fetchrow(
+            "SELECT status FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not membership or str(membership["status"] or "").lower() != "accepted":
+            raise HTTPException(status_code=403, detail="Organizer must be an accepted trip member")
+        accepted_rows = await conn.fetch(
+            """
+            SELECT tm.user_id, tm.role, tm.status, u.name, u.email
+            FROM trip_members tm
+            JOIN users u ON u.id = tm.user_id
+            WHERE tm.trip_id = $1 AND tm.status = 'accepted'
+            ORDER BY tm.joined_at NULLS FIRST, u.email ASC
+            """,
+            trip_id,
+        )
+        planning_row = await conn.fetchrow(
+            """
+            SELECT current_step, state
+            FROM trip_planning_states
+            WHERE trip_id = $1
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            trip_id,
+        )
+        state = _json_obj((planning_row["state"] if planning_row else {}) or {})
+        consensus_root = state.get("stage_consensus")
+        if not isinstance(consensus_root, dict):
+            consensus_root = {}
+        stage_state = consensus_root.get(stage)
+        if not isinstance(stage_state, dict):
+            stage_state = {}
+        stage_state["final_decision"] = decision
+        stage_state["finalized_by"] = str(user_id)
+        stage_state["finalized_at"] = datetime.now(timezone.utc).isoformat()
+        consensus_root[stage] = stage_state
+        state["stage_consensus"] = consensus_root
+        current_step = int((planning_row["current_step"] if planning_row else 0) or 0)
+
+        await conn.execute(
+            """
+            INSERT INTO trip_planning_states (trip_id, current_step, state, updated_by, updated_at)
+            VALUES ($1, $2, $3::jsonb, $4, NOW())
+            ON CONFLICT (trip_id)
+            DO UPDATE SET current_step = EXCLUDED.current_step,
+                          state = EXCLUDED.state,
+                          updated_by = EXCLUDED.updated_by,
+                          updated_at = NOW()
+            """,
+            trip_id,
+            current_step,
+            json.dumps(state),
+            user_id,
+        )
+        owner_id = str(user_id)
+
+    accepted_members = [
+        {
+            "user_id": str(r["user_id"]),
+            "role": str(r["role"] or "member"),
+            "status": str(r["status"] or "accepted"),
+            "name": str(r["name"] or ""),
+            "email": str(r["email"] or ""),
+        }
+        for r in accepted_rows
+    ]
+    summary = _build_stage_consensus_summary(stage, stage_state, accepted_members, owner_id, user_id)
+    return {"ok": True, "consensus": summary}
+
+
 @app.get("/me/trips")
 async def get_my_trips(user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
@@ -4229,7 +4588,14 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
-        budget = await conn.fetchrow("SELECT total_budget, spent, breakdown FROM budgets WHERE trip_id = $1", trip_id)
+        budget = await conn.fetchrow(
+            """
+            SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active
+            FROM budgets
+            WHERE trip_id = $1
+            """,
+            trip_id,
+        )
 
         requested_ids: list[str] = []
         if body.leg_selections:
@@ -4274,19 +4640,8 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
             if len(leg_keys) != len(selected_rows):
                 raise HTTPException(status_code=422, detail="Select at most one flight per leg")
 
-        updated = None
-        if budget:
-            selected_total = round(sum(float(row["price_usd"] or 0) for row in selected_rows), 2)
-            previous_total = float(
-                await conn.fetchval(
-                    "SELECT COALESCE(SUM(price_usd), 0) FROM flight_options WHERE trip_id = $1 AND selected = true",
-                    trip_id,
-                )
-                or 0
-            )
-            delta = round(selected_total - previous_total, 2)
-        else:
-            delta = 0.0
+        # Flights are a personal selection and must not mutate shared trip budget.
+        updated = budget
 
         await conn.execute("UPDATE flight_options SET selected = false WHERE trip_id = $1", trip_id)
         if uuid_ids:
@@ -4296,17 +4651,6 @@ async def select_flight(trip_id: str, body: FlightSelectRequest, user_id: str = 
                 uuid_ids,
             )
 
-        if budget:
-            spent = round(float(budget["spent"] or 0) + delta, 2)
-            total_budget = float(budget["total_budget"] or 0)
-            remaining = round(total_budget - spent, 2)
-            await conn.execute(
-                "UPDATE budgets SET spent = $1, remaining = $2, warning_active = false WHERE trip_id = $3",
-                spent,
-                remaining,
-                trip_id,
-            )
-            updated = await conn.fetchrow("SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1", trip_id)
     response = {
         "selected": True,
         "selected_count": len(selected_rows),

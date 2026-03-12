@@ -569,6 +569,7 @@ export default function WanderPlan(){
   var[flightBookLinks,setFBL]=useState([]);
   var[budgetSaveLoad,setBSL]=useState(false);
   var[budgetSaveErr,setBSE]=useState("");
+  var[consensusMsg,setCSM]=useState("");
   var[durPerDest,setDPD]=useState({});
   var[stays,setStays]=useState([]);
   var[stayLoad,setSL]=useState(false);
@@ -1082,6 +1083,54 @@ export default function WanderPlan(){
     setWS(n);
     saveTripPlanningState({current_step:n});
   }
+  function consensusStageKeyForStep(stepNum){
+    var map={
+      2:"vote_destinations",
+      3:"interests",
+      4:"health",
+      5:"activities",
+      6:"poi_voting",
+      7:"budget",
+      9:"dates",
+      10:"stays",
+      11:"dining",
+      12:"itinerary"
+    };
+    return map[Number(stepNum)]||"";
+  }
+  function isWizardOrganizer(tripCtx){
+    var tr=tripCtx||newTrip||{};
+    var tid=String(currentTripId||tr.id||"").trim();
+    if(!isUuidLike(tid))return true;
+    var role=String(tr.my_role||"").trim().toLowerCase();
+    if(role==="owner")return true;
+    var ownerId=String(tr.owner_id||"").trim();
+    var myId=String(userIdFromToken(authToken)||"").trim();
+    if(ownerId&&myId&&ownerId===myId)return true;
+    var me=String(user.email||"").trim().toLowerCase();
+    var ownerByMember=(Array.isArray(tr.members)?tr.members:[]).find(function(m){
+      return String(m&&m.role||"").trim().toLowerCase()==="owner";
+    });
+    var ownerEmail=String(ownerByMember&&ownerByMember.email||"").trim().toLowerCase();
+    return !!(me&&ownerEmail&&me===ownerEmail);
+  }
+  function submitStageConsensusDecision(stageKey,decision,tripCtx){
+    var tid=String(currentTripId||(tripCtx&&tripCtx.id)||newTrip.id||"").trim();
+    if(!(authToken&&tid&&isUuidLike(tid)&&stageKey))return Promise.resolve({mode:"local"});
+    var organizer=isWizardOrganizer(tripCtx);
+    if(organizer){
+      return apiJson("/trips/"+tid+"/consensus/stages/"+stageKey+"/finalize",{method:"POST",body:{action:decision==="revise"?"revise":"approve"}},authToken).then(function(r){
+        return {mode:"server",organizer:true,consensus:r&&r.consensus||null};
+      });
+    }
+    return apiJson("/trips/"+tid+"/consensus/stages/"+stageKey+"/vote",{method:"POST",body:{vote:decision==="revise"?"no":"yes"}},authToken).then(function(r){
+      return {mode:"server",organizer:false,consensus:r&&r.consensus||null};
+    });
+  }
+  useEffect(function(){
+    if(sc!=="wizard")return;
+    setCSM("");
+  },[wizStep,sc,currentTripId]);
   useEffect(function(){
     if(!loaded||!authToken||(sc!=="crew"&&sc!=="new_trip"&&sc!=="dash"&&sc!=="wizard"))return;
     refreshCrewFromBackend();
@@ -2155,15 +2204,53 @@ export default function WanderPlan(){
         apiJson("/wizard/sessions/"+wizSessionId+"/actions",{method:"POST",body:{action_type:action,payload:payload||{}}},authToken).catch(function(){});
       }
     }
+    function advanceWizardStep(){
+      var n=wizStep+1;
+      if(n<WIZ.length){
+        setWizardStepShared(n);
+        setTrips(function(p){
+          if(!p.length)return p;
+          return p.slice(0,-1).concat([Object.assign({},p[p.length-1],{step:n})]);
+        });
+      }else{
+        go("dash");
+      }
+    }
     function adv(){
       logWizAction("approve_step",{step:wizStep});
-      var n=wizStep+1;
-      if(n<WIZ.length){setWizardStepShared(n);setTrips(function(p){if(!p.length)return p;return p.slice(0,-1).concat([Object.assign({},p[p.length-1],{step:n})]);});}
-      else{go("dash");}
+      setCSM("");
+      var stageKey=consensusStageKeyForStep(wizStep);
+      if(!stageKey){advanceWizardStep();return;}
+      submitStageConsensusDecision(stageKey,"approve",tr).then(function(out){
+        if(out&&out.mode==="server"&&out.organizer===false){
+          setCSM("Vote recorded. Waiting for organizer final decision.");
+          refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          return;
+        }
+        setCSM("Stage approved by organizer.");
+        advanceWizardStep();
+      }).catch(function(e){
+        setCSM("Consensus update failed: "+String(e&&e.message||"error"));
+      });
     }
     function revise(){
       logWizAction("revise_step",{step:wizStep-1});
-      if(wizStep>0)setWizardStepShared(wizStep-1);
+      setCSM("");
+      var stageKey=consensusStageKeyForStep(wizStep);
+      if(!stageKey){
+        if(wizStep>0)setWizardStepShared(wizStep-1);
+        return;
+      }
+      submitStageConsensusDecision(stageKey,"revise",tr).then(function(out){
+        if(out&&out.mode==="server"&&out.organizer===false){
+          setCSM("Revision requested. Waiting for organizer decision.");
+          refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          return;
+        }
+        if(wizStep>0)setWizardStepShared(wizStep-1);
+      }).catch(function(e){
+        setCSM("Consensus update failed: "+String(e&&e.message||"error"));
+      });
     }
     function sendStep2TripInvites(){
       var tripIdForInvites=String(currentTripId||tr.id||"").trim();
@@ -2342,14 +2429,15 @@ export default function WanderPlan(){
       }
     }
 
+    var organizerMode=isWizardOrganizer(tr);
     var hdr=(<div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}><button onClick={function(){if(wizStep>0)setWizardStepShared(wizStep-1);else go("dash");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13}}>Back</button><div style={{flex:1,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:pct+"%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2,transition:"width .5s"}}/></div><span style={{fontSize:11,color:C.tx3}}>{wizStep+1}/{WIZ.length}</span></div>);
     var shdr=(<Fade delay={50}><div style={{display:"flex",alignItems:"center",gap:12,margin:"16px 0 20px"}}><div style={{width:44,height:44,borderRadius:13,background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:"#fff"}}>{wizStep+1}</div><div><h2 style={{fontSize:20,fontWeight:700}}>{WIZ[wizStep]}</h2><p style={{fontSize:13,color:C.tx2}}>Step {wizStep+1} of {WIZ.length}</p></div></div></Fade>);
-    var chps=(<Fade delay={80}><div style={{background:C.surface,borderRadius:14,padding:"14px 18px",border:"1px solid "+C.border,marginBottom:16}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{fontSize:12,color:C.tx3}}>{tr.name||"Trip"}</span><div style={{display:"flex",gap:3}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={20}/>{tm.map(function(m){return <Avi key={m.id} ini={m.ini} color={m.color} size={20}/>;})}</div></div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s,i){var dn=i<wizStep;var a=i===wizStep;return(<div key={i} onClick={function(){setWizardStepShared(i);}} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",background:a?C.gold:dn?C.teal+"25":C.bg,color:a?C.bg:dn?C.teal:C.tx3,border:a?"none":"1px solid "+C.border}}>{dn?"Y":(i+1)}</div>);})}</div></div></Fade>);
+    var chps=(<Fade delay={80}><div style={{background:C.surface,borderRadius:14,padding:"14px 18px",border:"1px solid "+C.border,marginBottom:16}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{fontSize:12,color:C.tx3}}>{tr.name||"Trip"}</span><div style={{display:"flex",gap:3}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={20}/>{tm.map(function(m){return <Avi key={m.id} ini={m.ini} color={m.color} size={20}/>;})}</div></div><div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:11,color:C.tx3}}>{organizerMode?"Organizer final say enabled":"Voting mode - organizer finalizes each stage"}</span><span style={{fontSize:11,color:C.tx3}}>{organizerMode?"Organizer":"Crew member"}</span></div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s,i){var dn=i<wizStep;var a=i===wizStep;return(<div key={i} onClick={function(){if(organizerMode)setWizardStepShared(i);}} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",cursor:organizerMode?"pointer":"default",opacity:organizerMode?1:.85,background:a?C.gold:dn?C.teal+"25":C.bg,color:a?C.bg:dn?C.teal:C.tx3,border:a?"none":"1px solid "+C.border}}>{dn?"Y":(i+1)}</div>);})}</div></div></Fade>);
 
     var ab=function(n,msg){return(<div style={{display:"flex",gap:10,marginBottom:14}}><div style={{width:28,height:28,borderRadius:999,background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",flexShrink:0}}>AI</div><div><p style={{fontSize:11,color:C.tealL,fontWeight:600,marginBottom:3}}>{n}</p><div style={{background:C.bg,padding:"10px 14px",borderRadius:"12px 12px 12px 3px",fontSize:14,lineHeight:1.6,color:C.tx2,border:"1px solid "+C.border}}>{msg}</div></div></div>);};
     var goBtn=function(label){return(<button onClick={adv} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{label||"Approve & Continue"}</button>);};
     var ynBtns=(<div style={{display:"flex",gap:10,marginTop:16}}><button onClick={revise} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button><button onClick={adv} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>{wizStep>=WIZ.length-1?"Finish Trip":"Approve"}</button></div>);
-    return(<div style={{maxWidth:560}}>{hdr}{shdr}{chps}<Fade delay={120}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
+    return(<div style={{maxWidth:560}}>{hdr}{shdr}{chps}{consensusMsg&&(<Fade delay={95}><div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}><p style={{fontSize:12,color:C.tealL}}>{consensusMsg}</p></div></Fade>)}<Fade delay={120}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
 
     {wizStep===0&&(<div>
       {ab("Destination Agent","Here are the destinations you selected. Confirm to lock them in.")}
@@ -2710,7 +2798,7 @@ export default function WanderPlan(){
           <p style={{fontSize:12,color:C.tx2}}>{ranked.map(function(r){return r.poi.name+" ("+r.up+")";}).join(" | ")}</p>
         </div>)}
         <div style={{display:"flex",gap:10,marginTop:14}}>
-          <button onClick={function(){setWizardStepShared(5);}} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
+          <button onClick={revise} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
           <button onClick={applyPoiVotingAndContinue} disabled={ranked.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:ranked.length===0?C.border:C.teal,color:ranked.length===0?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:ranked.length===0?"default":"pointer",minHeight:46}}>Approve</button>
         </div>
       </div>);
@@ -2719,8 +2807,8 @@ export default function WanderPlan(){
     {wizStep===7&&(<div>
       {ab("Budget Agent","Group budget preferences side-by-side:")}
       <div style={{display:"flex",gap:6,marginBottom:14}}><div style={{flex:1,background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center"}}><p style={{fontSize:11,color:C.tx3}}>You</p><p style={{fontSize:14,fontWeight:600,color:C.goldT}}>{user.budget||"moderate"}</p></div>{tm.filter(function(m){return tripJoined[m.id];}).map(function(m){return(<div key={m.id} style={{flex:1,background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center"}}><p style={{fontSize:11,color:C.tx3}}>{m.ini}</p><p style={{fontSize:14,fontWeight:600,color:C.sky}}>moderate</p></div>);})}</div>
-      <div style={{padding:"12px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20",marginBottom:8}}><p style={{fontSize:13,color:C.tealL}}>Recommended: <strong>Mid-range ($150-250/day)</strong></p><p style={{fontSize:12,color:C.tx2,marginTop:4}}>Allocation: Flights 30% / Stays 35% / Food 20% / Activities 10% / Buffer 5%</p></div>
-      <div style={{display:"flex",flexDirection:"column",gap:4}}>{[{l:"Flights",p:30,c:C.sky},{l:"Stays",p:35,c:C.teal},{l:"Food",p:20,c:C.coral},{l:"Activities",p:10,c:C.grn},{l:"Buffer",p:5,c:C.wrn}].map(function(b){return(<div key={b.l} style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:12,color:C.tx3,width:60}}>{b.l}</span><div style={{flex:1,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:b.p+"%",background:b.c,borderRadius:999}}/></div><span style={{fontSize:11,color:C.tx3,width:30}}>{b.p}%</span></div>);})}</div>
+      <div style={{padding:"12px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20",marginBottom:8}}><p style={{fontSize:13,color:C.tealL}}>Recommended: <strong>Mid-range ($150-250/day)</strong></p><p style={{fontSize:12,color:C.tx2,marginTop:4}}>Shared allocation: Stays 40% / Food 25% / Activities 20% / Transport 10% / Buffer 5%</p><p style={{fontSize:12,color:C.tx3,marginTop:4}}>Flights are personal and selected later by each traveler.</p></div>
+      <div style={{display:"flex",flexDirection:"column",gap:4}}>{[{l:"Stays",p:40,c:C.teal},{l:"Food",p:25,c:C.coral},{l:"Activities",p:20,c:C.grn},{l:"Transport",p:10,c:C.sky},{l:"Buffer",p:5,c:C.wrn}].map(function(b){return(<div key={b.l} style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:12,color:C.tx3,width:70}}>{b.l}</span><div style={{flex:1,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:b.p+"%",background:b.c,borderRadius:999}}/></div><span style={{fontSize:11,color:C.tx3,width:30}}>{b.p}%</span></div>);})}</div>
       <button onClick={saveBudgetThenAdvance} disabled={budgetSaveLoad} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:budgetSaveLoad?C.border:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:budgetSaveLoad?"default":"pointer"}}>{budgetSaveLoad?"Saving budget...":"Approve Budget"}</button>
       {budgetSaveErr&&<p style={{fontSize:12,color:C.red,marginTop:8}}>{budgetSaveErr}</p>}
     </div>)}
