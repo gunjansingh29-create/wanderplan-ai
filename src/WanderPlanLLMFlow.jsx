@@ -317,6 +317,11 @@ function mergePoiListsByCanonical(localRows, sharedPool){
   return out;
 }
 
+function poiKeySignature(rows){
+  var src=Array.isArray(rows)?rows:[];
+  return src.map(function(p,idx){return canonicalPoiVoteKey(p,idx);}).join("|");
+}
+
 function buildPoiOptionPoolPatch(rows, existingPool){
   var patch={};
   var pool=(existingPool&&typeof existingPool==="object")?existingPool:{};
@@ -1264,7 +1269,8 @@ export default function WanderPlan(){
         setPois(function(prev){
           var base=Array.isArray(prev)?prev:[];
           var merged=mergePoiListsByCanonical(base,st.poi_option_pool);
-          if(merged.length===base.length)return base;
+          if(merged.length>0)setPD(true);
+          if(poiKeySignature(merged)===poiKeySignature(base))return base;
           return merged;
         });
       }
