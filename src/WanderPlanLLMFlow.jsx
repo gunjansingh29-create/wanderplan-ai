@@ -8,7 +8,7 @@ var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-rang
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
 var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","POI Voting","Budget","Flights","Duration","Stays","Dining","Itinerary","Confirmed"];
 
-function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"translateY(0)":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
+function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"none":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
 function Avi(props){var s=props.size||28;return(<div title={props.name||""} style={{width:s,height:s,borderRadius:999,background:props.color||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:s*.4,fontWeight:700,color:"#fff",flexShrink:0,border:"1.5px solid "+C.surface}}>{props.ini||"?"}</div>);}
 function TrashIcon(props){var s=props.size||14;var c=props.color||"currentColor";return(<svg width={s} height={s} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16" stroke={c} strokeWidth="2" strokeLinecap="round"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" stroke={c} strokeWidth="2" strokeLinecap="round"/><path d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9l1-12" stroke={c} strokeWidth="2" strokeLinecap="round"/><path d="M10 11v6M14 11v6" stroke={c} strokeWidth="2" strokeLinecap="round"/></svg>);}
 
@@ -173,6 +173,37 @@ function makeVoteUserId(userId,email,fallback){
   var em=String(email||"").trim().toLowerCase();
   if(em)return "email:"+em;
   return String(fallback||"member");
+}
+
+function voteKeyAliasesFor(voter){
+  var keys=[];
+  function pushKey(k){
+    var v=String(k||"").trim();
+    if(!v)return;
+    if(keys.indexOf(v)>=0)return;
+    keys.push(v);
+  }
+  if(voter&&typeof voter==="object"){
+    pushKey(voter.id);
+    pushKey(voter.userId);
+    var em=String(voter.email||"").trim().toLowerCase();
+    if(em)pushKey("email:"+em);
+    return keys;
+  }
+  pushKey(voter);
+  return keys;
+}
+
+function readVoteForVoter(row,voter){
+  var r=(row&&typeof row==="object")?row:{};
+  var aliases=voteKeyAliasesFor(voter);
+  for(var i=0;i<aliases.length;i++){
+    var v=String(r[aliases[i]]||"").trim().toLowerCase();
+    if(v==="up"||v==="down")return v;
+    if(v==="yes")return "up";
+    if(v==="no")return "down";
+  }
+  return "";
 }
 
 function isCurrentMemberRow(member, token, myEmail){
@@ -2166,6 +2197,8 @@ export default function WanderPlan(){
     var currentPlannerId=getCurrentPlannerId();
     var destVoteVoters=[{
       id:currentPlannerId,
+      userId:userIdFromToken(authToken),
+      email:user.email||"",
       name:user.name||user.email||"You",
       ini:iniFromName(user.name||user.email||"You"),
       color:C.gold
@@ -2175,6 +2208,8 @@ export default function WanderPlan(){
       if(st==="accepted"||tripJoined[m.id]){
         destVoteVoters.push({
           id:makeVoteUserId(m.id,m.email,("member-"+mi)),
+          userId:m.id||"",
+          email:m.email||"",
           name:m.name||m.email||("Member "+(mi+1)),
           ini:m.ini||iniFromName(m.name||m.email||("Member "+(mi+1))),
           color:m.color||CREW_COLORS[(mi+1)%CREW_COLORS.length]
@@ -2186,7 +2221,7 @@ export default function WanderPlan(){
       var row=destMemberVotes[destId]||{};
       var up=0;var down=0;var votedCount=0;
       destVoteVoters.forEach(function(v){
-        var val=row[v.id];
+        var val=readVoteForVoter(row,v);
         if(val==="up"){up++;votedCount++;}
         else if(val==="down"){down++;votedCount++;}
       });
@@ -2194,12 +2229,14 @@ export default function WanderPlan(){
       var majorityWin=up>=majorityNeeded&&up>down;
       return {up:up,down:down,votedCount:votedCount,allVoted:allVoted,majorityWin:majorityWin};
     }
-    function castDestVote(destId,voterId,vote){
-      if(voterId!==currentPlannerId)return;
+    function castDestVote(destId,voter,vote){
+      if(!voter||voter.id!==currentPlannerId)return;
+      var aliases=voteKeyAliasesFor(voter);
+      if(aliases.length===0)return;
       setDMV(function(prev){
         var next=Object.assign({},prev||{});
         var row=Object.assign({},next[destId]||{});
-        row[voterId]=vote;
+        aliases.forEach(function(k){row[k]=vote;});
         next[destId]=row;
         saveTripPlanningState({state:{dest_member_votes:next}});
         return next;
@@ -2546,12 +2583,12 @@ export default function WanderPlan(){
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
             {destVoteVoters.map(function(vr){
               var row=destMemberVotes[d.id]||{};
-              var vv=row[vr.id]||"";
+              var vv=readVoteForVoter(row,vr);
               var canEdit=vr.id===currentPlannerId;
               return(<div key={vr.id} style={{display:"flex",alignItems:"center",gap:6}}>
                 <Avi ini={vr.ini} color={vr.color} size={24} name={vr.name}/>
-                <button disabled={!canEdit} onClick={function(){castDestVote(d.id,vr.id,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="up"?C.grn+"55":C.grn+"35"),background:vv==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
-                <button disabled={!canEdit} onClick={function(){castDestVote(d.id,vr.id,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="down"?C.red+"55":C.red+"35"),background:vv==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
+                <button disabled={!canEdit} onClick={function(){castDestVote(d.id,vr,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="up"?C.grn+"55":C.grn+"35"),background:vv==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
+                <button disabled={!canEdit} onClick={function(){castDestVote(d.id,vr,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="down"?C.red+"55":C.red+"35"),background:vv==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
               </div>);
             })}
           </div>
@@ -2607,6 +2644,8 @@ export default function WanderPlan(){
       function approvePOISelection(){
         var voteMembers=[{
           id:currentPlannerId,
+          userId:userIdFromToken(authToken),
+          email:user.email||"",
           name:user.name||user.email||"You",
           ini:iniFromName(user.name||user.email||"You"),
           color:C.gold
@@ -2614,6 +2653,8 @@ export default function WanderPlan(){
         (tm||[]).forEach(function(m){
           voteMembers.push({
             id:makeVoteUserId(m.id,m.email,("crew-"+voteMembers.length)),
+            userId:m.id||"",
+            email:m.email||"",
             name:m.name||m.email||"Crew",
             ini:m.ini||iniFromName(m.name||m.email||"Crew"),
             color:m.color||CREW_COLORS[voteMembers.length%CREW_COLORS.length]
@@ -2626,8 +2667,11 @@ export default function WanderPlan(){
           acceptedIdx.forEach(function(idx){
             var row=Object.assign({},next[idx]||{});
             voteMembers.forEach(function(vm){
-              if(row[vm.id]!==undefined)return;
-              row[vm.id]=(vm.id===currentPlannerId)?"up":"";
+              var aliases=voteKeyAliasesFor(vm);
+              var hasExisting=aliases.some(function(k){return row[k]!==undefined;});
+              if(hasExisting)return;
+              var seedVal=(vm.id===currentPlannerId)?"up":"";
+              aliases.forEach(function(k){row[k]=seedVal;});
             });
             next[idx]=row;
           });
@@ -2728,6 +2772,8 @@ export default function WanderPlan(){
     {wizStep===6&&(function(){
       var voteMembers=[{
         id:currentPlannerId,
+        userId:userIdFromToken(authToken),
+        email:user.email||"",
         name:user.name||user.email||"You",
         ini:iniFromName(user.name||user.email||"You"),
         color:C.gold
@@ -2735,6 +2781,8 @@ export default function WanderPlan(){
       (tm||[]).forEach(function(m){
         voteMembers.push({
           id:makeVoteUserId(m.id,m.email,("crew-"+voteMembers.length)),
+          userId:m.id||"",
+          email:m.email||"",
           name:m.name||m.email||"Crew",
           ini:m.ini||iniFromName(m.name||m.email||"Crew"),
           color:m.color||CREW_COLORS[voteMembers.length%CREW_COLORS.length]
@@ -2749,7 +2797,7 @@ export default function WanderPlan(){
         var row=poiVotes[it.idx]||{};
         var up=0;var down=0;
         voteMembers.forEach(function(vm){
-          var v=row[vm.id];
+          var v=readVoteForVoter(row,vm);
           if(v==="up")up++;
           else if(v==="down")down++;
         });
@@ -2759,12 +2807,14 @@ export default function WanderPlan(){
         if(a.down!==b.down)return a.down-b.down;
         return String(a.poi.name||"").localeCompare(String(b.poi.name||""));
       });
-      function castPoiVote(idx,memberId,vote){
-        if(memberId!==currentPlannerId)return;
+      function castPoiVote(idx,member,vote){
+        if(!member||member.id!==currentPlannerId)return;
+        var aliases=voteKeyAliasesFor(member);
+        if(aliases.length===0)return;
         setPV(function(prev){
           var next=Object.assign({},prev||{});
           var row=Object.assign({},next[idx]||{});
-          row[memberId]=vote;
+          aliases.forEach(function(k){row[k]=vote;});
           next[idx]=row;
           saveTripPlanningState({state:{poi_votes:next}});
           return next;
@@ -2792,12 +2842,12 @@ export default function WanderPlan(){
             <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
               {voteMembers.map(function(vm){
                 var row=poiVotes[r.idx]||{};
-                var v=row[vm.id]||"";
+                var v=readVoteForVoter(row,vm);
                 var canEdit=vm.id===currentPlannerId;
                 return(<div key={vm.id} style={{display:"flex",alignItems:"center",gap:6}}>
                   <Avi ini={vm.ini} color={vm.color} size={24} name={vm.name}/>
-                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.idx,vm.id,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
-                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.idx,vm.id,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
+                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.idx,vm,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
+                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.idx,vm,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
                 </div>);
               })}
             </div>
@@ -2842,19 +2892,19 @@ export default function WanderPlan(){
         <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
           <input value={flightDates.origin||""} onChange={function(e){updFlight("origin",e.target.value.toUpperCase());}} placeholder="Start airport (e.g. DTW)" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
           <input value={flightDates.arrive||""} onChange={function(e){updFlight("arrive",e.target.value.toUpperCase());}} placeholder={"Arrival airport ("+(dests[0]&&dests[0].name?dests[0].name:"leg 1")+")"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={flightDates.depart||""} onChange={function(e){updFlight("depart",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={flightDates.ret||""} onChange={function(e){updFlight("ret",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <input value={flightDates.depart||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updFlight("depart",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <input value={flightDates.ret||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updFlight("ret",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
         </div>
         {extraInputs.map(function(seg,idx){return(<div key={idx} style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:8}}>
           <input value={(flightLegInputs[idx]&&flightLegInputs[idx].to_airport)||""} onChange={function(e){updExtra(idx,"to_airport",e.target.value.toUpperCase());}} placeholder={"Leg "+(idx+2)+" arrival airport ("+(dests[idx+1]&&dests[idx+1].name?dests[idx+1].name:"")+")"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={(flightLegInputs[idx]&&flightLegInputs[idx].depart_date)||""} onChange={function(e){updExtra(idx,"depart_date",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <input value={(flightLegInputs[idx]&&flightLegInputs[idx].depart_date)||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updExtra(idx,"depart_date",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
         </div>);})}
         <button onClick={searchFlights} disabled={flightLoad} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:flightLoad?C.border:C.teal,color:flightLoad?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:flightLoad?"default":"pointer"}}>{flightLoad?"Searching flights...":"Search Flight Options"}</button>
         {flightErr&&<p style={{fontSize:12,color:C.red,marginTop:8}}>{flightErr}</p>}
         {flightDone&&flightLegs.length>0&&(<div style={{marginTop:10}}>
           {flightLegs.map(function(leg){
             return(<div key={leg.leg_id} style={{marginBottom:12,border:"1px solid "+C.border,borderRadius:10,padding:"10px 12px",background:C.bg}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:12,color:C.tx2}}>{leg.from_airport} -> {leg.to_airport}</span><span style={{fontSize:11,color:C.tx3}}>{leg.depart_date}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:12,color:C.tx2}}>{leg.from_airport} {"->"} {leg.to_airport}</span><span style={{fontSize:11,color:C.tx3}}>{leg.depart_date}</span></div>
               {(leg.options||[]).map(function(opt){
                 var sel=flightSel[leg.leg_id]===opt.flight_id;
                 return(<div key={opt.flight_id} onClick={function(){setFSel(function(prev){var n=Object.assign({},prev);n[leg.leg_id]=opt.flight_id;return n;});}} style={{padding:"8px 10px",borderRadius:8,border:"1px solid "+(sel?C.teal+"55":C.border),background:sel?C.teal+"10":"transparent",marginBottom:6,cursor:"pointer"}}>
@@ -3228,3 +3278,5 @@ export default function WanderPlan(){
     </div>
   );
 }
+
+export { makeVoteUserId, voteKeyAliasesFor, readVoteForVoter };
