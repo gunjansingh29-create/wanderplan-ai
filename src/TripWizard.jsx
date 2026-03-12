@@ -620,11 +620,12 @@ function YN({ title, subtitle, desc, tags=[], agent="AI", onYes, onNo, children 
 // ── GROUP ROOM ──────────────────────────────────────────────────────────
 // Wraps each group-phase stage with a member vote bar + "Lock it in" button.
 
-function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLock }) {
+function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLock, onVote, onVeto, myVote, isLocked }) {
   const votes = memberVotes[stageKey] || {};
   const others = members.filter(m => m.initials !== "YO");
   const yesCount = Object.values(votes).filter(v => v === "yes").length;
   const totalVoters = others.length;
+  const hasMajority = yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0;
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
@@ -648,35 +649,73 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
             </div>
           );
         })}
-        {totalVoters > 0 && (
-          <span style={{ fontSize:11, color:T.text2, marginLeft:"auto" }}>
-            {yesCount}/{totalVoters} agreed
-          </span>
+        <span style={{ fontSize:11, color:T.text2, marginLeft:"auto" }}>
+          {totalVoters > 0 ? `${yesCount}/${totalVoters} agreed` : "Solo mode"}
+        </span>
+        {isLocked && (
+          <span style={{ fontSize:11, fontWeight:700, color:T.success,
+            background:`${T.success}15`, padding:"2px 8px", borderRadius:20 }}>🔒 Locked</span>
         )}
       </div>
 
       {children}
 
       {isOrganizer ? (
-        <div style={{ animation:"scaleIn .3s ease-out" }}>
-          <button
-            onClick={() => onLock(stageKey)}
-            className="hd"
-            style={{ width:"100%", padding:"13px 20px", borderRadius:12, border:"none",
-              background: yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0 ? T.primary : T.borderLight,
-              color: yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0 ? "#fff" : T.text3,
-              fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
-              boxShadow: yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0 ? `0 2px 8px ${T.primary}30` : "none",
-              transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
-          >
-            <I n="check" s={16} c={yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0 ? "#fff" : T.text3}/>
-            Lock it in ({yesCount}/{Math.max(totalVoters, 1)} agreed) →
-          </button>
+        <div style={{ display:"flex", flexDirection:"column", gap:8, animation:"scaleIn .3s ease-out" }}>
+          <div style={{ display:"flex", gap:8 }}>
+            <button
+              onClick={() => onLock(stageKey)}
+              className="hd"
+              style={{ flex:3, padding:"13px 20px", borderRadius:12, border:"none",
+                background: hasMajority ? T.primary : T.borderLight,
+                color: hasMajority ? "#fff" : T.text3,
+                fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
+                boxShadow: hasMajority ? `0 2px 8px ${T.primary}30` : "none",
+                transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+            >
+              <I n="check" s={16} c={hasMajority ? "#fff" : T.text3}/>
+              {isLocked ? "Override & Lock →" : `Lock it in (${yesCount}/${Math.max(totalVoters, 1)} agreed) →`}
+            </button>
+            <button
+              onClick={() => onVeto(stageKey)}
+              className="hd"
+              style={{ flex:1, padding:"13px 12px", borderRadius:12,
+                border:`1.5px solid ${T.error}60`,
+                background:`${T.error}08`, color:T.error,
+                fontSize:13, fontWeight:600, cursor:"pointer", minHeight:48,
+                transition:"all .2s", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
+            >
+              ✕ Send Back
+            </button>
+          </div>
+          {!hasMajority && totalVoters > 0 && (
+            <p style={{ fontSize:11, color:T.text3, textAlign:"center" }}>
+              Waiting for majority — or lock anyway to override.
+            </p>
+          )}
         </div>
       ) : (
-        <p style={{ fontSize:12, color:T.text3, textAlign:"center", padding:"10px 0" }}>
-          Waiting for the organizer to lock this section...
-        </p>
+        <div style={{ animation:"scaleIn .3s ease-out" }}>
+          {!myVote ? (
+            <button
+              onClick={() => onVote(stageKey)}
+              className="hd"
+              style={{ width:"100%", padding:"13px 20px", borderRadius:12, border:"none",
+                background:T.primary, color:"#fff",
+                fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
+                boxShadow:`0 2px 8px ${T.primary}30`,
+                transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+            >
+              <I n="check" s={16} c="#fff"/> I Agree ✓
+            </button>
+          ) : (
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+              padding:"12px", borderRadius:12,
+              background:`${T.success}10`, border:`1px solid ${T.success}30` }}>
+              <span style={{ fontSize:13, color:T.success, fontWeight:600 }}>✓ You voted — waiting for organizer to lock</span>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -993,6 +1032,7 @@ export default function TripWizard({
   const [inviteStatus, setInviteStatus] = useState("");
   // Group chatroom state
   const [memberVotes, setMemberVotes] = useState({});
+  const [myVotes, setMyVotes] = useState({}); // current user own vote per group stage
   const [lockedStages, setLockedStages] = useState({});
   const [showGroupToIndividualTransition, setShowGroupToIndividualTransition] = useState(false);
   // Bucket list — personal items loaded from /me/bucket-list
@@ -1016,6 +1056,14 @@ export default function TripWizard({
   // Lock a group stage and advance; last group stage triggers transition screen
   const lockStage = async (key) => {
     setLockedStages(prev => ({ ...prev, [key]: true }));
+    // Persist organizer approval to backend
+    if (tripId && authToken && !demoMode) {
+      apiJson(`/trips/${tripId}/consensus/stages/${key}/finalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ action: "approved" }),
+      }).catch(() => {});
+    }
     if (key === "budget") {
       if (tripId && authToken) {
         try {
@@ -1038,6 +1086,35 @@ export default function TripWizard({
       return;
     }
     next();
+  };
+
+  // Submit current user's vote for a group stage
+  const handleMemberVote = async (key) => {
+    setMyVotes(prev => ({ ...prev, [key]: "yes" }));
+    setMemberVotes(prev => ({ ...prev, [key]: { ...(prev[key] || {}), YO: "yes" } }));
+    if (!tripId || !authToken || demoMode) return;
+    try {
+      await apiJson(`/trips/${tripId}/consensus/stages/${key}/vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ vote: "yes" }),
+      });
+    } catch { setMyVotes(prev => ({ ...prev, [key]: undefined })); }
+  };
+
+  // Organizer veto: send stage back, reset votes, stay on same stage
+  const handleOrganizerVeto = async (key) => {
+    setLockedStages(prev => ({ ...prev, [key]: false }));
+    setMemberVotes(prev => ({ ...prev, [key]: {} }));
+    setMyVotes(prev => ({ ...prev, [key]: undefined }));
+    if (!tripId || !authToken || demoMode) return;
+    try {
+      await apiJson(`/trips/${tripId}/consensus/stages/${key}/finalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ action: "revised" }),
+      });
+    } catch { /* non-fatal */ }
   };
 
   const addMemberByEmail = (email) => {
@@ -1488,25 +1565,51 @@ export default function TripWizard({
     };
   }, [stageKey, tripId, authToken, demoMode]);
 
-  // ── Simulate group member votes when entering a group stage ─────────────
+  // ── Sync group votes from backend consensus API every 3 s ────────────────
   useEffect(() => {
     if (!GROUP_STAGES.includes(stageKey)) return;
     const others = members.filter(m => m.initials !== "YO");
     if (others.length === 0) {
-      // Solo mode: auto-lock after brief delay
       const t = setTimeout(() => lockStage(stageKey), 400);
       return () => clearTimeout(t);
     }
-    const timers = others.map((m, i) =>
-      setTimeout(() => {
-        setMemberVotes(prev => ({
-          ...prev,
-          [stageKey]: { ...(prev[stageKey] || {}), [m.initials]: "yes" },
-        }));
-      }, 1200 + i * 900)
-    );
-    return () => timers.forEach(clearTimeout);
-  }, [stageKey]);
+    if (!tripId || !authToken || demoMode) return;
+    let cancelled = false;
+
+    async function syncConsensus() {
+      try {
+        const data = await apiJson(`/trips/${tripId}/consensus/stages/${stageKey}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (cancelled) return;
+        const consensus = data?.consensus;
+        if (!consensus) return;
+        const backendMembers = consensus.members || [];
+        const votes = consensus.votes || {};
+        const updatedVotes = {};
+        for (const [userId, vote] of Object.entries(votes)) {
+          const bm = backendMembers.find(m => m.user_id === userId);
+          if (!bm) continue;
+          const lm = members.find(m =>
+            m.name.toLowerCase() === (bm.email || "").toLowerCase() ||
+            m.name.toLowerCase() === (bm.name || "").toLowerCase()
+          );
+          if (lm) updatedVotes[lm.initials] = vote;
+        }
+        setMemberVotes(prev => ({ ...prev, [stageKey]: { ...(prev[stageKey] || {}), ...updatedVotes } }));
+        if (currentUserId && votes[currentUserId]) {
+          setMyVotes(prev => ({ ...prev, [stageKey]: votes[currentUserId] }));
+        }
+        if (consensus.final_decision === "approved") {
+          setLockedStages(prev => ({ ...prev, [stageKey]: true }));
+        }
+      } catch { /* ignore transient errors */ }
+    }
+
+    syncConsensus();
+    const interval = setInterval(syncConsensus, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [stageKey, tripId, authToken, demoMode]);
 
   // ── Load MyCrew from localStorage when entering Create stage ───────────
   useEffect(() => {
@@ -2449,7 +2552,7 @@ export default function TripWizard({
   if (stageKey === "pois") return (
     <Shell step={step}>
       <AgentHeader emoji="📍" name="POI Discovery" desc="Vote on activities — organizer locks the list"/>
-      <GroupRoom stageKey="pois" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
+      <GroupRoom stageKey="pois" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
           <Chat agent="POI Agent" emoji="📍" msg="Here are top activity picks for your destinations. Approve or skip each one — your crew can also vote!"/>
           {poiDisplay.map((poi,i)=>{
@@ -2509,7 +2612,7 @@ export default function TripWizard({
   if (stageKey === "duration") return (
     <Shell step={step}>
       <AgentHeader emoji="⏱️" name="Duration Calculator" desc="How many days you need"/>
-      <GroupRoom stageKey="duration" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
+      <GroupRoom stageKey="duration" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
         <Chat agent="Duration Agent" emoji="⏱️" msg="Let me calculate the optimal trip length based on your approved activities..."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .3s both" }}>
@@ -2544,7 +2647,7 @@ export default function TripWizard({
     return (
       <Shell step={step}>
         <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc="Collecting availability and locking the trip window"/>
-        <GroupRoom stageKey="avail" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
+        <GroupRoom stageKey="avail" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
           <Chat agent="Sync Agent" emoji="🗓️" msg="Each member should submit an available start and end date. Then we compute overlap and lock one window for the trip."/>
           <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm,animation:"fadeUp .35s ease-out .2s both" }}>
             <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10 }}>Your Availability</p>
@@ -2642,7 +2745,7 @@ export default function TripWizard({
   if (stageKey === "budget") return (
     <Shell step={step}>
       <AgentHeader emoji="💰" name="Budget Agent" desc="Setting your spending plan"/>
-      <GroupRoom stageKey="budget" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
+      <GroupRoom stageKey="budget" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
         <Chat agent="Budget Agent" emoji="💰" msg="What's your per-person daily budget? Drag the slider to set it."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
@@ -2940,7 +3043,7 @@ export default function TripWizard({
   if (stageKey === "stays") return (
     <Shell step={step}>
       <AgentHeader emoji="🏨" name="Stays Agent" desc="Finding perfect accommodations"/>
-      <GroupRoom stageKey="stays" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage}>
+      <GroupRoom stageKey="stays" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
         <Chat agent="Stays Agent" emoji="🏨" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
         {stayDisplay.map((s,i)=>{
           const picked = stayPicks[i];
