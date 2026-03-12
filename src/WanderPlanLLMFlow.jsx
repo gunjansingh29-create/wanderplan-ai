@@ -206,6 +206,30 @@ function readVoteForVoter(row,voter){
   return "";
 }
 
+function summarizeInterestConsensus(catId,myInterests,members,tripJoinedMap){
+  var yesCount=0;
+  var totalCount=0;
+  var my=(myInterests&&typeof myInterests==="object")?myInterests[catId]:undefined;
+  if(typeof my==="boolean"){
+    totalCount++;
+    if(my)yesCount++;
+  }
+  (Array.isArray(members)?members:[]).forEach(function(m){
+    var st=mapTripMemberStatus(m&&(m.trip_status||m.status));
+    var joined=!!(tripJoinedMap&&m&&tripJoinedMap[m.id]);
+    if(st!=="accepted"&&!joined)return;
+    var prof=(m&&m.profile&&typeof m.profile==="object")?m.profile:null;
+    var ints=(prof&&prof.interests&&typeof prof.interests==="object")?prof.interests:{};
+    var v=ints[catId];
+    if(typeof v==="boolean"){
+      totalCount++;
+      if(v)yesCount++;
+    }
+  });
+  var pct=totalCount>0?Math.round((yesCount/totalCount)*100):0;
+  return {yesCount:yesCount,totalCount:totalCount,pct:pct,myValue:my};
+}
+
 function isCurrentMemberRow(member, token, myEmail){
   var mid=String(member&&member.user_id||member&&member.id||"").trim();
   var tokUid=userIdFromToken(token||"");
@@ -2626,19 +2650,11 @@ export default function WanderPlan(){
     {wizStep===3&&(<div>
       {ab("Interest Profiler","Your profile interests merged with the group. Green = strong consensus.")}
       {CATS.map(function(cat,i){
-        var my=(user.interests||{})[cat.id];
-        var yesCount=0;
-        var totalCount=0;
-        if(typeof my==="boolean"){totalCount++;if(my)yesCount++;}
-        tm.forEach(function(m){
-          var st=mapTripMemberStatus(m&&(m.trip_status||m.status));
-          if(st!=="accepted"&&!tripJoined[m.id])return;
-          var prof=(m&&m.profile&&typeof m.profile==="object")?m.profile:null;
-          var ints=(prof&&prof.interests&&typeof prof.interests==="object")?prof.interests:{};
-          var v=ints[cat.id];
-          if(typeof v==="boolean"){totalCount++;if(v)yesCount++;}
-        });
-        var p=totalCount>0?Math.round((yesCount/totalCount)*100):0;
+        var sum=summarizeInterestConsensus(cat.id,user.interests,tm,tripJoined);
+        var my=sum.myValue;
+        var yesCount=sum.yesCount;
+        var totalCount=sum.totalCount;
+        var p=sum.pct;
         return(<div key={cat.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:i<CATS.length-1?"1px solid "+C.border:"none"}}>
           <span style={{flex:1,fontSize:13,color:C.tx2}}>{cat.q}</span>
           <div style={{display:"flex",gap:4}}>
@@ -3313,4 +3329,4 @@ export default function WanderPlan(){
   );
 }
 
-export { makeVoteUserId, voteKeyAliasesFor, readVoteForVoter };
+export { makeVoteUserId, voteKeyAliasesFor, readVoteForVoter, summarizeInterestConsensus };

@@ -1,4 +1,9 @@
-import { makeVoteUserId, voteKeyAliasesFor, readVoteForVoter } from "./WanderPlanLLMFlow";
+import {
+  makeVoteUserId,
+  voteKeyAliasesFor,
+  readVoteForVoter,
+  summarizeInterestConsensus,
+} from "./WanderPlanLLMFlow";
 
 describe("WanderPlanLLMFlow vote identity helpers", () => {
   test("makeVoteUserId prefers user id, then email fallback", () => {
@@ -42,5 +47,56 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     const voter = { id: "u-1" };
     expect(readVoteForVoter({ "u-1": "yes" }, voter)).toBe("up");
     expect(readVoteForVoter({ "u-1": "no" }, voter)).toBe("down");
+  });
+});
+
+describe("WanderPlanLLMFlow Step 3 interest consensus", () => {
+  test("counts only current user + accepted/joined members", () => {
+    const members = [
+      {
+        id: "m-accepted",
+        status: "accepted",
+        profile: { interests: { hiking: true } },
+      },
+      {
+        id: "m-invited",
+        status: "invited",
+        profile: { interests: { hiking: true } },
+      },
+      {
+        id: "m-selected-joined",
+        status: "selected",
+        profile: { interests: { hiking: false } },
+      },
+      {
+        id: "m-accepted-no-answer",
+        status: "accepted",
+        profile: { interests: {} },
+      },
+    ];
+
+    const summary = summarizeInterestConsensus(
+      "hiking",
+      { hiking: true },
+      members,
+      { "m-selected-joined": true }
+    );
+
+    // Included: current user yes, accepted yes, selected+joined no
+    expect(summary.yesCount).toBe(2);
+    expect(summary.totalCount).toBe(3);
+    expect(summary.pct).toBe(67);
+  });
+
+  test("returns zero percentage when nobody has a boolean answer", () => {
+    const summary = summarizeInterestConsensus(
+      "culture",
+      {},
+      [{ id: "m1", status: "accepted", profile: { interests: {} } }],
+      {}
+    );
+    expect(summary.yesCount).toBe(0);
+    expect(summary.totalCount).toBe(0);
+    expect(summary.pct).toBe(0);
   });
 });
