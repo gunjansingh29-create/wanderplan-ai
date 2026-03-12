@@ -206,6 +206,37 @@ function readVoteForVoter(row,voter){
   return "";
 }
 
+function canonicalDestinationVoteKey(name,fallback){
+  var raw=String(name||"").trim().toLowerCase();
+  var slug=raw.replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  if(slug)return "dest:"+slug;
+  var fb=String(fallback||"").trim();
+  return fb||"dest:unknown";
+}
+
+function canonicalPoiVoteKey(poi,idx){
+  var pid=String(poi&&poi.poi_id||"").trim();
+  if(pid)return "poi:"+pid;
+  var raw=(String(poi&&poi.name||"")+" "+String(poi&&poi.destination||"")+" "+String(poi&&poi.category||"")).trim().toLowerCase();
+  var slug=raw.replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  if(slug)return "poi:"+slug;
+  return "poi:index-"+String(idx);
+}
+
+function readPoiVoteRow(votesMap,poi,idx){
+  var map=(votesMap&&typeof votesMap==="object")?votesMap:{};
+  var key=canonicalPoiVoteKey(poi,idx);
+  var row=map[key];
+  if(!(row&&typeof row==="object")){
+    row=map[idx];
+    if(!(row&&typeof row==="object")){
+      row=map[String(idx)];
+    }
+  }
+  if(!(row&&typeof row==="object"))row={};
+  return {key:key,row:row};
+}
+
 function summarizeInterestConsensus(catId,myInterests,members,tripJoinedMap){
   var yesCount=0;
   var totalCount=0;
@@ -2229,12 +2260,13 @@ export default function WanderPlan(){
     var td=tripDestInputs.map(function(v,idx){
       var raw=String(v||"").trim();
       if(!raw)return null;
+      var voteKey=canonicalDestinationVoteKey(raw,("dest:"+idx));
       var byId=bucket.find(function(b){return b.id===raw;});
-      if(byId)return byId;
+      if(byId)return Object.assign({},byId,{vote_key:voteKey});
       var byName=bucket.find(function(b){return String(b&&b.name||"").trim().toLowerCase()===raw.toLowerCase();});
-      if(byName)return byName;
+      if(byName)return Object.assign({},byName,{vote_key:voteKey});
       var sid=("trip-dest-"+idx+"-"+raw.toLowerCase().replace(/[^a-z0-9]+/g,"-")).replace(/^-+|-+$/g,"");
-      return {id:sid||("trip-dest-"+idx),name:raw,country:"",bestMonths:[],costPerDay:0,tags:[],bestTimeDesc:"",costNote:""};
+      return {id:sid||("trip-dest-"+idx),vote_key:voteKey,name:raw,country:"",bestMonths:[],costPerDay:0,tags:[],bestTimeDesc:"",costNote:""};
     }).filter(Boolean);
     var currentPlannerId=getCurrentPlannerId();
     var destVoteVoters=[{
@@ -2259,8 +2291,14 @@ export default function WanderPlan(){
       }
     });
     var majorityNeeded=Math.floor(Math.max(destVoteVoters.length,1)/2)+1;
-    function getDestVoteSummary(destId){
-      var row=destMemberVotes[destId]||{};
+    function getDestVoteSummary(dest){
+      var voteKey=String(dest&&dest.vote_key||dest&&dest.id||"").trim();
+      var legacyKey=String(dest&&dest.id||"").trim();
+      var row=voteKey?destMemberVotes[voteKey]:undefined;
+      if(!(row&&typeof row==="object")&&legacyKey){
+        row=destMemberVotes[legacyKey]||{};
+      }
+      if(!(row&&typeof row==="object"))row={};
       var up=0;var down=0;var votedCount=0;
       destVoteVoters.forEach(function(v){
         var val=readVoteForVoter(row,v);
@@ -2271,23 +2309,32 @@ export default function WanderPlan(){
       var majorityWin=up>=majorityNeeded&&up>down;
       return {up:up,down:down,votedCount:votedCount,allVoted:allVoted,majorityWin:majorityWin};
     }
-    function castDestVote(destId,voter,vote){
+    function castDestVote(dest,voter,vote){
       if(!voter||voter.id!==currentPlannerId)return;
       var aliases=voteKeyAliasesFor(voter);
       if(aliases.length===0)return;
+      var voteKey=String(dest&&dest.vote_key||dest&&dest.id||"").trim();
+      var legacyKey=String(dest&&dest.id||"").trim();
+      if(!voteKey&&!legacyKey)return;
       setDMV(function(prev){
         var next=Object.assign({},prev||{});
-        var row=Object.assign({},next[destId]||{});
+        var key=voteKey||legacyKey;
+        var row=Object.assign({},next[key]||{});
         aliases.forEach(function(k){row[k]=vote;});
-        next[destId]=row;
+        next[key]=row;
+        if(legacyKey&&legacyKey!==key){
+          var legacyRow=Object.assign({},next[legacyKey]||{});
+          aliases.forEach(function(k){legacyRow[k]=vote;});
+          next[legacyKey]=legacyRow;
+        }
         saveTripPlanningState({state:{dest_member_votes:next}}).then(function(){
           refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
         });
         return next;
       });
     }
-    var vd=td.filter(function(d){var s=getDestVoteSummary(d.id);return s.majorityWin;});
-    var allDestinationsVoted=td.length>0&&td.every(function(d){return getDestVoteSummary(d.id).allVoted;});
+    var vd=td.filter(function(d){var s=getDestVoteSummary(d);return s.majorityWin;});
+    var allDestinationsVoted=td.length>0&&td.every(function(d){return getDestVoteSummary(d).allVoted;});
     var dests=vd.length>0?vd:td;
 
     function logWizAction(action,payload){
@@ -2612,7 +2659,7 @@ export default function WanderPlan(){
         <p style={{fontSize:12,color:C.tealL}}>Majority needed: {majorityNeeded} of {destVoteVoters.length}</p>
       </div>
       {td.map(function(d){
-        var s=getDestVoteSummary(d.id);
+        var s=getDestVoteSummary(d);
         return(<div key={d.id} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,alignItems:"center"}}>
             <div><span style={{fontWeight:700}}>{d.name}</span><span style={{color:C.tx3,fontSize:13,marginLeft:8}}>{d.country}</span></div>
@@ -2626,13 +2673,13 @@ export default function WanderPlan(){
           </div>
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
             {destVoteVoters.map(function(vr){
-              var row=destMemberVotes[d.id]||{};
+              var row=(destMemberVotes[String(d&&d.vote_key||"")]||destMemberVotes[String(d&&d.id||"")]||{});
               var vv=readVoteForVoter(row,vr);
               var canEdit=vr.id===currentPlannerId;
               return(<div key={vr.id} style={{display:"flex",alignItems:"center",gap:6}}>
                 <Avi ini={vr.ini} color={vr.color} size={24} name={vr.name}/>
-                <button disabled={!canEdit} onClick={function(){castDestVote(d.id,vr,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="up"?C.grn+"55":C.grn+"35"),background:vv==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
-                <button disabled={!canEdit} onClick={function(){castDestVote(d.id,vr,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="down"?C.red+"55":C.red+"35"),background:vv==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
+                <button disabled={!canEdit} onClick={function(){castDestVote(d,vr,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="up"?C.grn+"55":C.grn+"35"),background:vv==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
+                <button disabled={!canEdit} onClick={function(){castDestVote(d,vr,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="down"?C.red+"55":C.red+"35"),background:vv==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
               </div>);
             })}
           </div>
@@ -2717,7 +2764,9 @@ export default function WanderPlan(){
         setPV(function(prev){
           var next=Object.assign({},prev||{});
           acceptedIdx.forEach(function(idx){
-            var row=Object.assign({},next[idx]||{});
+            var rowMeta=readPoiVoteRow(next,pois[idx],idx);
+            var voteKey=rowMeta.key;
+            var row=Object.assign({},rowMeta.row||{});
             voteMembers.forEach(function(vm){
               var aliases=voteKeyAliasesFor(vm);
               var hasExisting=aliases.some(function(k){return row[k]!==undefined;});
@@ -2725,6 +2774,7 @@ export default function WanderPlan(){
               var seedVal=(vm.id===currentPlannerId)?"up":"";
               aliases.forEach(function(k){row[k]=seedVal;});
             });
+            next[voteKey]=row;
             next[idx]=row;
           });
           saveTripPlanningState({state:{poi_votes:next}});
@@ -2846,27 +2896,29 @@ export default function WanderPlan(){
         pois.forEach(function(p,i){if(poiStatus[i]!=="no")candidates.push({idx:i,poi:p});});
       }
       var ranked=candidates.map(function(it){
-        var row=poiVotes[it.idx]||{};
+        var rowMeta=readPoiVoteRow(poiVotes,it.poi,it.idx);
+        var row=rowMeta.row;
         var up=0;var down=0;
         voteMembers.forEach(function(vm){
           var v=readVoteForVoter(row,vm);
           if(v==="up")up++;
           else if(v==="down")down++;
         });
-        return Object.assign({},it,{up:up,down:down,score:up-down});
+        return Object.assign({},it,{vote_key:rowMeta.key,up:up,down:down,score:up-down});
       }).sort(function(a,b){
         if(b.up!==a.up)return b.up-a.up;
         if(a.down!==b.down)return a.down-b.down;
         return String(a.poi.name||"").localeCompare(String(b.poi.name||""));
       });
-      function castPoiVote(idx,member,vote){
+      function castPoiVote(voteKey,idx,member,vote){
         if(!member||member.id!==currentPlannerId)return;
         var aliases=voteKeyAliasesFor(member);
         if(aliases.length===0)return;
         setPV(function(prev){
           var next=Object.assign({},prev||{});
-          var row=Object.assign({},next[idx]||{});
+          var row=Object.assign({},(next[voteKey]||next[idx]||{}));
           aliases.forEach(function(k){row[k]=vote;});
+          next[voteKey]=row;
           next[idx]=row;
           saveTripPlanningState({state:{poi_votes:next}}).then(function(){
             refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
@@ -2895,13 +2947,14 @@ export default function WanderPlan(){
             <p style={{fontSize:13,color:C.tx2,marginBottom:10}}>{r.poi.destination||"Destination"} - Mentioned by {r.up}</p>
             <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
               {voteMembers.map(function(vm){
-                var row=poiVotes[r.idx]||{};
+                var rowMeta=readPoiVoteRow(poiVotes,r.poi,r.idx);
+                var row=rowMeta.row;
                 var v=readVoteForVoter(row,vm);
                 var canEdit=vm.id===currentPlannerId;
                 return(<div key={vm.id} style={{display:"flex",alignItems:"center",gap:6}}>
                   <Avi ini={vm.ini} color={vm.color} size={24} name={vm.name}/>
-                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.idx,vm,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
-                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.idx,vm,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
+                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.vote_key,r.idx,vm,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
+                  <button disabled={!canEdit} onClick={function(){castPoiVote(r.vote_key,r.idx,vm,"down");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4E"}</button>
                 </div>);
               })}
             </div>
