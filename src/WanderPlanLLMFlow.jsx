@@ -820,6 +820,8 @@ export default function WanderPlan(){
           status:displayStatus,
           trip_status:tripStatusRaw,
           my_status:myStatusRaw,
+          my_role:String(t.my_role||((myStatusRaw==="owner")?"owner":"member")).toLowerCase(),
+          owner_id:String(t.owner_id||""),
           dests:tripDestinations.slice(),
           destinations:tripDestinations.slice(),
           destNames:tripDestinations.join(" + "),
@@ -874,6 +876,10 @@ export default function WanderPlan(){
         return Object.assign({},prev,{
           members:found.members,
           status:found.status,
+          trip_status:found.trip_status,
+          my_status:found.my_status,
+          my_role:found.my_role,
+          owner_id:found.owner_id,
           name:found.name,
           destNames:found.destNames,
           dests:Array.isArray(found.dests)?found.dests.slice():[]
@@ -1102,6 +1108,10 @@ export default function WanderPlan(){
     var tr=tripCtx||newTrip||{};
     var tid=String(currentTripId||tr.id||"").trim();
     if(!isUuidLike(tid))return true;
+    var hasRoleHints=!!(tr&&((tr.my_status!==undefined&&tr.my_status!==null)||(tr.my_role!==undefined&&tr.my_role!==null)||(tr.owner_id!==undefined&&tr.owner_id!==null)));
+    if(!hasRoleHints)return true;
+    var myStatus=String(tr.my_status||"").trim().toLowerCase();
+    if(myStatus==="owner")return true;
     var role=String(tr.my_role||"").trim().toLowerCase();
     if(role==="owner")return true;
     var ownerId=String(tr.owner_id||"").trim();
@@ -2432,7 +2442,7 @@ export default function WanderPlan(){
     var organizerMode=isWizardOrganizer(tr);
     var hdr=(<div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}><button onClick={function(){if(wizStep>0)setWizardStepShared(wizStep-1);else go("dash");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13}}>Back</button><div style={{flex:1,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:pct+"%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2,transition:"width .5s"}}/></div><span style={{fontSize:11,color:C.tx3}}>{wizStep+1}/{WIZ.length}</span></div>);
     var shdr=(<Fade delay={50}><div style={{display:"flex",alignItems:"center",gap:12,margin:"16px 0 20px"}}><div style={{width:44,height:44,borderRadius:13,background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:"#fff"}}>{wizStep+1}</div><div><h2 style={{fontSize:20,fontWeight:700}}>{WIZ[wizStep]}</h2><p style={{fontSize:13,color:C.tx2}}>Step {wizStep+1} of {WIZ.length}</p></div></div></Fade>);
-    var chps=(<Fade delay={80}><div style={{background:C.surface,borderRadius:14,padding:"14px 18px",border:"1px solid "+C.border,marginBottom:16}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{fontSize:12,color:C.tx3}}>{tr.name||"Trip"}</span><div style={{display:"flex",gap:3}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={20}/>{tm.map(function(m){return <Avi key={m.id} ini={m.ini} color={m.color} size={20}/>;})}</div></div><div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:11,color:C.tx3}}>{organizerMode?"Organizer final say enabled":"Voting mode - organizer finalizes each stage"}</span><span style={{fontSize:11,color:C.tx3}}>{organizerMode?"Organizer":"Crew member"}</span></div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s,i){var dn=i<wizStep;var a=i===wizStep;return(<div key={i} onClick={function(){if(organizerMode)setWizardStepShared(i);}} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",cursor:organizerMode?"pointer":"default",opacity:organizerMode?1:.85,background:a?C.gold:dn?C.teal+"25":C.bg,color:a?C.bg:dn?C.teal:C.tx3,border:a?"none":"1px solid "+C.border}}>{dn?"Y":(i+1)}</div>);})}</div></div></Fade>);
+    var chps=(<Fade delay={80}><div style={{background:C.surface,borderRadius:14,padding:"14px 18px",border:"1px solid "+C.border,marginBottom:16}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{fontSize:12,color:C.tx3}}>{tr.name||"Trip"}</span><div style={{display:"flex",gap:3}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={20}/>{tm.map(function(m){return <Avi key={m.id} ini={m.ini} color={m.color} size={20}/>;})}</div></div><div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:11,color:C.tx3}}>{organizerMode?"Organizer final say enabled":"Voting mode - organizer finalizes each stage"}</span><span style={{fontSize:11,color:C.tx3}}>{organizerMode?"Organizer":"Crew member"}</span></div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s,i){var dn=i<wizStep;var a=i===wizStep;var canJump=organizerMode||i<=wizStep;return(<div key={i} onClick={function(){if(canJump)setWizardStepShared(i);}} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",cursor:canJump?"pointer":"default",opacity:canJump?1:.85,background:a?C.gold:dn?C.teal+"25":C.bg,color:a?C.bg:dn?C.teal:C.tx3,border:a?"none":"1px solid "+C.border}}>{dn?"Y":(i+1)}</div>);})}</div></div></Fade>);
 
     var ab=function(n,msg){return(<div style={{display:"flex",gap:10,marginBottom:14}}><div style={{width:28,height:28,borderRadius:999,background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",flexShrink:0}}>AI</div><div><p style={{fontSize:11,color:C.tealL,fontWeight:600,marginBottom:3}}>{n}</p><div style={{background:C.bg,padding:"10px 14px",borderRadius:"12px 12px 12px 3px",fontSize:14,lineHeight:1.6,color:C.tx2,border:"1px solid "+C.border}}>{msg}</div></div></div>);};
     var goBtn=function(label){return(<button onClick={adv} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{label||"Approve & Continue"}</button>);};
