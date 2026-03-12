@@ -635,20 +635,21 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
         display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <span style={{ fontSize:12, color:T.text3, fontWeight:600 }}>Group vote:</span>
         {members.map(m => {
-          const isOrgIcon = m.initials === "YO" && isOrganizer;
+          const isCurrentUser = m.initials === "YO" || (currentUserId && m.userId === currentUserId);
+          const isOrgIcon = isCurrentUser && isOrganizer;
           const vote = votes[m.initials] === "yes" ? "yes" : (isOrgIcon ? "organizer" : (votes[m.initials] || "pending"));
           return (
             <div key={m.initials}
-              title={isOrganizer && m.initials !== "YO" && vote !== "yes" ? "Click to mark as agreed" : undefined}
-              onClick={isOrganizer && m.initials !== "YO" && vote !== "yes" ? () => onOverride(stageKey, m.initials) : undefined}
+              title={isOrganizer && !isCurrentUser && vote !== "yes" ? "Click to mark as agreed" : undefined}
+              onClick={isOrganizer && !isCurrentUser && vote !== "yes" ? () => onOverride(stageKey, m.initials) : undefined}
               style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2,
-                cursor: isOrganizer && m.initials !== "YO" && vote !== "yes" ? "pointer" : "default" }}>
+                cursor: isOrganizer && !isCurrentUser && vote !== "yes" ? "pointer" : "default" }}>
               <div style={{ width:30, height:30, borderRadius:999,
                 background:`linear-gradient(135deg,${T.primary}80,${T.accent}80)`,
                 display:"flex", alignItems:"center", justifyContent:"center",
                 fontSize:11, fontWeight:700, color:"#fff",
                 border: vote === "yes" ? `2px solid ${T.success}` : vote === "organizer" ? `2px solid ${T.primary}` : `2px solid ${T.borderLight}`,
-                boxShadow: isOrganizer && m.initials !== "YO" && vote !== "yes" ? `0 0 0 3px ${T.primary}25` : "none",
+                boxShadow: isOrganizer && !isCurrentUser && vote !== "yes" ? `0 0 0 3px ${T.primary}25` : "none",
                 transition:"box-shadow .15s",
               }}>{m.initials}</div>
               <span style={{ fontSize:9, color: vote === "yes" ? T.success : vote === "organizer" ? T.primary : T.text3 }}>
@@ -1042,6 +1043,7 @@ export default function TripWizard({
   const [memberVotes, setMemberVotes] = useState({});
   const [myVotes, setMyVotes] = useState({}); // current user own vote per group stage
   const [lockedStages, setLockedStages] = useState({});
+  const [tripOwnerId, setTripOwnerId] = useState(""); // set from first consensus poll
   const [showGroupToIndividualTransition, setShowGroupToIndividualTransition] = useState(false);
   // Bucket list — personal items loaded from /me/bucket-list
   const [personalBucketItems, setPersonalBucketItems] = useState([]);
@@ -1062,7 +1064,9 @@ export default function TripWizard({
   const currentUserId = getUserIdFromToken(authToken);
   if (typeof membersRef !== "undefined") { membersRef.current = members; currentUserIdRef.current = currentUserId; }
   const joinedCount = members.filter((m) => m.status === "done").length;
-  const isOrganizer = members.length === 0 || members[0]?.initials === "YO" || (currentUserId && members.some(m => m.userId === currentUserId && m.role === "owner"));
+  const isOrganizer = tripOwnerId
+    ? (!!currentUserId && tripOwnerId === currentUserId)
+    : (members.length === 0 || members[0]?.initials === "YO");
 
   // Lock a group stage and advance; last group stage triggers transition screen
   const lockStage = async (key) => {
@@ -1589,7 +1593,8 @@ export default function TripWizard({
   // ── Sync group votes from backend consensus API every 3 s ────────────────
   useEffect(() => {
     if (!GROUP_STAGES.includes(stageKey)) return;
-    const others = members.filter(m => m.initials !== "YO");
+    // Post-hydration members have real userId, not "YO" — check both ways
+    const others = members.filter(m => m.initials !== "YO" && m.userId !== currentUserId);
     if (others.length === 0) {
       const t = setTimeout(() => lockStage(stageKey), 400);
       return () => clearTimeout(t);
@@ -1610,6 +1615,8 @@ export default function TripWizard({
         // Use refs so this closure always sees the latest members/currentUserId
         const currentMembers = membersRef.current;
         const uid = currentUserIdRef.current;
+        // Track who the organizer is from the authoritative backend response
+        if (consensus.organizer_user_id) setTripOwnerId(consensus.organizer_user_id);
         const updatedVotes = {};
         for (const [userId, vote] of Object.entries(votes)) {
           const bm = backendMembers.find(m => m.user_id === userId);
