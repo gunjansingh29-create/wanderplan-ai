@@ -2968,39 +2968,50 @@ async def put_trip_planning_state(
         if not membership or str(membership["status"] or "pending").lower() != "accepted":
             raise HTTPException(status_code=403, detail="Only accepted trip members can update planning state")
 
-        existing = await conn.fetchrow(
-            """
-            SELECT current_step, state
-            FROM trip_planning_states
-            WHERE trip_id = $1
-            """,
-            trip_id,
-        )
-        existing_state = (existing["state"] or {}) if existing else {}
-        if not isinstance(existing_state, dict):
-            existing_state = {}
-        if body.merge:
-            merged_state = _deep_merge_state(existing_state, incoming_state)
-        else:
-            merged_state = incoming_state
+        async with conn.transaction():
+            # Ensure the row exists so concurrent writers always contend on one row lock.
+            await conn.execute(
+                """
+                INSERT INTO trip_planning_states (trip_id, current_step, state, updated_by, updated_at)
+                VALUES ($1, 0, '{}'::jsonb, $2, NOW())
+                ON CONFLICT (trip_id) DO NOTHING
+                """,
+                trip_id,
+                user_id,
+            )
+            existing = await conn.fetchrow(
+                """
+                SELECT current_step, state
+                FROM trip_planning_states
+                WHERE trip_id = $1
+                FOR UPDATE
+                """,
+                trip_id,
+            )
+            existing_state = (existing["state"] or {}) if existing else {}
+            if not isinstance(existing_state, dict):
+                existing_state = {}
+            if body.merge:
+                merged_state = _deep_merge_state(existing_state, incoming_state)
+            else:
+                merged_state = incoming_state
 
-        step_value = next_step if next_step is not None else int((existing["current_step"] if existing else 0) or 0)
-        row = await conn.fetchrow(
-            """
-            INSERT INTO trip_planning_states (trip_id, current_step, state, updated_by, updated_at)
-            VALUES ($1, $2, $3::jsonb, $4, NOW())
-            ON CONFLICT (trip_id)
-            DO UPDATE SET current_step = EXCLUDED.current_step,
-                          state = EXCLUDED.state,
-                          updated_by = EXCLUDED.updated_by,
-                          updated_at = NOW()
-            RETURNING trip_id, current_step, state, updated_by, updated_at
-            """,
-            trip_id,
-            step_value,
-            json.dumps(merged_state),
-            user_id,
-        )
+            step_value = next_step if next_step is not None else int((existing["current_step"] if existing else 0) or 0)
+            row = await conn.fetchrow(
+                """
+                UPDATE trip_planning_states
+                SET current_step = $2,
+                    state = $3::jsonb,
+                    updated_by = $4,
+                    updated_at = NOW()
+                WHERE trip_id = $1
+                RETURNING trip_id, current_step, state, updated_by, updated_at
+                """,
+                trip_id,
+                step_value,
+                json.dumps(merged_state),
+                user_id,
+            )
 
     return {
         "trip_id": str(row["trip_id"]),

@@ -2280,7 +2280,9 @@ export default function WanderPlan(){
         var row=Object.assign({},next[destId]||{});
         aliases.forEach(function(k){row[k]=vote;});
         next[destId]=row;
-        saveTripPlanningState({state:{dest_member_votes:next}});
+        saveTripPlanningState({state:{dest_member_votes:next}}).then(function(){
+          refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+        });
         return next;
       });
     }
@@ -2866,7 +2868,9 @@ export default function WanderPlan(){
           var row=Object.assign({},next[idx]||{});
           aliases.forEach(function(k){row[k]=vote;});
           next[idx]=row;
-          saveTripPlanningState({state:{poi_votes:next}});
+          saveTripPlanningState({state:{poi_votes:next}}).then(function(){
+            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          });
           return next;
         });
       }
