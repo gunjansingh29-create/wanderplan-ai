@@ -1,4 +1,4 @@
-import { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode, mapInterestAnswersToCategories } from "./TripWizard";
+import { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode, mapInterestAnswersToCategories, mapInterestAnswersToProfileInterests } from "./TripWizard";
 
 describe("TripWizard token helpers", () => {
   test("extracts user id from test token format", () => {
@@ -10,6 +10,24 @@ describe("TripWizard token helpers", () => {
   test("returns empty string for invalid token", () => {
     expect(getUserIdFromToken("Bearer abc")).toBe("");
     expect(getUserIdFromToken("")).toBe("");
+  });
+
+  test("extracts user id from JWT payload claims", () => {
+    const payloadSub = Buffer.from(JSON.stringify({ sub: "user-sub-123" }))
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+    const jwtWithSub = `x.${payloadSub}.y`;
+    expect(getUserIdFromToken(jwtWithSub)).toBe("user-sub-123");
+
+    const payloadUserId = Buffer.from(JSON.stringify({ user_id: "user-id-999" }))
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+    const jwtWithUserId = `x.${payloadUserId}.y`;
+    expect(getUserIdFromToken(jwtWithUserId)).toBe("user-id-999");
   });
 });
 
@@ -242,5 +260,30 @@ describe("mapInterestAnswersToCategories", () => {
       5: "yes", // culture
     });
     expect(categories).toEqual(["food", "culture"]);
+  });
+});
+
+describe("mapInterestAnswersToProfileInterests", () => {
+  test("maps yes/no answers to profile interest booleans", () => {
+    const profileInterests = mapInterestAnswersToProfileInterests({
+      0: "yes", // nature
+      1: "no",  // adventure
+      2: "yes", // food
+      3: "no",  // culture
+    });
+    expect(profileInterests).toEqual({
+      nature: true,
+      adventure: false,
+      food: true,
+      culture: false,
+    });
+  });
+
+  test("keeps true when duplicate category has conflicting answers", () => {
+    const profileInterests = mapInterestAnswersToProfileInterests({
+      3: "yes", // culture
+      5: "no",  // culture duplicate
+    });
+    expect(profileInterests).toEqual({ culture: true });
   });
 });

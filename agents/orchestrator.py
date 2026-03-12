@@ -1,6 +1,7 @@
 ﻿
 from __future__ import annotations
 import asyncio
+import base64
 import json
 import os
 import re
@@ -520,6 +521,19 @@ def _parse_user_id_from_token(authorization: str) -> str:
     token = authorization[len(prefix) :].strip()
     if token.startswith("test-token:"):
         return token.split(":", 1)[1]
+    parts = token.split(".")
+    if len(parts) == 3:
+        try:
+            payload = parts[1].replace("-", "+").replace("_", "/")
+            while len(payload) % 4 != 0:
+                payload += "="
+            payload_json = base64.b64decode(payload.encode("utf-8")).decode("utf-8")
+            parsed = json.loads(payload_json)
+            uid = str(parsed.get("sub") or parsed.get("user_id") or parsed.get("userId") or parsed.get("id") or "").strip()
+            if uid:
+                return uid
+        except Exception:
+            pass
     raise HTTPException(status_code=401, detail="Invalid token")
 
 

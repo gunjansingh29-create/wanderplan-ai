@@ -169,7 +169,7 @@ function AirportCityInput({ label, value, onChange, authToken, placeholder = "Ci
       })
       .catch(() => { if (!cancelled) setBusy(false); });
     return () => { cancelled = true; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Sync display when value is set externally but no city hint resolved it
   useEffect(() => {

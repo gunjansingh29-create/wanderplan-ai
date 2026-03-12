@@ -164,6 +164,23 @@ function userIdFromToken(token){
   if(t.indexOf("test-token:")===0){
     return t.substring("test-token:".length).trim();
   }
+  var parts=t.split(".");
+  if(parts.length===3){
+    try{
+      var payload=parts[1].replace(/-/g,"+").replace(/_/g,"/");
+      while(payload.length%4!==0)payload+="=";
+      var decoded="";
+      if(typeof atob==="function"){
+        decoded=atob(payload);
+      }else if(typeof Buffer!=="undefined"){
+        decoded=Buffer.from(payload,"base64").toString("utf8");
+      }else{
+        return "";
+      }
+      var obj=JSON.parse(decoded);
+      return String(obj&&obj.sub||obj&&obj.user_id||obj&&obj.userId||obj&&obj.id||"").trim();
+    }catch(e){}
+  }
   return "";
 }
 
