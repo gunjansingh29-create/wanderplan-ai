@@ -2851,13 +2851,50 @@ async def get_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
 
         members = await conn.fetch(
             """
-            SELECT tm.user_id, tm.role, tm.status, u.name, u.email
+            SELECT
+              tm.user_id,
+              tm.role,
+              tm.status,
+              u.name,
+              u.email,
+              up.display_name,
+              up.interests,
+              up.budget_tier,
+              up.dietary
             FROM trip_members tm
             JOIN users u ON u.id = tm.user_id
+            LEFT JOIN user_profiles up ON up.user_id = u.id
             WHERE trip_id = $1
             ORDER BY tm.joined_at NULLS FIRST
             """,
             trip_id,
+        )
+
+    member_items: list[dict[str, Any]] = []
+    for m in members:
+        interests = m["interests"]
+        if isinstance(interests, str):
+            try:
+                interests = json.loads(interests)
+            except Exception:
+                interests = {}
+        if not isinstance(interests, dict):
+            interests = {}
+
+        member_items.append(
+            {
+                "user_id": str(m["user_id"]),
+                "role": str(m["role"] or "member"),
+                "status": str(m["status"] or "pending"),
+                "name": str(m["name"] or ""),
+                "email": str(m["email"] or ""),
+                "profile": {
+                    "display_name": str(m["display_name"] or m["name"] or ""),
+                    "interests": interests,
+                    "budget_tier": str(m["budget_tier"] or "moderate"),
+                    "dietary": list(m["dietary"] or []),
+                },
+            }
         )
 
     return {
@@ -2867,16 +2904,7 @@ async def get_trip(trip_id: str, user_id: str = Depends(get_current_user_id)):
             "name": trip["name"],
             "status": trip["status"],
             "duration_days": trip["duration_days"],
-            "members": [
-                {
-                    "user_id": str(m["user_id"]),
-                    "role": m["role"],
-                    "status": m["status"],
-                    "name": m["name"],
-                    "email": m["email"],
-                }
-                for m in members
-            ],
+            "members": member_items,
         }
     }
 

@@ -1027,7 +1027,10 @@ export default function WanderPlan(){
         }).map(function(m,mi){
           var em=String(m&&m.email||"").trim().toLowerCase();
           var existing=existingByEmail[em]||{};
-          var dn=String(m&&m.name||m&&m.email||("Member "+(mi+1)));
+          var profileFromTrip=(m&&m.profile&&typeof m.profile==="object")?m.profile:null;
+          var existingProfile=(existing&&existing.profile&&typeof existing.profile==="object")?existing.profile:null;
+          var mergedProfile=profileFromTrip||existingProfile||{};
+          var dn=String((mergedProfile&&mergedProfile.display_name)||m&&m.name||m&&m.email||("Member "+(mi+1)));
           var st=mapTripMemberStatus(String(m&&m.status||"pending"));
           return {
             id:String(m&&m.user_id||("tm-"+mi)),
@@ -1038,7 +1041,7 @@ export default function WanderPlan(){
             trip_status:st,
             crew_status:String(existing.crew_status||""),
             email:em,
-            profile:(existing&&existing.profile&&typeof existing.profile==="object")?existing.profile:{}
+            profile:mergedProfile
           };
         });
       }
@@ -1158,14 +1161,28 @@ export default function WanderPlan(){
   function submitStageConsensusDecision(stageKey,decision,tripCtx){
     var tid=String(currentTripId||(tripCtx&&tripCtx.id)||newTrip.id||"").trim();
     if(!(authToken&&tid&&isUuidLike(tid)&&stageKey))return Promise.resolve({mode:"local"});
-    var organizer=isWizardOrganizer(tripCtx);
-    if(organizer){
-      return apiJson("/trips/"+tid+"/consensus/stages/"+stageKey+"/finalize",{method:"POST",body:{action:decision==="revise"?"revise":"approve"}},authToken).then(function(r){
-        return {mode:"server",organizer:true,consensus:r&&r.consensus||null};
+    function voteCall(){
+      return apiJson("/trips/"+tid+"/consensus/stages/"+stageKey+"/vote",{method:"POST",body:{vote:decision==="revise"?"no":"yes"}},authToken).then(function(r){
+        return {mode:"server",organizer:false,consensus:r&&r.consensus||null};
       });
     }
-    return apiJson("/trips/"+tid+"/consensus/stages/"+stageKey+"/vote",{method:"POST",body:{vote:decision==="revise"?"no":"yes"}},authToken).then(function(r){
-      return {mode:"server",organizer:false,consensus:r&&r.consensus||null};
+    function finalizeCall(){
+      return apiJson("/trips/"+tid+"/consensus/stages/"+stageKey+"/finalize",{method:"POST",body:{action:decision==="revise"?"revise":"approve"}},authToken).then(function(r){
+        return {mode:"server",organizer:true,consensus:r&&r.consensus||null};
+      }).catch(function(err){
+        var msg=String(err&&err.message||"").toLowerCase();
+        if(msg.indexOf("only trip owner")>=0||msg.indexOf("only owner")>=0||msg.indexOf("403")>=0){
+          return voteCall();
+        }
+        throw err;
+      });
+    }
+    return apiJson("/trips/"+tid+"/consensus/stages/"+stageKey,{method:"GET"},authToken).then(function(meta){
+      if(meta&&meta.can_finalize)return finalizeCall();
+      return voteCall();
+    }).catch(function(){
+      var organizer=isWizardOrganizer(tripCtx);
+      return organizer?finalizeCall():voteCall();
     });
   }
   useEffect(function(){
@@ -1188,12 +1205,13 @@ export default function WanderPlan(){
     if(!loaded||!authToken||sc!=="wizard"||!currentTripId||!isUuidLike(currentTripId))return;
     refreshCurrentTripSharedState();
     refreshTripPlanningState();
+    var syncMs=(wizStep===2||wizStep===6)?1200:3000;
     var t=setInterval(function(){
       refreshCurrentTripSharedState();
       refreshTripPlanningState();
-    },4000);
+    },syncMs);
     return function(){clearInterval(t);};
-  },[loaded,authToken,sc,currentTripId,user.email]);
+  },[loaded,authToken,sc,currentTripId,user.email,wizStep]);
   useEffect(function(){
     if(!loaded)return;
     if(!pendingTripJoinId)return;
@@ -2613,13 +2631,29 @@ export default function WanderPlan(){
         var totalCount=0;
         if(typeof my==="boolean"){totalCount++;if(my)yesCount++;}
         tm.forEach(function(m){
+          var st=mapTripMemberStatus(m&&(m.trip_status||m.status));
+          if(st!=="accepted"&&!tripJoined[m.id])return;
           var prof=(m&&m.profile&&typeof m.profile==="object")?m.profile:null;
           var ints=(prof&&prof.interests&&typeof prof.interests==="object")?prof.interests:{};
           var v=ints[cat.id];
           if(typeof v==="boolean"){totalCount++;if(v)yesCount++;}
         });
         var p=totalCount>0?Math.round((yesCount/totalCount)*100):0;
-        return(<div key={cat.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:i<CATS.length-1?"1px solid "+C.border:"none"}}><span style={{flex:1,fontSize:13,color:C.tx2}}>{cat.q}</span><div style={{width:80,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:p+"%",background:p>=70?C.grn:p>=40?C.wrn:C.red,borderRadius:999}}/></div><span style={{fontSize:12,fontWeight:600,color:p>=70?C.grn:p>=40?C.wrn:C.red,minWidth:36,textAlign:"right"}}>{p}%</span></div>);
+        return(<div key={cat.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:i<CATS.length-1?"1px solid "+C.border:"none"}}>
+          <span style={{flex:1,fontSize:13,color:C.tx2}}>{cat.q}</span>
+          <div style={{display:"flex",gap:4}}>
+            {[{l:"Y",v:true,c:C.grn},{l:"N",v:false,c:C.red}].map(function(o){
+              var active=my===o.v;
+              return(<button key={o.l} onClick={function(){
+                var next=Object.assign({},user.interests||{});
+                next[cat.id]=o.v;
+                upU("interests",next);
+              }} style={{width:28,height:28,borderRadius:6,border:active?"2px solid "+o.c:"1.5px solid "+C.border,background:active?o.c+"12":"transparent",color:active?o.c:C.tx3,fontWeight:700,fontSize:11,cursor:"pointer"}}>{o.l}</button>);
+            })}
+          </div>
+          <div style={{width:80,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:p+"%",background:p>=70?C.grn:p>=40?C.wrn:C.red,borderRadius:999}}/></div>
+          <span style={{fontSize:12,fontWeight:600,color:p>=70?C.grn:p>=40?C.wrn:C.red,minWidth:68,textAlign:"right"}}>{p+"% ("+yesCount+"/"+totalCount+")"}</span>
+        </div>);
       })}
       {goBtn("Continue")}
     </div>)}
