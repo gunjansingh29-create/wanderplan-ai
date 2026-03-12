@@ -68,6 +68,7 @@ function mapMemberFromApi(member) {
     initials: toInitials(member?.name || member?.email || display),
     email: member?.email || "",
     userId: member?.user_id || "",
+    role: member?.role || "member",
   };
 }
 
@@ -1051,13 +1052,18 @@ export default function TripWizard({
   const stageKey = STAGES[step]?.key;
   const currentUserId = getUserIdFromToken(authToken);
   const joinedCount = members.filter((m) => m.status === "done").length;
-  const isOrganizer = members.length === 0 || members[0]?.initials === "YO";
+  const isOrganizer = members.length === 0 || members[0]?.initials === "YO" || (currentUserId && members.some(m => m.userId === currentUserId && m.role === "owner"));
 
   // Lock a group stage and advance; last group stage triggers transition screen
   const lockStage = async (key) => {
     setLockedStages(prev => ({ ...prev, [key]: true }));
-    // Persist organizer approval to backend
+    // Persist organizer approval to backend (also cast vote so crew see it)
     if (tripId && authToken && !demoMode) {
+      apiJson(`/trips/${tripId}/consensus/stages/${key}/vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ vote: "yes" }),
+      }).catch(() => {});
       apiJson(`/trips/${tripId}/consensus/stages/${key}/finalize`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
@@ -1601,6 +1607,12 @@ export default function TripWizard({
           setMyVotes(prev => ({ ...prev, [stageKey]: votes[currentUserId] }));
         }
         if (consensus.final_decision === "approved") {
+          // Mark organizer as voted in the vote bar
+          const orgBackend = backendMembers.find(m => m.role === "owner" || m.role === "organizer");
+          if (orgBackend) {
+            const orgLocal = members.find(m => m.userId === orgBackend.user_id || m.email === orgBackend.email);
+            if (orgLocal) updatedVotes[orgLocal.initials] = "yes";
+          }
           setLockedStages(prev => ({ ...prev, [stageKey]: true }));
         }
       } catch { /* ignore transient errors */ }
@@ -2593,10 +2605,17 @@ export default function TripWizard({
                     </div>
                   )}
                   {approved!==undefined && (
-                    <div style={{ padding:"6px 12px",borderRadius:8,
-                      background:approved?T.successBg:T.errorBg,
-                      color:approved?T.success:T.error,fontSize:12,fontWeight:600,textAlign:"center" }} className="hd">
-                      {approved?"✓ Included":"✗ Skipped"}
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
+                        border: approved===false?"none":`1.5px solid ${T.error}40`,
+                        background:approved===false?T.error:"transparent",
+                        color:approved===false?"#fff":T.error,
+                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Skip</button>
+                      <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
+                        border:"none",
+                        background:approved===true?T.success:T.primary,
+                        color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
+                        boxShadow:`0 2px 6px ${approved===true?T.success:T.primary}30` }} className="hd">✓ Include</button>
                     </div>
                   )}
                 </div>
@@ -3078,9 +3097,16 @@ export default function TripWizard({
                         fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Book</button>
                     </div>
                   ) : (
-                    <span className="hd" style={{ padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:600,
-                      background:picked?T.successBg:T.errorBg,color:picked?T.success:T.error }}>
-                      {picked?"✓ Booked":"✗ Skipped"}</span>
+                    <div style={{ display:"flex",gap:6 }}>
+                      <button onClick={()=>setStayPicks(p=>({...p,[i]:false}))} style={{ padding:"7px 14px",borderRadius:8,
+                        border: picked===false?"none":`1.5px solid ${T.error}40`,
+                        background:picked===false?T.error:"transparent",
+                        color:picked===false?"#fff":T.error,
+                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Skip</button>
+                      <button onClick={()=>setStayPicks(p=>({...p,[i]:true}))} style={{ padding:"7px 14px",borderRadius:8,
+                        border:"none",background:picked===true?T.success:T.primary,color:"#fff",
+                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✓ Book</button>
+                    </div>
                   )}
                 </div>
               </div>
