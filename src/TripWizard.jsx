@@ -621,7 +621,7 @@ function YN({ title, subtitle, desc, tags=[], agent="AI", onYes, onNo, children 
 // ── GROUP ROOM ──────────────────────────────────────────────────────────
 // Wraps each group-phase stage with a member vote bar + "Lock it in" button.
 
-function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLock, onVote, onVeto, myVote, isLocked }) {
+function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLock, onVote, onVeto, onOverride, myVote, isLocked }) {
   const votes = memberVotes[stageKey] || {};
   const others = members.filter(m => m.initials !== "YO");
   const yesCount = Object.values(votes).filter(v => v === "yes").length;
@@ -635,14 +635,21 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
         display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <span style={{ fontSize:12, color:T.text3, fontWeight:600 }}>Group vote:</span>
         {members.map(m => {
-          const vote = m.initials === "YO" ? "organizer" : (votes[m.initials] || "pending");
+          const isOrgIcon = m.initials === "YO" && isOrganizer;
+          const vote = votes[m.initials] === "yes" ? "yes" : (isOrgIcon ? "organizer" : (votes[m.initials] || "pending"));
           return (
-            <div key={m.initials} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+            <div key={m.initials}
+              title={isOrganizer && m.initials !== "YO" && vote !== "yes" ? "Click to mark as agreed" : undefined}
+              onClick={isOrganizer && m.initials !== "YO" && vote !== "yes" ? () => onOverride(stageKey, m.initials) : undefined}
+              style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2,
+                cursor: isOrganizer && m.initials !== "YO" && vote !== "yes" ? "pointer" : "default" }}>
               <div style={{ width:30, height:30, borderRadius:999,
                 background:`linear-gradient(135deg,${T.primary}80,${T.accent}80)`,
                 display:"flex", alignItems:"center", justifyContent:"center",
                 fontSize:11, fontWeight:700, color:"#fff",
                 border: vote === "yes" ? `2px solid ${T.success}` : vote === "organizer" ? `2px solid ${T.primary}` : `2px solid ${T.borderLight}`,
+                boxShadow: isOrganizer && m.initials !== "YO" && vote !== "yes" ? `0 0 0 3px ${T.primary}25` : "none",
+                transition:"box-shadow .15s",
               }}>{m.initials}</div>
               <span style={{ fontSize:9, color: vote === "yes" ? T.success : vote === "organizer" ? T.primary : T.text3 }}>
                 {vote === "yes" ? "✓" : vote === "organizer" ? "👑" : "…"}
@@ -1042,6 +1049,8 @@ export default function TripWizard({
   const [myCrewList, setMyCrewList] = useState([]);
   const [showMyCrewPanel, setShowMyCrewPanel] = useState(false);
   const handledBackSignalRef = useRef(backSignal);
+  const membersRef = useRef(members);
+  const currentUserIdRef = useRef("");
 
   const next = () => setStep(s => Math.min(s+1, STAGES.length-1));
   const back = () => setStep(s => Math.max(s-1, 0));
@@ -1051,6 +1060,7 @@ export default function TripWizard({
   };
   const stageKey = STAGES[step]?.key;
   const currentUserId = getUserIdFromToken(authToken);
+  if (typeof membersRef !== "undefined") { membersRef.current = members; currentUserIdRef.current = currentUserId; }
   const joinedCount = members.filter((m) => m.status === "done").length;
   const isOrganizer = members.length === 0 || members[0]?.initials === "YO" || (currentUserId && members.some(m => m.userId === currentUserId && m.role === "owner"));
 
@@ -1106,6 +1116,11 @@ export default function TripWizard({
         body: JSON.stringify({ vote: "yes" }),
       });
     } catch { setMyVotes(prev => ({ ...prev, [key]: undefined })); }
+  };
+
+  // Organizer member override: mark a specific member as agreed
+  const handleOrganizerMemberOverride = (key, initials) => {
+    setMemberVotes(prev => ({ ...prev, [key]: { ...(prev[key] || {}), [initials]: "yes" } }));
   };
 
   // Organizer veto: send stage back, reset votes, stay on same stage
@@ -1592,28 +1607,39 @@ export default function TripWizard({
         if (!consensus) return;
         const backendMembers = consensus.members || [];
         const votes = consensus.votes || {};
+        // Use refs so this closure always sees the latest members/currentUserId
+        const currentMembers = membersRef.current;
+        const uid = currentUserIdRef.current;
         const updatedVotes = {};
         for (const [userId, vote] of Object.entries(votes)) {
           const bm = backendMembers.find(m => m.user_id === userId);
           if (!bm) continue;
-          const lm = members.find(m =>
-            m.name.toLowerCase() === (bm.email || "").toLowerCase() ||
-            m.name.toLowerCase() === (bm.name || "").toLowerCase()
+          // Match by userId first, then email, then name-as-email
+          const lm = currentMembers.find(m =>
+            (m.userId && m.userId === bm.user_id) ||
+            (m.email && bm.email && m.email.toLowerCase() === bm.email.toLowerCase()) ||
+            m.name.toLowerCase() === (bm.email || "").toLowerCase()
           );
           if (lm) updatedVotes[lm.initials] = vote;
         }
-        setMemberVotes(prev => ({ ...prev, [stageKey]: { ...(prev[stageKey] || {}), ...updatedVotes } }));
-        if (currentUserId && votes[currentUserId]) {
-          setMyVotes(prev => ({ ...prev, [stageKey]: votes[currentUserId] }));
-        }
+        // If finalized, mark organizer as agreed in the bar
         if (consensus.final_decision === "approved") {
-          // Mark organizer as voted in the vote bar
           const orgBackend = backendMembers.find(m => m.role === "owner" || m.role === "organizer");
           if (orgBackend) {
-            const orgLocal = members.find(m => m.userId === orgBackend.user_id || m.email === orgBackend.email);
+            const orgLocal = currentMembers.find(m =>
+              (m.userId && m.userId === orgBackend.user_id) ||
+              (m.email && orgBackend.email && m.email.toLowerCase() === orgBackend.email.toLowerCase())
+            );
             if (orgLocal) updatedVotes[orgLocal.initials] = "yes";
           }
           setLockedStages(prev => ({ ...prev, [stageKey]: true }));
+        }
+        setMemberVotes(prev => ({
+          ...prev,
+          [stageKey]: { ...(prev[stageKey] || {}), ...updatedVotes },
+        }));
+        if (uid && votes[uid]) {
+          setMyVotes(prev => ({ ...prev, [stageKey]: votes[uid] }));
         }
       } catch { /* ignore transient errors */ }
     }
@@ -2564,7 +2590,7 @@ export default function TripWizard({
   if (stageKey === "pois") return (
     <Shell step={step}>
       <AgentHeader emoji="📍" name="POI Discovery" desc="Vote on activities — organizer locks the list"/>
-      <GroupRoom stageKey="pois" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+      <GroupRoom stageKey="pois" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
           <Chat agent="POI Agent" emoji="📍" msg="Here are top activity picks for your destinations. Approve or skip each one — your crew can also vote!"/>
           {poiDisplay.map((poi,i)=>{
@@ -2631,7 +2657,7 @@ export default function TripWizard({
   if (stageKey === "duration") return (
     <Shell step={step}>
       <AgentHeader emoji="⏱️" name="Duration Calculator" desc="How many days you need"/>
-      <GroupRoom stageKey="duration" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+      <GroupRoom stageKey="duration" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
         <Chat agent="Duration Agent" emoji="⏱️" msg="Let me calculate the optimal trip length based on your approved activities..."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .3s both" }}>
@@ -2666,7 +2692,7 @@ export default function TripWizard({
     return (
       <Shell step={step}>
         <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc="Collecting availability and locking the trip window"/>
-        <GroupRoom stageKey="avail" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+        <GroupRoom stageKey="avail" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
           <Chat agent="Sync Agent" emoji="🗓️" msg="Each member should submit an available start and end date. Then we compute overlap and lock one window for the trip."/>
           <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm,animation:"fadeUp .35s ease-out .2s both" }}>
             <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10 }}>Your Availability</p>
@@ -2764,7 +2790,7 @@ export default function TripWizard({
   if (stageKey === "budget") return (
     <Shell step={step}>
       <AgentHeader emoji="💰" name="Budget Agent" desc="Setting your spending plan"/>
-      <GroupRoom stageKey="budget" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+      <GroupRoom stageKey="budget" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
         <Chat agent="Budget Agent" emoji="💰" msg="What's your per-person daily budget? Drag the slider to set it."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
@@ -3062,7 +3088,7 @@ export default function TripWizard({
   if (stageKey === "stays") return (
     <Shell step={step}>
       <AgentHeader emoji="🏨" name="Stays Agent" desc="Finding perfect accommodations"/>
-      <GroupRoom stageKey="stays" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+      <GroupRoom stageKey="stays" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
         <Chat agent="Stays Agent" emoji="🏨" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
         {stayDisplay.map((s,i)=>{
           const picked = stayPicks[i];
