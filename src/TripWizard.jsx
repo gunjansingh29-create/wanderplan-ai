@@ -1002,6 +1002,7 @@ export default function TripWizard({
       : DEST_RESULTS_SEED.map((d) => d.name)
   );
   const [poiApproved, setPoiApproved] = useState({});
+  const [poiVoteCounts, setPoiVoteCounts] = useState({}); // {poi_id: {approve, reject, my_vote}}
   const [interestAnswers, setInterestAnswers] = useState({});
   const [selectedFlightsByLeg, setSelectedFlightsByLeg] = useState({});
   const [stayPicks, setStayPicks] = useState({});
@@ -1083,6 +1084,14 @@ export default function TripWizard({
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ action: "approved" }),
       }).catch(() => {});
+    }
+    if (key === "pois" && tripId && authToken && !demoMode) {
+      try {
+        await apiJson(`/trips/${tripId}/pois/consolidate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        });
+      } catch { /* non-fatal — itinerary will use whatever is approved */ }
     }
     if (key === "budget") {
       if (tripId && authToken) {
@@ -1511,7 +1520,21 @@ export default function TripWizard({
           const res = await apiJson(`/trips/${tripId}/pois?limit=20`, {
             headers: { Authorization: `Bearer ${authToken}` },
           });
-          if (!cancelled) setPoiRows(res?.pois || []);
+          if (!cancelled) {
+            setPoiRows(res?.pois || []);
+            // Populate vote counts and pre-fill user's own vote
+            const counts = {};
+            const approved = {};
+            (res?.pois || []).forEach((poi, idx) => {
+              if (poi.vote_counts) {
+                counts[poi.poi_id] = poi.vote_counts;
+                if (poi.vote_counts.my_vote === "approve") approved[idx] = true;
+                else if (poi.vote_counts.my_vote === "reject") approved[idx] = false;
+              }
+            });
+            setPoiVoteCounts(counts);
+            setPoiApproved(prev => ({ ...prev, ...approved }));
+          }
         }
         if (stageKey === "flights") {
           const flightPlan = buildFlightSearchPlan();
@@ -1655,6 +1678,37 @@ export default function TripWizard({
     const interval = setInterval(syncConsensus, 3000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
+
+  // ── Auto-submit stage-level "agree" vote once user has voted on all POIs
+  useEffect(() => {
+    if (stageKey !== "pois") return;
+    if (poiDisplay.length === 0) return;
+    const votedCount = Object.keys(poiApproved).length;
+    if (votedCount >= poiDisplay.length && !myVotes["pois"]) {
+      handleMemberVote("pois");
+    }
+  }, [poiApproved, poiDisplay.length, stageKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Poll POI vote counts every 5 s so all members see live tallies ──────────
+  useEffect(() => {
+    if (stageKey !== "pois" || !tripId || !authToken || demoMode) return;
+    let cancelled = false;
+    async function syncPoiVotes() {
+      try {
+        const res = await apiJson(`/trips/${tripId}/pois?limit=20`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (cancelled) return;
+        const counts = {};
+        (res?.pois || []).forEach(poi => {
+          if (poi.vote_counts) counts[poi.poi_id] = poi.vote_counts;
+        });
+        setPoiVoteCounts(counts);
+      } catch { /* ignore */ }
+    }
+    const interval = setInterval(syncPoiVotes, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [stageKey, tripId, authToken, demoMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load MyCrew from localStorage when entering Create stage ───────────
   useEffect(() => {
@@ -1988,22 +2042,19 @@ export default function TripWizard({
 
   const handlePoiDecision = async (index, approved) => {
     setPoiApproved((prev) => ({ ...prev, [index]: approved }));
-    if (!tripId || !authToken) return;
     const row = poiRows[index];
     const poiId = row?.poi_id || row?.id;
-    if (!poiId) return;
+    if (!poiId || !tripId || !authToken) return;
     try {
-      await apiJson(`/trips/${tripId}/pois/${poiId}/approve`, {
+      const resp = await apiJson(`/trips/${tripId}/pois/${poiId}/vote`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({ approved }),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ vote: approved ? "approve" : "reject" }),
       });
-    } catch {
-      // Keep local state if backend write fails.
-    }
+      if (resp?.vote_counts) {
+        setPoiVoteCounts(prev => ({ ...prev, [poiId]: resp.vote_counts }));
+      }
+    } catch { /* non-fatal */ }
   };
 
   const applyLockedWindowToFlightDates = (startIso, endIso) => {
@@ -2597,7 +2648,7 @@ export default function TripWizard({
   if (stageKey === "pois") return (
     <Shell step={step}>
       <AgentHeader emoji="📍" name="POI Discovery" desc="Vote on activities — organizer locks the list"/>
-      <GroupRoom stageKey="pois" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+      <GroupRoom stageKey="pois" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey] || (Object.keys(poiApproved).length >= poiDisplay.length && poiDisplay.length > 0 ? "yes" : undefined)} isLocked={lockedStages[stageKey]}>
         <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
           <Chat agent="POI Agent" emoji="📍" msg="Here are top activity picks for your destinations. Approve or skip each one — your crew can also vote!"/>
           {poiDisplay.map((poi,i)=>{
@@ -2628,29 +2679,36 @@ export default function TripWizard({
                   <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginBottom:8 }}>
                     {poi.tags.map(t=><span key={t} style={{ background:T.bg,color:T.text2,padding:"1px 7px",borderRadius:999,fontSize:10 }}>{t}</span>)}
                   </div>
-                  {approved===undefined && (
-                    <div style={{ display:"flex",gap:8 }}>
-                      <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
-                        border:`1.5px solid ${T.error}40`,background:"transparent",color:T.error,fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">Skip</button>
-                      <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
-                        border:"none",background:T.primary,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
-                        boxShadow:`0 2px 6px ${T.primary}30` }} className="hd">Include ✓</button>
-                    </div>
-                  )}
-                  {approved!==undefined && (
-                    <div style={{ display:"flex", gap:8 }}>
-                      <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
-                        border: approved===false?"none":`1.5px solid ${T.error}40`,
-                        background:approved===false?T.error:"transparent",
-                        color:approved===false?"#fff":T.error,
-                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Skip</button>
-                      <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
-                        border:"none",
-                        background:approved===true?T.success:T.primary,
-                        color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
-                        boxShadow:`0 2px 6px ${approved===true?T.success:T.primary}30` }} className="hd">✓ Include</button>
-                    </div>
-                  )}
+                  {(() => {
+                    const poiId = poi.poi_id || poi.id;
+                    const vc = poiVoteCounts[poiId] || { approve: 0, reject: 0 };
+                    const totalVotes = vc.approve + vc.reject;
+                    return (
+                      <>
+                        {totalVotes > 0 && (
+                          <div style={{ display:"flex", gap:6, marginBottom:6, alignItems:"center" }}>
+                            <span style={{ fontSize:10, color:T.success, fontWeight:600 }}>👍 {vc.approve}</span>
+                            <span style={{ fontSize:10, color:T.error, fontWeight:600 }}>👎 {vc.reject}</span>
+                            {vc.approve > vc.reject && <span style={{ fontSize:9, color:T.success }}>✓ majority want this</span>}
+                            {vc.reject > vc.approve && <span style={{ fontSize:9, color:T.error }}>✗ majority skip</span>}
+                            {vc.approve === vc.reject && totalVotes > 0 && <span style={{ fontSize:9, color:T.warning }}>⚡ split vote</span>}
+                          </div>
+                        )}
+                        <div style={{ display:"flex", gap:8 }}>
+                          <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
+                            border: approved===false?"none":`1.5px solid ${T.error}40`,
+                            background:approved===false?T.error:"transparent",
+                            color:approved===false?"#fff":T.error,
+                            fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Skip</button>
+                          <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
+                            border:"none",
+                            background:approved===true?T.success:T.primary,
+                            color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
+                            boxShadow:`0 2px 6px ${approved===true?T.success:T.primary}30` }} className="hd">✓ Include</button>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             );

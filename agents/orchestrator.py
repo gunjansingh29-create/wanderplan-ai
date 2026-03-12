@@ -218,6 +218,10 @@ class PoiApprovalRequest(BaseModel):
     approved: bool
 
 
+class PoiVoteRequest(BaseModel):
+    vote: str  # "approve" or "reject"
+
+
 class PoiSyncItemRequest(BaseModel):
     poi_id: Optional[str] = None
     name: str
@@ -2083,6 +2087,17 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           PRIMARY KEY (user_id, peer_user_id),
           CHECK (user_id <> peer_user_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS poi_votes (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+          poi_id UUID NOT NULL REFERENCES pois(id) ON DELETE CASCADE,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          vote TEXT NOT NULL CHECK (vote IN ('approve', 'reject')),
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE (poi_id, user_id)
         )
         """,
     ]
@@ -4041,6 +4056,26 @@ async def get_pois(
                         poi["cost"],
                     )
             rows = await conn.fetch(base_query, *params)
+        poi_ids = [str(r["id"]) for r in rows]
+        vote_rows = []
+        if poi_ids:
+            vote_rows = await conn.fetch(
+                """
+                SELECT poi_id, vote, user_id
+                FROM poi_votes
+                WHERE trip_id = $1 AND poi_id = ANY($2::uuid[])
+                """,
+                trip_id,
+                poi_ids,
+            )
+    # Build vote tallies per POI
+    from collections import defaultdict
+    tally: dict = defaultdict(lambda: {"approve": 0, "reject": 0, "my_vote": None})
+    for vr in vote_rows:
+        pid = str(vr["poi_id"])
+        tally[pid][str(vr["vote"])] += 1
+        if str(vr["user_id"]) == str(user_id):
+            tally[pid]["my_vote"] = str(vr["vote"])
     return {
         "pois": [
             {
@@ -4054,6 +4089,11 @@ async def get_pois(
                 "rating": float(row["rating"] or 0),
                 "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
                 "approved": bool(row["approved"]),
+                "vote_counts": {
+                    "approve": tally[str(row["id"])]["approve"],
+                    "reject": tally[str(row["id"])]["reject"],
+                    "my_vote": tally[str(row["id"])]["my_vote"],
+                },
             }
             for row in rows
         ]
@@ -4250,6 +4290,107 @@ async def approve_poi(
         if not row:
             raise HTTPException(status_code=404, detail="POI not found")
     return {"poi": {"poi_id": str(row["id"]), "name": row["name"], "category": row["category"], "approved": bool(row["approved"])}}
+
+
+@app.post("/trips/{trip_id}/pois/{poi_id}/vote")
+async def vote_poi(
+    trip_id: str,
+    poi_id: str,
+    body: PoiVoteRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    vote = "approve" if str(body.vote).lower() in {"approve", "yes", "true", "include"} else "reject"
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        await conn.execute(
+            "SELECT 1 FROM pois WHERE id = $1 AND trip_id = $2",
+            poi_id,
+            trip_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO poi_votes (trip_id, poi_id, user_id, vote)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (poi_id, user_id) DO UPDATE SET vote = EXCLUDED.vote, created_at = NOW()
+            """,
+            trip_id,
+            poi_id,
+            user_id,
+            vote,
+        )
+        vote_rows = await conn.fetch(
+            "SELECT vote, user_id FROM poi_votes WHERE poi_id = $1",
+            poi_id,
+        )
+    approve_count = sum(1 for r in vote_rows if r["vote"] == "approve")
+    reject_count = sum(1 for r in vote_rows if r["vote"] == "reject")
+    return {
+        "ok": True,
+        "vote": vote,
+        "vote_counts": {"approve": approve_count, "reject": reject_count, "my_vote": vote},
+    }
+
+
+@app.post("/trips/{trip_id}/pois/consolidate")
+async def consolidate_poi_votes(
+    trip_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Organizer locks POI stage: approve POIs with majority votes, reject the rest."""
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        member_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM trip_members WHERE trip_id = $1 AND status = 'accepted'",
+            trip_id,
+        )
+        majority_needed = max(1, int(member_count // 2) + 1) if member_count else 1
+        rows = await conn.fetch(
+            """
+            SELECT p.id,
+                   COUNT(pv.id) FILTER (WHERE pv.vote = 'approve') AS approve_count,
+                   COUNT(pv.id) FILTER (WHERE pv.vote = 'reject')  AS reject_count
+            FROM pois p
+            LEFT JOIN poi_votes pv ON pv.poi_id = p.id AND pv.trip_id = p.trip_id
+            WHERE p.trip_id = $1
+            GROUP BY p.id
+            """,
+            trip_id,
+        )
+        approved_ids = []
+        rejected_ids = []
+        for row in rows:
+            approve_count = int(row["approve_count"] or 0)
+            reject_count = int(row["reject_count"] or 0)
+            total_votes = approve_count + reject_count
+            if total_votes == 0 or approve_count >= majority_needed:
+                approved_ids.append(row["id"])
+            else:
+                rejected_ids.append(row["id"])
+        if approved_ids:
+            await conn.execute(
+                "UPDATE pois SET approved = true WHERE id = ANY($1::uuid[]) AND trip_id = $2",
+                approved_ids,
+                trip_id,
+            )
+        if rejected_ids:
+            await conn.execute(
+                "UPDATE pois SET approved = false WHERE id = ANY($1::uuid[]) AND trip_id = $2",
+                rejected_ids,
+                trip_id,
+            )
+    return {
+        "ok": True,
+        "approved_count": len(approved_ids),
+        "rejected_count": len(rejected_ids),
+        "majority_needed": majority_needed,
+    }
 
 
 @app.get("/trips/{trip_id}/health-requirements")
