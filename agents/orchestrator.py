@@ -628,6 +628,15 @@ def _normalize_stage_finalize_action(action: str) -> str:
     raise HTTPException(status_code=422, detail="action must be approve or revise")
 
 
+def _deep_merge_state(base: Any, incoming: Any) -> Any:
+    if isinstance(base, dict) and isinstance(incoming, dict):
+        merged: dict[str, Any] = dict(base)
+        for k, v in incoming.items():
+            merged[k] = _deep_merge_state(merged.get(k), v)
+        return merged
+    return incoming
+
+
 def _build_stage_consensus_summary(
     stage_key: str,
     stage_state: dict[str, Any],
@@ -1631,6 +1640,103 @@ POI_CATALOG: dict[str, list[dict[str, Any]]] = {
         {"name": "Mt Takao Hike", "category": "adventure", "city": "Tokyo", "country": "Japan", "tags": ["hiking", "nature", "adventure"], "rating": 4.4, "cost": 5},
     ],
 }
+
+
+_PROFILE_INTEREST_CATEGORY_ALIASES: dict[str, list[str]] = {
+    "food": ["food"],
+    "cooking": ["food"],
+    "dining": ["food"],
+    "street_food": ["food"],
+    "local": ["food", "culture"],
+    "culture": ["culture"],
+    "history": ["culture"],
+    "historical": ["culture"],
+    "temples": ["culture"],
+    "museum": ["art", "culture"],
+    "museums": ["art", "culture"],
+    "art": ["art"],
+    "photography": ["art", "nature"],
+    "photo": ["art", "nature"],
+    "hiking": ["nature", "adventure"],
+    "nature": ["nature"],
+    "adventure": ["adventure"],
+    "scuba": ["adventure"],
+    "snorkeling": ["adventure"],
+    "nightlife": ["food", "culture"],
+    "shopping": ["culture", "food"],
+    "wellness": ["nature"],
+    # Legacy values produced by older frontend mapping.
+    "do": ["nature"],
+    "how": ["adventure"],
+}
+_POI_CATEGORY_KEYS: set[str] = set(POI_CATALOG.keys())
+
+
+def _normalize_interest_categories(values: Any) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        key = str(raw or "").strip().lower().replace(" ", "_")
+        if not key:
+            continue
+        mapped = _PROFILE_INTEREST_CATEGORY_ALIASES.get(key, [key])
+        for cat in mapped:
+            norm = str(cat or "").strip().lower()
+            if not norm or norm not in _POI_CATEGORY_KEYS or norm in seen:
+                continue
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def _categories_from_user_profile_interests(interests: Any) -> list[str]:
+    parsed = interests
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except Exception:
+            parsed = {}
+    if not isinstance(parsed, dict):
+        return []
+
+    selected: list[str] = []
+    for key, val in parsed.items():
+        keep = False
+        if isinstance(val, bool):
+            keep = val
+        elif isinstance(val, (int, float)):
+            keep = val > 0
+        elif isinstance(val, str):
+            keep = val.strip().lower() in {"1", "true", "yes", "y", "on"}
+        if keep:
+            selected.append(str(key or ""))
+    return _normalize_interest_categories(selected)
+
+
+async def _trip_interest_category_counter(conn: asyncpg.Connection, trip_id: str) -> Counter[str]:
+    rows = await conn.fetch(
+        """
+        SELECT tm.user_id, ip.categories, up.interests
+        FROM trip_members tm
+        LEFT JOIN interest_profiles ip ON ip.trip_id = tm.trip_id AND ip.user_id = tm.user_id
+        LEFT JOIN user_profiles up ON up.user_id = tm.user_id
+        WHERE tm.trip_id = $1 AND tm.status = 'accepted'
+        """,
+        trip_id,
+    )
+
+    counter: Counter[str] = Counter()
+    for row in rows:
+        trip_categories = _normalize_interest_categories(row["categories"] or [])
+        if trip_categories:
+            for cat in trip_categories:
+                counter[cat] += 1
+            continue
+
+        profile_categories = _categories_from_user_profile_interests(row["interests"])
+        for cat in profile_categories:
+            counter[cat] += 1
+    return counter
 
 
 def _post_calendar_event(base_url: str, calendar_id: str, payload: dict[str, Any]) -> None:
@@ -2846,8 +2952,7 @@ async def put_trip_planning_state(
         if not isinstance(existing_state, dict):
             existing_state = {}
         if body.merge:
-            merged_state = dict(existing_state)
-            merged_state.update(incoming_state)
+            merged_state = _deep_merge_state(existing_state, incoming_state)
         else:
             merged_state = incoming_state
 
@@ -3791,11 +3896,7 @@ async def get_group_interests(trip_id: str, user_id: str = Depends(get_current_u
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
-        rows = await conn.fetch("SELECT categories FROM interest_profiles WHERE trip_id = $1", trip_id)
-    counter: Counter[str] = Counter()
-    for row in rows:
-        for category in row["categories"] or []:
-            counter[str(category).lower()] += 1
+        counter = await _trip_interest_category_counter(conn, trip_id)
     merged = [cat for cat, _ in sorted(counter.items(), key=lambda item: (-item[1], item[0]))]
     return {"group_interests": {"categories": merged}}
 
@@ -3846,11 +3947,7 @@ async def get_pois(
                     fallback_country = top_dest["country"] or fallback_country
             if not fallback_city:
                 fallback_city = "Tokyo"
-            interests = await conn.fetch("SELECT categories FROM interest_profiles WHERE trip_id = $1", trip_id)
-            counts: Counter[str] = Counter()
-            for item in interests:
-                for cat in item["categories"] or []:
-                    counts[str(cat).lower()] += 1
+            counts = await _trip_interest_category_counter(conn, trip_id)
             ranked_categories = [cat for cat, _ in sorted(counts.items(), key=lambda x: (-x[1], x[0]))]
             if not ranked_categories:
                 ranked_categories = ["food", "culture"]

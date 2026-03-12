@@ -801,6 +801,28 @@ const INTEREST_QUESTIONS = [
   "Museums and art galleries?",
   "Local markets and street food?",
 ];
+const INTEREST_CATEGORIES = [
+  "nature",
+  "adventure",
+  "food",
+  "culture",
+  "art",
+  "culture",
+  "art",
+  "food",
+];
+
+function mapInterestAnswersToCategories(answers = {}) {
+  const out = [];
+  const seen = new Set();
+  INTEREST_CATEGORIES.forEach((cat, idx) => {
+    if (answers[idx] !== "yes") return;
+    if (!cat || seen.has(cat)) return;
+    seen.add(cat);
+    out.push(cat);
+  });
+  return out;
+}
 
 const FLIGHTS = [
   { airline:"Japan Airlines", dep:"10:30", arr:"14:45+1", dur:"14h 15m", stops:0, price:1247, cls:"Premium Economy" },
@@ -1686,9 +1708,7 @@ export default function TripWizard({
       next();
       return;
     }
-    const categories = INTEREST_QUESTIONS
-      .filter((_, idx) => interestAnswers[idx] === "yes")
-      .map((q) => q.replace(/[?]/g, "").toLowerCase().split(" ")[0]);
+    const categories = mapInterestAnswersToCategories(interestAnswers);
     try {
       await apiJson(`/trips/${tripId}/members/${currentUserId}/interests`, {
         method: "PUT",
@@ -3191,4 +3211,4 @@ export default function TripWizard({
   return null;
 }
 
-export { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode };
+export { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode, mapInterestAnswersToCategories };
