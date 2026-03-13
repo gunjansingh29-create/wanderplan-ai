@@ -1,9 +1,11 @@
 import {
   availabilityRangeFitsTrip,
   availabilityWindowMatchesTripDays,
+  countMyPoiSelections,
   countShortlistedPois,
   getUserIdFromToken,
   inclusiveIsoDays,
+  isMyPoiShortlistSelection,
   isShortlistedPoi,
   mapMemberFromApi,
   normalizeBudgetTier,
@@ -118,6 +120,20 @@ describe("TripWizard POI shortlist helpers", () => {
     };
 
     expect(countShortlistedPois(poiRows, poiApproved)).toBe(2);
+  });
+
+  test("tracks each crew member's own shortlist selections separately from the shared list", () => {
+    const poiRows = [
+      { id: "poi-1", shortlisted: true, shortlist_counts: { selected: 2, my_selected: false } },
+      { id: "poi-2", shortlisted: false, shortlist_counts: { selected: 0, my_selected: true } },
+    ];
+    const poiApproved = {
+      1: true,
+    };
+
+    expect(isMyPoiShortlistSelection(poiRows[0], false)).toBe(false);
+    expect(isMyPoiShortlistSelection(poiRows[1], false)).toBe(true);
+    expect(countMyPoiSelections(poiRows, poiApproved)).toBe(1);
   });
 
   test("summarizes POI vote counts for majority labels", () => {

@@ -273,6 +273,37 @@ function canonicalDestinationVoteKey(name,fallback){
   return fb||"dest:unknown";
 }
 
+function mergeVoteRows(votesMap,keys){
+  var map=(votesMap&&typeof votesMap==="object")?votesMap:{};
+  var merged={};
+  (Array.isArray(keys)?keys:[]).forEach(function(key){
+    var k=String(key||"").trim();
+    if(!k)return;
+    var row=map[k];
+    if(!(row&&typeof row==="object"))return;
+    Object.keys(row).forEach(function(alias){
+      merged[alias]=row[alias];
+    });
+  });
+  return merged;
+}
+
+function readDestinationVoteRow(votesMap,dest){
+  var aliases=[];
+  function pushKey(key){
+    var k=String(key||"").trim();
+    if(!k)return;
+    if(aliases.indexOf(k)>=0)return;
+    aliases.push(k);
+  }
+  var voteKey=String(dest&&dest.vote_key||"").trim();
+  var legacyKey=String(dest&&dest.id||"").trim();
+  pushKey(voteKey);
+  pushKey(legacyKey);
+  pushKey(canonicalDestinationVoteKey(dest&&dest.name,legacyKey||voteKey));
+  return mergeVoteRows(votesMap,aliases);
+}
+
 function canonicalPoiVoteKey(poi,idx){
   var pid=String(poi&&poi.poi_id||"").trim();
   if(pid)return "poi:"+pid;
@@ -2477,13 +2508,7 @@ export default function WanderPlan(){
     });
     var majorityNeeded=Math.floor(Math.max(destVoteVoters.length,1)/2)+1;
     function getDestVoteSummary(dest){
-      var voteKey=String(dest&&dest.vote_key||dest&&dest.id||"").trim();
-      var legacyKey=String(dest&&dest.id||"").trim();
-      var row=voteKey?destMemberVotes[voteKey]:undefined;
-      if(!(row&&typeof row==="object")&&legacyKey){
-        row=destMemberVotes[legacyKey]||{};
-      }
-      if(!(row&&typeof row==="object"))row={};
+      var row=readDestinationVoteRow(destMemberVotes,dest);
       var up=0;var down=0;var votedCount=0;
       destVoteVoters.forEach(function(v){
         var val=readVoteForVoter(row,v);
@@ -2500,19 +2525,24 @@ export default function WanderPlan(){
       if(aliases.length===0)return;
       var voteKey=String(dest&&dest.vote_key||dest&&dest.id||"").trim();
       var legacyKey=String(dest&&dest.id||"").trim();
-      if(!voteKey&&!legacyKey)return;
+      var canonicalKey=canonicalDestinationVoteKey(dest&&dest.name,legacyKey||voteKey);
+      if(!voteKey&&!legacyKey&&!canonicalKey)return;
       setDMV(function(prev){
         var next=Object.assign({},prev||{});
-        var key=voteKey||legacyKey;
-        var row=Object.assign({},next[key]||{});
-        aliases.forEach(function(k){row[k]=vote;});
-        next[key]=row;
-        if(legacyKey&&legacyKey!==key){
-          var legacyRow=Object.assign({},next[legacyKey]||{});
-          aliases.forEach(function(k){legacyRow[k]=vote;});
-          next[legacyKey]=legacyRow;
-        }
-        saveTripPlanningState({state:{dest_member_votes:next}}).then(function(){
+        var voteKeys=[];
+        [voteKey,legacyKey,canonicalKey].forEach(function(key){
+          var k=String(key||"").trim();
+          if(!k||voteKeys.indexOf(k)>=0)return;
+          voteKeys.push(k);
+        });
+        var patchRows={};
+        voteKeys.forEach(function(key){
+          var row=Object.assign({},next[key]||{});
+          aliases.forEach(function(alias){row[alias]=vote;});
+          next[key]=row;
+          patchRows[key]=row;
+        });
+        saveTripPlanningState({state:{dest_member_votes:patchRows}}).then(function(){
           refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
         });
         return next;
@@ -2858,7 +2888,7 @@ export default function WanderPlan(){
           </div>
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
             {destVoteVoters.map(function(vr){
-              var row=(destMemberVotes[String(d&&d.vote_key||"")]||destMemberVotes[String(d&&d.id||"")]||{});
+              var row=readDestinationVoteRow(destMemberVotes,d);
               var vv=readVoteForVoter(row,vr);
               var canEdit=vr.id===currentPlannerId;
               return(<div key={vr.id} style={{display:"flex",alignItems:"center",gap:6}}>
@@ -3607,4 +3637,4 @@ export default function WanderPlan(){
   );
 }
 
-export { makeVoteUserId, voteKeyAliasesFor, readVoteForVoter, summarizeInterestConsensus };
+export { makeVoteUserId, voteKeyAliasesFor, readVoteForVoter, mergeVoteRows, readDestinationVoteRow, summarizeInterestConsensus };

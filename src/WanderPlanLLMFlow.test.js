@@ -1,5 +1,7 @@
 import {
   makeVoteUserId,
+  mergeVoteRows,
+  readDestinationVoteRow,
   voteKeyAliasesFor,
   readVoteForVoter,
   summarizeInterestConsensus,
@@ -47,6 +49,33 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     const voter = { id: "u-1" };
     expect(readVoteForVoter({ "u-1": "yes" }, voter)).toBe("up");
     expect(readVoteForVoter({ "u-1": "no" }, voter)).toBe("down");
+  });
+
+  test("mergeVoteRows combines votes stored under multiple destination aliases", () => {
+    expect(
+      mergeVoteRows(
+        {
+          "dest:auckland": { "user-a": "up" },
+          "trip-dest-0-auckland": { "user-b": "down" },
+        },
+        ["dest:auckland", "trip-dest-0-auckland"]
+      )
+    ).toEqual({
+      "user-a": "up",
+      "user-b": "down",
+    });
+  });
+
+  test("readDestinationVoteRow merges canonical and legacy destination keys", () => {
+    const row = readDestinationVoteRow(
+      {
+        "dest:auckland": { "user-a": "up" },
+        "trip-dest-0-auckland": { "user-b": "up" },
+      },
+      { name: "Auckland", vote_key: "dest:auckland", id: "trip-dest-0-auckland" }
+    );
+    expect(row["user-a"]).toBe("up");
+    expect(row["user-b"]).toBe("up");
   });
 });
 

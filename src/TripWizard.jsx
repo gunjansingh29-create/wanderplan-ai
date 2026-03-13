@@ -1,8 +1,8 @@
-﻿import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ---------------------------------------------------------------------------
    DESIGN TOKENS
-   ═══════════════════════════════════════════════════════════════════════════ */
+   --------------------------------------------------------------------------- */
 
 const T = {
   primary: "#0D7377", primaryLight: "#1A9A9F", primaryDark: "#095456",
@@ -178,6 +178,17 @@ function countShortlistedPois(poiRows, poiApproved) {
   )).length;
 }
 
+function isMyPoiShortlistSelection(poi, localApproved) {
+  if (poi?.shortlist_counts?.my_selected === true) return true;
+  return localApproved === true;
+}
+
+function countMyPoiSelections(poiRows, poiApproved) {
+  return (Array.isArray(poiRows) ? poiRows : []).filter((poi, idx) => (
+    isMyPoiShortlistSelection(poi, poiApproved?.[idx])
+  )).length;
+}
+
 function summarizePoiVoteCounts(voteCounts) {
   const approve = Math.max(0, Number(voteCounts?.approve || 0));
   const reject = Math.max(0, Number(voteCounts?.reject || 0));
@@ -249,16 +260,16 @@ function inferAirportCode(destinationName, fallback = "NRT") {
   return fallback;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ---------------------------------------------------------------------------
    AIRPORT CITY INPUT
-   City-name typeahead → airport IATA code picker
+   City-name typeahead ? airport IATA code picker
    Props:
      label       – field label
      value       – current selected IATA code (3 letters)
      onChange    – called with new IATA code string
      authToken   – Bearer token for /airports/search
      placeholder – input placeholder text
-   ═══════════════════════════════════════════════════════════════════════════ */
+   --------------------------------------------------------------------------- */
 function AirportCityInput({ label, value, onChange, authToken, placeholder = "City or airport", cityHint }) {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState([]);
@@ -551,9 +562,9 @@ function normalizeFlightLegRows(rawLegs = [], rawFlights = []) {
   return [];
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ---------------------------------------------------------------------------
    GLOBAL STYLES
-   ═══════════════════════════════════════════════════════════════════════════ */
+   --------------------------------------------------------------------------- */
 
 const Styles = () => <style>{`
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,700&family=Source+Sans+3:wght@400;500;600&display=swap');
@@ -581,9 +592,9 @@ const Styles = () => <style>{`
   ` : ""}
 `}</style>;
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ---------------------------------------------------------------------------
    ICON SYSTEM
-   ═══════════════════════════════════════════════════════════════════════════ */
+   --------------------------------------------------------------------------- */
 
 const I = ({n,s=18,c="currentColor"}) => {
   const d = {
@@ -612,35 +623,36 @@ const I = ({n,s=18,c="currentColor"}) => {
   return <svg width={s} height={s} viewBox="0 0 24 24" aria-hidden="true">{d[n]||d.map}</svg>;
 };
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ---------------------------------------------------------------------------
    STAGES CONFIG
-   ═══════════════════════════════════════════════════════════════════════════ */
+   --------------------------------------------------------------------------- */
 
 const STAGES = [
-  { key:"create",    label:"Create",       phase:"setup",      icon:"users",    emoji:"👋" },
-  { key:"bucket",    label:"Destinations", phase:"setup",      icon:"heart",    emoji:"🌍" },
-  { key:"pois",      label:"POI Shortlist",phase:"group",      icon:"camera",   emoji:"📍" },
-  { key:"poiVote",   label:"POI Vote",     phase:"group",      icon:"thumb",    emoji:"🗳️" },
-  { key:"duration",  label:"Duration",     phase:"group",      icon:"clock",    emoji:"⏱️" },
-  { key:"stays",     label:"Stays",        phase:"group",      icon:"hotel",    emoji:"🏨" },
-  { key:"avail",     label:"Dates",        phase:"group",      icon:"calendar", emoji:"🗓️" },
-  { key:"budget",    label:"Budget",       phase:"group",      icon:"dollar",   emoji:"💰" },
-  { key:"flights",   label:"My Flights",   phase:"individual", icon:"plane",    emoji:"✈️" },
-  { key:"itinerary", label:"Itinerary",    phase:"individual", icon:"clock",    emoji:"📋" },
-  { key:"sync",      label:"Sync",         phase:"complete",   icon:"send",     emoji:"🎉" },
+  { key:"create",    label:"Create",       phase:"setup",      icon:"users",    emoji:"??" },
+  { key:"bucket",    label:"Destinations", phase:"setup",      icon:"heart",    emoji:"??" },
+  { key:"pois",      label:"POI Shortlist",phase:"group",      icon:"camera",   emoji:"??" },
+  { key:"poiVote",   label:"POI Vote",     phase:"group",      icon:"thumb",    emoji:"???" },
+  { key:"duration",  label:"Duration",     phase:"group",      icon:"clock",    emoji:"??" },
+  { key:"stays",     label:"Stays",        phase:"group",      icon:"hotel",    emoji:"??" },
+  { key:"avail",     label:"Dates",        phase:"group",      icon:"calendar", emoji:"???" },
+  { key:"budget",    label:"Budget",       phase:"group",      icon:"dollar",   emoji:"??" },
+  { key:"flights",   label:"My Flights",   phase:"individual", icon:"plane",    emoji:"??" },
+  { key:"itinerary", label:"Itinerary",    phase:"individual", icon:"clock",    emoji:"??" },
+  { key:"sync",      label:"Sync",         phase:"complete",   icon:"send",     emoji:"??" },
 ];
 const GROUP_STAGES = STAGES.filter(s => s.phase === "group").map(s => s.key);
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ---------------------------------------------------------------------------
    REUSABLE COMPONENTS
-   ═══════════════════════════════════════════════════════════════════════════ */
+   --------------------------------------------------------------------------- */
 
-// ── STEPPER ────────────────────────────────────────────────────────────
+// -- STEPPER ------------------------------------------------------------
 
-const PHASE_BADGES = { group:"👥 Group", individual:"👤 Solo" };
+const PHASE_BADGES = { group:"?? Group", individual:"?? Solo" };
 
-function Stepper({ current }) {
+function Stepper({ current, onSelect = () => {}, syncedKey = "" }) {
   const idx = typeof current === "number" ? current : STAGES.findIndex(s=>s.key===current);
+  const currentKey = STAGES[Math.max(0, idx)]?.key || STAGES[0]?.key || "";
   const ref = useRef(null);
   useEffect(() => {
     if (ref.current) {
@@ -667,14 +679,28 @@ function Stepper({ current }) {
                 ) : (
                   <span style={{ fontSize:8.5,color:"transparent",marginBottom:2 }}>·</span>
                 )}
-                <div style={{ width:28,height:28,borderRadius:999,background:bg, display:"flex",alignItems:"center",justifyContent:"center",
-                  transition:"all .3s", boxShadow:state==="active"?`0 0 0 3px ${T.secondary}30`:"none",
-                  animation:state==="active"?"bounceIn .4s ease":"none" }}>
-                  {state==="done"?<I n="check" s={13} c="#fff"/>:<I n={st.icon} s={13} c={fg}/>}
-                </div>
-                <span className="hd" style={{ fontSize:9.5, fontWeight:state==="active"?700:500,
-                  color:state==="todo"?T.text3:state==="active"?T.secondary:T.primary,
-                  textAlign:"center",lineHeight:1.1,maxWidth:48,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{st.label}</span>
+                <button
+                  type="button"
+                  onClick={() => onSelect(i)}
+                  title={`Open ${st.label}`}
+                  style={{ background:"transparent", border:"none", padding:0, cursor:"pointer",
+                    display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}
+                >
+                  <div style={{ width:28,height:28,borderRadius:999,background:bg, display:"flex",alignItems:"center",justifyContent:"center",
+                    transition:"all .3s", boxShadow:state==="active"?`0 0 0 3px ${T.secondary}30`:(syncedKey === st.key && currentKey !== syncedKey ? `0 0 0 3px ${T.accent}20` : "none"),
+                    animation:state==="active"?"bounceIn .4s ease":"none" }}>
+                    {state==="done"?<I n="check" s={13} c="#fff"/>:<I n={st.icon} s={13} c={fg}/>}
+                  </div>
+                  <span className="hd" style={{ fontSize:9.5, fontWeight:state==="active"?700:500,
+                    color:state==="todo"?T.text3:state==="active"?T.secondary:T.primary,
+                    textAlign:"center",lineHeight:1.1,maxWidth:56,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{st.label}</span>
+                  {syncedKey === st.key && currentKey !== syncedKey && (
+                    <span style={{ fontSize:8, fontWeight:700, color:T.accent,
+                      background:`${T.accent}15`, padding:"1px 5px", borderRadius:999 }}>
+                      LIVE
+                    </span>
+                  )}
+                </button>
               </div>
               {i<STAGES.length-1 && (
                 <div style={{ width:12,height:2,background:i<idx?T.primary:T.borderLight, marginBottom:20,flexShrink:0, transition:"background .4s",
@@ -689,9 +715,9 @@ function Stepper({ current }) {
   );
 }
 
-// ── CHAT BUBBLE ────────────────────────────────────────────────────────
+// -- CHAT BUBBLE --------------------------------------------------------
 
-function Chat({ msg, agent, emoji="🤖", isUser=false, typing=false, delay=0 }) {
+function Chat({ msg, agent, emoji="??", isUser=false, typing=false, delay=0 }) {
   const [show,setShow] = useState(delay===0);
   useEffect(()=>{ if(delay>0){ const t=setTimeout(()=>setShow(true),delay); return ()=>clearTimeout(t); } },[delay]);
   if(!show) return null;
@@ -716,7 +742,7 @@ function Chat({ msg, agent, emoji="🤖", isUser=false, typing=false, delay=0 })
   );
 }
 
-// ── YES/NO CARD ─────────────────────────────────────────────────────────
+// -- YES/NO CARD ---------------------------------------------------------
 
 function YN({ title, subtitle, desc, tags=[], agent="AI", onYes, onNo, children }) {
   const [decided,setDecided] = useState(null);
@@ -760,7 +786,7 @@ function YN({ title, subtitle, desc, tags=[], agent="AI", onYes, onNo, children 
   );
 }
 
-// ── GROUP ROOM ──────────────────────────────────────────────────────────
+// -- GROUP ROOM ----------------------------------------------------------
 // Wraps each group-phase stage with a member vote bar + "Lock it in" button.
 
 function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLock, onVote, onVeto, onOverride, myVote, isLocked, currentUserId }) {
@@ -798,7 +824,7 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
                 transition:"box-shadow .15s",
               }}>{m.initials}</div>
               <span style={{ fontSize:9, color: vote === "yes" ? T.success : vote === "organizer" ? T.primary : T.text3 }}>
-                {vote === "yes" ? "✓" : vote === "organizer" ? "👑" : "…"}
+                {vote === "yes" ? "?" : vote === "organizer" ? "??" : "…"}
               </span>
             </div>
           );
@@ -808,7 +834,7 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
         </span>
         {isLocked && (
           <span style={{ fontSize:11, fontWeight:700, color:T.success,
-            background:`${T.success}15`, padding:"2px 8px", borderRadius:20 }}>🔒 Locked</span>
+            background:`${T.success}15`, padding:"2px 8px", borderRadius:20 }}>?? Locked</span>
         )}
       </div>
 
@@ -828,7 +854,7 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
                 transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
             >
               <I n="check" s={16} c={hasMajority ? "#fff" : T.text3}/>
-              {isLocked ? "Override & Lock →" : `Lock it in (${yesCount}/${Math.max(totalVoters, 1)} agreed) →`}
+              {isLocked ? "Override & Lock ?" : `Lock it in (${yesCount}/${Math.max(totalVoters, 1)} agreed) ?`}
             </button>
             <button
               onClick={() => onVeto(stageKey)}
@@ -839,7 +865,7 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
                 fontSize:13, fontWeight:600, cursor:"pointer", minHeight:48,
                 transition:"all .2s", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
             >
-              ✕ Send Back
+              ? Send Back
             </button>
           </div>
           {!hasMajority && totalVoters > 0 && (
@@ -860,13 +886,13 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
                 boxShadow:`0 2px 8px ${T.primary}30`,
                 transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
             >
-              <I n="check" s={16} c="#fff"/> I Agree ✓
+              <I n="check" s={16} c="#fff"/> I Agree ?
             </button>
           ) : (
             <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8,
               padding:"12px", borderRadius:12,
               background:`${T.success}10`, border:`1px solid ${T.success}30` }}>
-              <span style={{ fontSize:13, color:T.success, fontWeight:600 }}>✓ You voted — waiting for organizer to lock</span>
+              <span style={{ fontSize:13, color:T.success, fontWeight:600 }}>? You voted — waiting for organizer to lock</span>
             </div>
           )}
         </div>
@@ -875,7 +901,7 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
   );
 }
 
-// ── BUDGET METER ────────────────────────────────────────────────────────
+// -- BUDGET METER --------------------------------------------------------
 
 function BudgetMeter({ spent, allocated, label }) {
   const pct = Math.min((spent/allocated)*100, 120);
@@ -899,9 +925,9 @@ function BudgetMeter({ spent, allocated, label }) {
   );
 }
 
-// ── SCREEN SHELL ───────────────────────────────────────────────────────
+// -- SCREEN SHELL -------------------------------------------------------
 
-function Shell({ step, children }) {
+function Shell({ step, children, onStepSelect = () => {}, syncedStageKey = "" }) {
   const stageRef = useRef(null);
 
   useEffect(() => {
@@ -923,7 +949,7 @@ function Shell({ step, children }) {
   return (
     <div style={{ minHeight:"100vh",background:T.bg,display:"flex",flexDirection:"column" }}>
       <Styles/>
-      <Stepper current={step}/>
+      <Stepper current={step} onSelect={onStepSelect} syncedKey={syncedStageKey}/>
       <div
         ref={stageRef}
         tabIndex={-1}
@@ -935,7 +961,7 @@ function Shell({ step, children }) {
   );
 }
 
-// ── AGENT HEADER ───────────────────────────────────────────────────────
+// -- AGENT HEADER -------------------------------------------------------
 
 function AgentHeader({ emoji, name, desc }) {
   return (
@@ -951,7 +977,7 @@ function AgentHeader({ emoji, name, desc }) {
   );
 }
 
-// ── ACTION BTN ─────────────────────────────────────────────────────────
+// -- ACTION BTN ---------------------------------------------------------
 
 function Btn({ children, onClick, primary=true, disabled=false, full=false }) {
   return <button onClick={onClick} disabled={disabled} className="hd" style={{
@@ -966,9 +992,9 @@ function Btn({ children, onClick, primary=true, disabled=false, full=false }) {
   </button>;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ---------------------------------------------------------------------------
    MOCK DATA
-   ═══════════════════════════════════════════════════════════════════════════ */
+   --------------------------------------------------------------------------- */
 
 const MEMBERS_SEED = [
   { name:"You", status:"done", initials:"YO" },
@@ -1106,27 +1132,27 @@ const DINING = [
 
 const ITINERARY = [
   { day:1, date:"Jun 15", theme:"Arrival in Santorini", items:[
-    { time:"14:45",type:"flight",title:"Arrive Athens → Santorini", cost:0 },
+    { time:"14:45",type:"flight",title:"Arrive Athens ? Santorini", cost:0 },
     { time:"16:00",type:"checkin",title:"Check in Canaves Oia Suites", cost:385 },
     { time:"18:30",type:"activity",title:"Sunset at Oia Castle",loc:"Oia", cost:0 },
     { time:"20:00",type:"meal",title:"Dinner at Lycabettus",loc:"Oia", cost:85 },
   ]},
   { day:2, date:"Jun 16", theme:"Caldera & Culture", items:[
     { time:"08:00",type:"meal",title:"Breakfast at Karma",loc:"Fira", cost:28 },
-    { time:"09:30",type:"activity",title:"Caldera Hiking Trail",loc:"Fira → Oia", cost:0 },
+    { time:"09:30",type:"activity",title:"Caldera Hiking Trail",loc:"Fira ? Oia", cost:0 },
     { time:"13:00",type:"meal",title:"Lunch at Ammoudi Fish Tavern",loc:"Ammoudi Bay", cost:45 },
     { time:"15:00",type:"activity",title:"Wine Tasting at Santo Wines",loc:"Pyrgos", cost:35 },
     { time:"20:00",type:"meal",title:"Dinner at Melitini",loc:"Oia", cost:70 },
   ]},
   { day:3, date:"Jun 17", theme:"Travel to Kyoto", items:[
     { time:"07:00",type:"meal",title:"Early breakfast",loc:"Hotel", cost:0 },
-    { time:"09:00",type:"flight",title:"Santorini → Athens → Tokyo",loc:"Airport", cost:0 },
+    { time:"09:00",type:"flight",title:"Santorini ? Athens ? Tokyo",loc:"Airport", cost:0 },
   ]},
 ];
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ---------------------------------------------------------------------------
    MAIN WIZARD
-   ═══════════════════════════════════════════════════════════════════════════ */
+   --------------------------------------------------------------------------- */
 
 export default function TripWizard({
   initialSession = null,
@@ -1222,6 +1248,7 @@ export default function TripWizard({
   const requiredTripDays = Math.max(1, Number(availabilitySummary?.required_trip_days || tripDurationDays || 10));
   const sharedBudgetTotal = budgetPerDay * requiredTripDays;
   const shortlistedPoiCount = countShortlistedPois(poiRows, poiApproved);
+  const mySelectedPoiCount = countMyPoiSelections(poiRows, poiApproved);
   const memberBudgetPreferences = members.map((member, idx) => {
     const localProfile = readLocalProfileForEmail(member?.email);
     const tier = normalizeBudgetTier(
@@ -1242,6 +1269,10 @@ export default function TripWizard({
   const isOrganizer = tripOwnerId
     ? (!!currentUserId && tripOwnerId === currentUserId)
     : (members.length === 0 || members[0]?.initials === "YO");
+  const goToStage = (key) => {
+    const idx = STAGES.findIndex((stage) => stage.key === key);
+    if (idx >= 0) setStep(idx);
+  };
 
   // Lock a group stage and advance; last group stage triggers transition screen
   const lockStage = async (key) => {
@@ -1322,6 +1353,15 @@ export default function TripWizard({
         body: JSON.stringify({ vote: "yes" }),
       });
     } catch { setMyVotes(prev => ({ ...prev, [key]: undefined })); }
+  };
+
+  const handlePoiShortlistContinue = async () => {
+    if (isOrganizer) {
+      await lockStage("pois");
+      return;
+    }
+    await handleMemberVote("pois");
+    goToStage("poiVote");
   };
 
   // Non-organizer "I Agree" for bucket stage: save own destination choices then vote
@@ -1745,8 +1785,8 @@ export default function TripWizard({
             setPoiRows(res?.pois || []);
             const shortlisted = {};
             (res?.pois || []).forEach((poi, idx) => {
-              if (poi?.shortlisted === true) shortlisted[idx] = true;
-              else if (poi?.shortlisted === false) shortlisted[idx] = false;
+              if (poi?.shortlist_counts?.my_selected === true) shortlisted[idx] = true;
+              else if (poi?.shortlist_counts?.my_selected === false) shortlisted[idx] = false;
             });
             setPoiApproved(prev => ({ ...prev, ...shortlisted }));
           }
@@ -1846,7 +1886,7 @@ export default function TripWizard({
     };
   }, [stageKey, tripId, authToken, demoMode]);
 
-  // ── Sync group votes from backend consensus API every 3 s ────────────────
+  // -- Sync group votes from backend consensus API every 3 s ----------------
   useEffect(() => {
     if (!GROUP_STAGES.includes(stageKey)) return;
     // Post-hydration members have real userId, not "YO" — check both ways
@@ -1914,7 +1954,30 @@ export default function TripWizard({
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
-  // ── Poll POI vote counts every 5 s so all members see live tallies ──────────
+  // -- Poll POI shortlist state every 5 s so crew sees shared shortlist updates -----
+  useEffect(() => {
+    if (stageKey !== "pois" || !tripId || !authToken || demoMode) return;
+    let cancelled = false;
+    async function syncPoiShortlist() {
+      try {
+        const res = await apiJson(`/trips/${tripId}/pois?limit=20`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (cancelled) return;
+        setPoiRows(res?.pois || []);
+        const mine = {};
+        (res?.pois || []).forEach((poi, idx) => {
+          if (poi?.shortlist_counts?.my_selected === true) mine[idx] = true;
+          else if (poi?.shortlist_counts?.my_selected === false) mine[idx] = false;
+        });
+        setPoiApproved(prev => ({ ...prev, ...mine }));
+      } catch { /* ignore */ }
+    }
+    const interval = setInterval(syncPoiShortlist, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [stageKey, tripId, authToken, demoMode]);
+
+  // -- Poll POI vote counts every 5 s so all members see live tallies ----------
   useEffect(() => {
     if (stageKey !== "poiVote" || !tripId || !authToken || demoMode) return;
     let cancelled = false;
@@ -1940,7 +2003,7 @@ export default function TripWizard({
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
-  // ── Load MyCrew from localStorage when entering Create stage ───────────
+  // -- Load MyCrew from localStorage when entering Create stage -----------
   useEffect(() => {
     if (stageKey !== "create") return;
     const sessionEmail = hydratedSession?.email || "";
@@ -2277,14 +2340,30 @@ export default function TripWizard({
     if (stageKey === "pois") {
       setPoiApproved((prev) => ({ ...prev, [index]: approved }));
       setPoiRows((prev) => prev.map((poi, poiIndex) => (
-        poiIndex === index ? { ...poi, shortlisted: approved } : poi
+        poiIndex === index ? {
+          ...poi,
+          shortlisted: approved || Number(poi?.shortlist_counts?.selected || 0) > 0,
+          shortlist_counts: {
+            selected: Math.max(approved ? 1 : 0, Number(poi?.shortlist_counts?.selected || 0)),
+            my_selected: approved,
+          },
+        } : poi
       )));
       try {
-        await apiJson(`/trips/${tripId}/pois/${poiId}/shortlist`, {
+        const resp = await apiJson(`/trips/${tripId}/pois/${poiId}/shortlist`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
           body: JSON.stringify({ shortlisted: approved }),
         });
+        if (resp?.poi || resp?.shortlist_counts) {
+          setPoiRows((prev) => prev.map((poi, poiIndex) => (
+            poiIndex === index ? {
+              ...poi,
+              shortlisted: resp?.poi?.shortlisted === true,
+              shortlist_counts: resp?.shortlist_counts || poi.shortlist_counts || { selected: 0, my_selected: approved },
+            } : poi
+          )));
+        }
       } catch { /* non-fatal */ }
       return;
     }
@@ -2691,12 +2770,12 @@ export default function TripWizard({
     };
   }, [stageKey, tripId, authToken, demoMode]);
 
-  // ── STEP 0: CREATE TRIP ──────────────────────────────────────────────
+  // -- STEP 0: CREATE TRIP ----------------------------------------------
   if (stageKey === "create") return (
-    <Shell step={step}>
-      <AgentHeader emoji="👋" name="Trip Organizer" desc="Let's get your trip started!"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="??" name="Trip Organizer" desc="Let's get your trip started!"/>
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
-        <Chat agent="Trip Organizer" emoji="👋" msg="Welcome! Let's create your trip. What would you like to call it?"/>
+        <Chat agent="Trip Organizer" emoji="??" msg="Welcome! Let's create your trip. What would you like to call it?"/>
         <div style={{ animation:"fadeUp .4s ease-out .2s both" }}>
           <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Trip Name</label>
           <input id="wizard-trip-name" aria-label="Trip Name" value={tripName} onChange={e=>setTripName(e.target.value)} placeholder="e.g. Summer Europe Trip"
@@ -2736,7 +2815,7 @@ export default function TripWizard({
             </p>
           )}
         </div>
-        <Chat agent="Trip Organizer" emoji="👋" msg="Great name! Now invite your travel companions from MyCrew or by email." delay={300}/>
+        <Chat agent="Trip Organizer" emoji="??" msg="Great name! Now invite your travel companions from MyCrew or by email." delay={300}/>
         <div style={{ animation:"fadeUp .4s ease-out .5s both" }}>
           <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Invite Members</label>
           <div style={{ display:"flex",gap:8 }}>
@@ -2751,7 +2830,7 @@ export default function TripWizard({
             style={{ marginTop:8, background:"none", border:`1px solid ${T.border}`, borderRadius:8,
               padding:"7px 14px", fontSize:12, fontWeight:600, color:T.primary, cursor:"pointer",
               display:"flex", alignItems:"center", gap:6 }}>
-            👥 From MyCrew {showMyCrewPanel ? "▲" : "▼"}
+            ?? From MyCrew {showMyCrewPanel ? "?" : "?"}
           </button>
           {showMyCrewPanel && (
             <div style={{ marginTop:8, background:T.surface, border:`1px solid ${T.borderLight}`, borderRadius:12,
@@ -2813,7 +2892,7 @@ export default function TripWizard({
         </div>
         <div style={{ marginTop:8 }}>
           <Btn onClick={handleCreateAndContinue} full disabled={apiBusy}>
-            {apiBusy ? "Saving trip..." : `Continue with ${joinedCount} members →`}
+            {apiBusy ? "Saving trip..." : `Continue with ${joinedCount} members ?`}
           </Btn>
         </div>
         {tripId && (
@@ -2835,12 +2914,12 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 1: DESTINATIONS (Bucket List) ───────────────────────────────
+  // -- STEP 1: DESTINATIONS (Bucket List) -------------------------------
   if (stageKey === "bucket") return (
-    <Shell step={step}>
-      <AgentHeader emoji="🌍" name="Destinations" desc="Pick destinations from your bucket list"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="??" name="Destinations" desc="Pick destinations from your bucket list"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Destinations" emoji="🌍" msg="Select destinations from your personal bucket list, or add new ones below."/>
+        <Chat agent="Destinations" emoji="??" msg="Select destinations from your personal bucket list, or add new ones below."/>
         {/* Personal bucket list cards */}
         {personalBucketItems.length > 0 && (
           <div style={{ display:"flex",flexDirection:"column",gap:8,animation:"fadeUp .4s ease-out .2s both" }}>
@@ -2856,7 +2935,7 @@ export default function TripWizard({
                   display:"flex",alignItems:"center",gap:12,cursor:"pointer",transition:"all .2s" }}>
                   <div style={{ width:36,height:36,borderRadius:10,flexShrink:0,
                     background:selected?`${T.primary}18`:`${T.accent}10`,
-                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:20 }}>🌍</div>
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:20 }}>??</div>
                   <div style={{ flex:1,minWidth:0 }}>
                     <p className="hd" style={{ fontWeight:600,fontSize:14 }}>{item.destination}</p>
                     {item.country && <p style={{ fontSize:11,color:T.text3 }}>{item.country}</p>}
@@ -2900,7 +2979,7 @@ export default function TripWizard({
           </div>
         )}
         {destinations.length > 0 ? (
-          <Btn onClick={handleBucketContinue} full>Continue with {destinations.length} destination{destinations.length!==1?"s":""} →</Btn>
+          <Btn onClick={handleBucketContinue} full>Continue with {destinations.length} destination{destinations.length!==1?"s":""} ?</Btn>
         ) : (
           <p style={{ fontSize:12,color:T.text3 }}>Select or add at least one destination to continue.</p>
         )}
@@ -2908,31 +2987,33 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 2: POI SHORTLIST ─────────────────────────────────────────────
+  // -- STEP 2: POI SHORTLIST ---------------------------------------------
   if (stageKey === "pois") return (
-    <Shell step={step}>
-      <AgentHeader emoji="📍" name="POI Discovery" desc="Accept LLM suggestions into one shared shortlist for the next voting screen"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="??" name="POI Discovery" desc="Accept LLM suggestions into one shared shortlist for the next voting screen"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <div style={{ background:T.surface, borderRadius:12, padding:"10px 14px", border:`1px solid ${T.borderLight}`,
           display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <span style={{ fontSize:12, color:T.text3, fontWeight:600 }}>Shortlist stage:</span>
           <span style={{ fontSize:12, color:T.text2 }}>
-            LLM-generated POIs are curated here, then the shared shortlist moves to the voting screen.
+            Each crew member can approve their own POIs here. Any POI approved by at least one member joins the shared voting list.
           </span>
           <span style={{ fontSize:11, fontWeight:700, color:T.primary,
             background:`${T.primary}15`, padding:"2px 8px", borderRadius:20, marginLeft:"auto" }}>
             {shortlistedPoiCount} shortlisted
           </span>
         </div>
-        <Chat agent="POI Agent" emoji="📍" msg="These are LLM-generated activity options. Accept the ones that should go into the shared crew voting list on the next screen."/>
+        <Chat agent="POI Agent" emoji="??" msg="These are LLM-generated activity options. Your approvals feed the shared crew voting list on the next screen."/>
         {poiDisplay.map((poi,i)=>{
           const catColors = { nature:T.success, food:T.primary, culture:T.warning };
-          const shortlisted = poiRows[i]?.shortlisted === true || poiApproved[i] === true;
-          const rejected = poiRows[i]?.shortlisted === false || poiApproved[i] === false;
+          const mySelected = isMyPoiShortlistSelection(poiRows[i], poiApproved[i]);
+          const myRejected = poiRows[i]?.shortlist_counts?.my_selected === false || poiApproved[i] === false;
+          const sharedSelectedCount = Number(poiRows[i]?.shortlist_counts?.selected || 0);
+          const sharedShortlisted = poiRows[i]?.shortlisted === true || sharedSelectedCount > 0;
           return (
             <div key={poi.poi_id || poi.id || i} style={{ background:T.surface,borderRadius:14,overflow:"hidden",border:`1px solid ${T.borderLight}`,
               boxShadow:shadow.sm,display:"flex",gap:0,animation:`fadeUp .35s ease-out ${i*.08}s both`,
-              opacity:rejected?.45:1,transition:"opacity .3s" }}>
+              opacity: myRejected && !sharedShortlisted ? 0.45 : 1, transition:"opacity .3s" }}>
               <div style={{ width:80,minHeight:100,flexShrink:0,
                 background:`linear-gradient(135deg,${catColors[poi.cat]||T.primary}25,${catColors[poi.cat]||T.primary}08)`,
                 display:"flex",alignItems:"center",justifyContent:"center" }}>
@@ -2954,41 +3035,56 @@ export default function TripWizard({
                 <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginBottom:8 }}>
                   {poi.tags.map(t=><span key={t} style={{ background:T.bg,color:T.text2,padding:"1px 7px",borderRadius:999,fontSize:10 }}>{t}</span>)}
                 </div>
+                <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:8 }}>
+                  {sharedShortlisted && (
+                    <span style={{ fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:999,
+                      background:`${T.success}15`,color:T.success }}>
+                      Shared shortlist: {sharedSelectedCount} crew
+                    </span>
+                  )}
+                  {mySelected && (
+                    <span style={{ fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:999,
+                      background:`${T.primary}15`,color:T.primary }}>
+                      Your selection
+                    </span>
+                  )}
+                </div>
                 <p style={{ fontSize:11,color:T.text3,marginBottom:8 }}>
-                  Accepted here means it joins the shared static shortlist for crew voting on the next screen.
+                  Approve to add this POI to your shortlist. The next screen uses the combined shortlist from the whole crew.
                 </p>
                 <div style={{ display:"flex", gap:8 }}>
                   <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
-                    border: rejected?"none":`1.5px solid ${T.error}40`,
-                    background:rejected?T.error:"transparent",
-                    color:rejected?"#fff":T.error,
-                    fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Reject</button>
+                    border: myRejected?"none":`1.5px solid ${T.error}40`,
+                    background:myRejected?T.error:"transparent",
+                    color:myRejected?"#fff":T.error,
+                    fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">? Reject</button>
                   <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
                     border:"none",
-                    background:shortlisted?T.success:T.primary,
+                    background:mySelected?T.success:T.primary,
                     color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
-                    boxShadow:`0 2px 6px ${shortlisted?T.success:T.primary}30` }} className="hd">✓ Add To Vote</button>
+                    boxShadow:`0 2px 6px ${mySelected?T.success:T.primary}30` }} className="hd">? Approve</button>
                 </div>
               </div>
             </div>
           );
         })}
-        {isOrganizer ? (
-          <div style={{ display:"flex", flexDirection:"column", gap:8, animation:"scaleIn .3s ease-out" }}>
-            <div style={{ display:"flex", gap:8 }}>
-              <button
-                onClick={() => lockStage("pois")}
-                className="hd"
-                style={{ flex:3, padding:"13px 20px", borderRadius:12, border:"none",
-                  background:shortlistedPoiCount > 0 ? T.primary : T.borderLight,
-                  color:shortlistedPoiCount > 0 ? "#fff" : T.text3,
-                  fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
-                  boxShadow:shortlistedPoiCount > 0 ? `0 2px 8px ${T.primary}30` : "none",
-                  transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
-              >
-                <I n="check" s={16} c={shortlistedPoiCount > 0 ? "#fff" : T.text3}/>
-                Send {shortlistedPoiCount} POI{shortlistedPoiCount === 1 ? "" : "s"} To Voting →
-              </button>
+        <div style={{ display:"flex", flexDirection:"column", gap:8, animation:"scaleIn .3s ease-out" }}>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <button
+              onClick={handlePoiShortlistContinue}
+              className="hd"
+              style={{ flex:3, padding:"13px 20px", borderRadius:12, border:"none",
+                background:T.primary, color:"#fff",
+                fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
+                boxShadow:`0 2px 8px ${T.primary}30`,
+                transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+            >
+              <I n="check" s={16} c="#fff"/>
+              {isOrganizer
+                ? `Open Vote Screen (${shortlistedPoiCount} shared) ?`
+                : `Approve My Selections (${mySelectedPoiCount}) ?`}
+            </button>
+            {isOrganizer && (
               <button
                 onClick={() => handleOrganizerVeto("pois")}
                 className="hd"
@@ -2998,30 +3094,24 @@ export default function TripWizard({
                   fontSize:13, fontWeight:600, cursor:"pointer", minHeight:48,
                   transition:"all .2s", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
               >
-                ✕ Send Back
+                ? Send Back
               </button>
-            </div>
-            <p style={{ fontSize:11, color:T.text3, textAlign:"center" }}>
-              Organizer locks the shortlist, then every crew member votes on that same static list on the next screen.
-            </p>
+            )}
           </div>
-        ) : (
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8,
-            padding:"12px", borderRadius:12,
-            background:`${T.warning}10`, border:`1px solid ${T.warning}30` }}>
-            <span style={{ fontSize:13, color:T.warning, fontWeight:600 }}>
-              Organizer will lock the shortlist, then the crew votes on it together on the next screen.
-            </span>
-          </div>
-        )}
+          <p style={{ fontSize:11, color:T.text3, textAlign:"center" }}>
+            {isOrganizer
+              ? "Crew members can keep browsing any step, and this button opens the shared vote stage using the combined shortlist."
+              : "Approving here marks your shortlist selections done and takes you to the shared vote screen."}
+          </p>
+        </div>
       </div>
     </Shell>
   );
 
-  // ── STEP 3: POI VOTING ────────────────────────────────────────────────
+  // -- STEP 3: POI VOTING ------------------------------------------------
   if (stageKey === "poiVote") return (
-    <Shell step={step}>
-      <AgentHeader emoji="🗳️" name="POI Voting" desc="Everyone votes on the same shared shortlist before majority consolidation"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="???" name="POI Voting" desc="Everyone votes on the same shared shortlist before majority consolidation"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <div style={{ background:T.surface, borderRadius:12, padding:"10px 14px", border:`1px solid ${T.borderLight}`,
           display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
@@ -3030,7 +3120,7 @@ export default function TripWizard({
             This screen uses the shared shortlist saved in the previous step. Everyone should see the same POIs in the same order.
           </span>
         </div>
-        <Chat agent="POI Voting Agent" emoji="🗳️" msg="Vote accept or reject on the shared shortlist below. The organizer finalizes after majority logic is applied."/>
+        <Chat agent="POI Voting Agent" emoji="???" msg="Vote accept or reject on the shared shortlist below. The organizer finalizes after majority logic is applied."/>
         {poiDisplay.length === 0 && (
           <div style={{ padding:"14px 16px",borderRadius:12,background:`${T.warning}10`,border:`1px solid ${T.warning}30` }}>
             <p style={{ fontSize:13,color:T.warning,fontWeight:700 }}>No shortlisted POIs are available yet.</p>
@@ -3047,7 +3137,7 @@ export default function TripWizard({
           return (
             <div key={poiId || i} style={{ background:T.surface,borderRadius:14,overflow:"hidden",border:`1px solid ${T.borderLight}`,
               boxShadow:shadow.sm,display:"flex",gap:0,animation:`fadeUp .35s ease-out ${i*.08}s both`,
-              opacity:rejected?.45:1,transition:"opacity .3s" }}>
+              opacity: rejected ? 0.45 : 1, transition:"opacity .3s" }}>
               <div style={{ width:80,minHeight:100,flexShrink:0,
                 background:`linear-gradient(135deg,${catColors[poi.cat]||T.primary}25,${catColors[poi.cat]||T.primary}08)`,
                 display:"flex",alignItems:"center",justifyContent:"center" }}>
@@ -3071,11 +3161,11 @@ export default function TripWizard({
                 </div>
                 {voteSummary.totalVotes > 0 && (
                   <div style={{ display:"flex", gap:6, marginBottom:6, alignItems:"center" }}>
-                    <span style={{ fontSize:10, color:T.success, fontWeight:600 }}>👍 {voteSummary.approve}</span>
-                    <span style={{ fontSize:10, color:T.error, fontWeight:600 }}>👎 {voteSummary.reject}</span>
-                    {voteSummary.outcome === "accept" && <span style={{ fontSize:9, color:T.success }}>✓ majority accept</span>}
-                    {voteSummary.outcome === "reject" && <span style={{ fontSize:9, color:T.error }}>✗ majority reject</span>}
-                    {voteSummary.outcome === "split" && <span style={{ fontSize:9, color:T.warning }}>⚡ split vote</span>}
+                    <span style={{ fontSize:10, color:T.success, fontWeight:600 }}>?? {voteSummary.approve}</span>
+                    <span style={{ fontSize:10, color:T.error, fontWeight:600 }}>?? {voteSummary.reject}</span>
+                    {voteSummary.outcome === "accept" && <span style={{ fontSize:9, color:T.success }}>? majority accept</span>}
+                    {voteSummary.outcome === "reject" && <span style={{ fontSize:9, color:T.error }}>? majority reject</span>}
+                    {voteSummary.outcome === "split" && <span style={{ fontSize:9, color:T.warning }}>? split vote</span>}
                   </div>
                 )}
                 <div style={{ display:"flex", gap:8 }}>
@@ -3083,12 +3173,12 @@ export default function TripWizard({
                     border: rejected?"none":`1.5px solid ${T.error}40`,
                     background:rejected?T.error:"transparent",
                     color:rejected?"#fff":T.error,
-                    fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Reject</button>
+                    fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">? Reject</button>
                   <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
                     border:"none",
                     background:accepted?T.success:T.primary,
                     color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
-                    boxShadow:`0 2px 6px ${accepted?T.success:T.primary}30` }} className="hd">✓ Accept</button>
+                    boxShadow:`0 2px 6px ${accepted?T.success:T.primary}30` }} className="hd">? Accept</button>
                 </div>
               </div>
             </div>
@@ -3108,7 +3198,7 @@ export default function TripWizard({
                   transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
               >
                 <I n="check" s={16} c={poiDisplay.length > 0 ? "#fff" : T.text3}/>
-                Finalize Majority Vote →
+                Finalize Majority Vote ?
               </button>
               <button
                 onClick={() => handleOrganizerVeto("poiVote")}
@@ -3119,7 +3209,7 @@ export default function TripWizard({
                   fontSize:13, fontWeight:600, cursor:"pointer", minHeight:48,
                   transition:"all .2s", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
               >
-                ✕ Send Back
+                ? Send Back
               </button>
             </div>
             <p style={{ fontSize:11, color:T.text3, textAlign:"center" }}>
@@ -3139,12 +3229,12 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 6: DURATION ─────────────────────────────────────────────────
+  // -- STEP 6: DURATION -------------------------------------------------
   if (stageKey === "duration") return (
-    <Shell step={step}>
-      <AgentHeader emoji="⏱️" name="Duration Calculator" desc="How many days you need"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="??" name="Duration Calculator" desc="How many days you need"/>
       <GroupRoom stageKey="duration" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]} currentUserId={currentUserId}>
-        <Chat agent="Duration Agent" emoji="⏱️" msg="Let me calculate the optimal trip length based on your approved activities..."/>
+        <Chat agent="Duration Agent" emoji="??" msg="Let me calculate the optimal trip length based on your approved activities..."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .3s both" }}>
           <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:12 }}>Trip Duration Breakdown</p>
@@ -3169,7 +3259,7 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 7: AVAILABILITY ─────────────────────────────────────────────
+  // -- STEP 7: AVAILABILITY ---------------------------------------------
   if (stageKey === "avail") {
     const overlapCandidates = Array.isArray(availabilitySummary?.overlapping_windows)
       ? availabilitySummary.overlapping_windows
@@ -3188,10 +3278,10 @@ export default function TripWizard({
     const myRange = availabilityRanges[0] || { start: "", end: "" };
     const myRangeDays = myRange.start && myRange.end ? inclusiveIsoDays(myRange.start, myRange.end) : 0;
     return (
-      <Shell step={step}>
-        <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc={`Collecting crew availability for one locked ${requiredTripDays}-day trip window`}/>
+      <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+        <AgentHeader emoji="???" name="Schedule Sync Agent" desc={`Collecting crew availability for one locked ${requiredTripDays}-day trip window`}/>
         <GroupRoom stageKey="avail" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]} currentUserId={currentUserId}>
-          <Chat agent="Sync Agent" emoji="🗓️" msg={`Each crew member must submit a date range that can fit the full ${requiredTripDays}-day trip. Once every accepted member has input dates, we lock one overlapping ${requiredTripDays}-day window.`}/>
+          <Chat agent="Sync Agent" emoji="???" msg={`Each crew member must submit a date range that can fit the full ${requiredTripDays}-day trip. Once every accepted member has input dates, we lock one overlapping ${requiredTripDays}-day window.`}/>
           <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm,animation:"fadeUp .35s ease-out .2s both" }}>
             <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:6 }}>Your Availability</p>
             <p style={{ fontSize:12,color:T.text3,marginBottom:10 }}>
@@ -3252,7 +3342,7 @@ export default function TripWizard({
                         <p className="hd" style={{ fontSize:12,fontWeight:700,color:T.text }}>{member.name || member.email || "Crew member"}{isMe ? " (You)" : ""}</p>
                         <p style={{ fontSize:11,color:T.text3 }}>
                           {firstWindow?.start && firstWindow?.end
-                            ? `${firstWindow.start} → ${firstWindow.end} (${inclusiveIsoDays(firstWindow.start, firstWindow.end)} days)`
+                            ? `${firstWindow.start} ? ${firstWindow.end} (${inclusiveIsoDays(firstWindow.start, firstWindow.end)} days)`
                             : "Waiting for availability input"}
                         </p>
                       </div>
@@ -3275,7 +3365,7 @@ export default function TripWizard({
                         style={{ textAlign:"left",padding:"10px 12px",borderRadius:10,border:`2px solid ${isSelected ? T.success : T.borderLight}`,background:isSelected?`${T.success}12`:T.bg,cursor:"pointer" }}
                         >
                         <span className="hd" style={{ fontWeight:700,fontSize:13,color:T.text }}>
-                          {windowValue?.start} → {windowValue?.end}
+                          {windowValue?.start} ? {windowValue?.end}
                         </span>
                         <span style={{ display:"block",fontSize:11,color:T.text3,marginTop:3 }}>
                           Exact {win?.overlap_days || Math.max(1, diffIsoDays(windowValue?.start, windowValue?.end) + 1)}-day trip window for all accepted members
@@ -3285,7 +3375,7 @@ export default function TripWizard({
                   }) : (
                     <div style={{ padding:"10px 12px",borderRadius:10,background:`${T.success}12`,border:`1px solid ${T.success}33` }}>
                       <span className="hd" style={{ fontWeight:700,fontSize:13,color:T.success }}>
-                        {availabilitySummary?.overlap?.start} → {availabilitySummary?.overlap?.end}
+                        {availabilitySummary?.overlap?.start} ? {availabilitySummary?.overlap?.end}
                       </span>
                       <span style={{ display:"block",fontSize:11,color:T.text3,marginTop:3 }}>
                         Common {requiredTripDays}-day overlap found for all accepted members.
@@ -3312,7 +3402,7 @@ export default function TripWizard({
               {lockedWindow && (
                 <div style={{ padding:"10px 12px",borderRadius:10,background:T.successBg,border:`1px solid ${T.success}33`,marginBottom:10 }}>
                   <p style={{ fontSize:12,color:T.success,fontWeight:700 }}>
-                    Locked travel dates: {lockedWindow.start} → {lockedWindow.end}
+                    Locked travel dates: {lockedWindow.start} ? {lockedWindow.end}
                   </p>
                 </div>
               )}
@@ -3325,10 +3415,10 @@ export default function TripWizard({
     );
   }
 
-  // ── STEP 8: BUDGET ───────────────────────────────────────────────────
+  // -- STEP 8: BUDGET ---------------------------------------------------
   if (stageKey === "budget") return (
-    <Shell step={step}>
-      <AgentHeader emoji="💰" name="Budget Agent" desc="Organizer finalizes the shared budget after reviewing crew preferences"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="??" name="Budget Agent" desc="Organizer finalizes the shared budget after reviewing crew preferences"/>
       <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
         <div style={{ background:T.surface, borderRadius:12, padding:"10px 14px", border:`1px solid ${T.borderLight}`,
           display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
@@ -3341,7 +3431,7 @@ export default function TripWizard({
               background:`${T.success}15`, padding:"2px 8px", borderRadius:20, marginLeft:"auto" }}>Locked</span>
           )}
         </div>
-        <Chat agent="Budget Agent" emoji="💰" msg="I pulled each crew member's saved budget preference. The organizer sets one shared daily budget after reviewing the group profile."/>
+        <Chat agent="Budget Agent" emoji="??" msg="I pulled each crew member's saved budget preference. The organizer sets one shared daily budget after reviewing the group profile."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .35s ease-out .15s both" }}>
           <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,flexWrap:"wrap",gap:8 }}>
@@ -3372,7 +3462,7 @@ export default function TripWizard({
             ))}
           </div>
         </div>
-        <Chat agent="Budget Agent" emoji="💰" msg="What's your per-person daily budget? Drag the slider to set it."/>
+        <Chat agent="Budget Agent" emoji="??" msg="What's your per-person daily budget? Drag the slider to set it."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
           <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:14 }}>
@@ -3424,7 +3514,7 @@ export default function TripWizard({
             </div>
           </div>
           <p style={{ fontSize:11,color:T.text3,marginTop:12,padding:"8px 10px",background:T.borderLight,borderRadius:8 }}>
-            ✈️ Flights are selected individually and not included in this shared budget.
+            ?? Flights are selected individually and not included in this shared budget.
           </p>
         </div>
         {isOrganizer ? (
@@ -3440,7 +3530,7 @@ export default function TripWizard({
                   transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
               >
                 <I n="check" s={16} c="#fff"/>
-                {lockedStages[stageKey] ? "Update & Lock Budget →" : "Finalize Shared Budget →"}
+                {lockedStages[stageKey] ? "Update & Lock Budget ?" : "Finalize Shared Budget ?"}
               </button>
               <button
                 onClick={() => handleOrganizerVeto(stageKey)}
@@ -3451,7 +3541,7 @@ export default function TripWizard({
                   fontSize:13, fontWeight:600, cursor:"pointer", minHeight:48,
                   transition:"all .2s", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
               >
-                ✕ Send Back
+                ? Send Back
               </button>
             </div>
             <p style={{ fontSize:11, color:T.text3, textAlign:"center" }}>
@@ -3471,21 +3561,21 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 9: FLIGHTS ──────────────────────────────────────────────────
+  // -- STEP 9: FLIGHTS --------------------------------------------------
   if (stageKey === "flights") return (
-    <Shell step={step}>
-      <AgentHeader emoji="✈️" name="Flight Agent" desc="Finding the best flights for your dates"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="??" name="Flight Agent" desc="Finding the best flights for your dates"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
         <div style={{ background:`${T.primary}08`,border:`1px solid ${T.primary}33`,borderRadius:10,padding:"10px 14px" }}>
-          <p className="hd" style={{ fontSize:13,fontWeight:700,color:T.primary,marginBottom:3 }}>✈️ Individual Selection</p>
+          <p className="hd" style={{ fontSize:13,fontWeight:700,color:T.primary,marginBottom:3 }}>?? Individual Selection</p>
           <p style={{ fontSize:12,color:T.text3,lineHeight:1.5 }}>
             Each traveler picks flights that fit their own schedule.
             Flight costs are personal and not part of the shared group budget.
           </p>
         </div>
-        <Chat agent="Flight Agent" emoji="✈️" msg="Do you need flight bookings?"/>
+        <Chat agent="Flight Agent" emoji="??" msg="Do you need flight bookings?"/>
         <Chat isUser msg="Yes!" delay={100}/>
-        <Chat agent="Flight Agent" emoji="✈️" msg="Type a city name to find airports. I'll search each leg and show you the best options." delay={200}/>
+        <Chat agent="Flight Agent" emoji="??" msg="Type a city name to find airports. I'll search each leg and show you the best options." delay={200}/>
         <div style={{ display:"flex",flexDirection:"column",gap:10,animation:"fadeUp .3s ease-out .25s both" }}>
           <div style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8 }}>
             <AirportCityInput
@@ -3575,7 +3665,7 @@ export default function TripWizard({
             </div>
           </div>
         </div>
-        <Chat agent="Flight Agent" emoji="✈️" msg="Which class do you prefer?" delay={300}/>
+        <Chat agent="Flight Agent" emoji="??" msg="Which class do you prefer?" delay={300}/>
         <div style={{ display:"flex",gap:8,animation:"fadeUp .3s ease-out .3s both" }}>
           {["Economy","Business","First"].map(cls=>(
             <button key={cls} onClick={()=>setFlightClass(cls.toLowerCase())}
@@ -3604,7 +3694,7 @@ export default function TripWizard({
             No flight results loaded yet. Click "Search flight options" to fetch live fares.
           </p>
         )}
-        <Chat agent="Flight Agent" emoji="✈️" msg="Here are options for each leg. Pick what works best for each leg." delay={400}/>
+        <Chat agent="Flight Agent" emoji="??" msg="Here are options for each leg. Pick what works best for each leg." delay={400}/>
         {flightLegDisplay.map((leg, legIdx) => {
           const selectedOptionId = selectedFlightsByLeg[leg.leg_id];
           return (
@@ -3671,7 +3761,7 @@ export default function TripWizard({
           <div style={{ animation:"scaleIn .3s ease-out" }}>
             {!flightSelectionReview ? (
               <Btn onClick={handleFlightContinue} full disabled={flightSaveBusy}>
-                {flightSaveBusy ? "Saving selected flights..." : "Save selected flights for confirmation →"}
+                {flightSaveBusy ? "Saving selected flights..." : "Save selected flights for confirmation ?"}
               </Btn>
             ) : (
               <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
@@ -3695,8 +3785,8 @@ export default function TripWizard({
                 </div>
                 <Btn onClick={handleFlightConfirmAndContinue} full>
                   {flightSelectionReview.bookingUrls.length > 0
-                    ? "Confirm and open airline websites →"
-                    : "Confirm and continue →"}
+                    ? "Confirm and open airline websites ?"
+                    : "Confirm and continue ?"}
                 </Btn>
                 <Btn onClick={() => setFlightSelectionReview(null)} primary={false} full>
                   Change flight selections
@@ -3711,12 +3801,12 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 10: STAYS ───────────────────────────────────────────────────
+  // -- STEP 10: STAYS ---------------------------------------------------
   if (stageKey === "stays") return (
-    <Shell step={step}>
-      <AgentHeader emoji="🏨" name="Stays Agent" desc="Finding perfect accommodations"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="??" name="Stays Agent" desc="Finding perfect accommodations"/>
       <GroupRoom stageKey="stays" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]} currentUserId={currentUserId}>
-        <Chat agent="Stays Agent" emoji="🏨" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
+        <Chat agent="Stays Agent" emoji="??" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
         {stayDisplay.map((s,i)=>{
           const picked = stayPicks[i];
           return (
@@ -3755,10 +3845,10 @@ export default function TripWizard({
                         border: picked===false?"none":`1.5px solid ${T.error}40`,
                         background:picked===false?T.error:"transparent",
                         color:picked===false?"#fff":T.error,
-                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Skip</button>
+                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">? Skip</button>
                       <button onClick={()=>setStayPicks(p=>({...p,[i]:true}))} style={{ padding:"7px 14px",borderRadius:8,
                         border:"none",background:picked===true?T.success:T.primary,color:"#fff",
-                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✓ Book</button>
+                        fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">? Book</button>
                     </div>
                   )}
                 </div>
@@ -3770,12 +3860,12 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 11: DINING ──────────────────────────────────────────────────
+  // -- STEP 11: DINING --------------------------------------------------
   if (stageKey === "dining") return (
-    <Shell step={step}>
-      <AgentHeader emoji="🍽️" name="Dining Agent" desc="Restaurant picks matching your diet & budget"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="???" name="Dining Agent" desc="Restaurant picks matching your diet & budget"/>
       <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-        <Chat agent="Dining Agent" emoji="🍽️" msg="Date-based meal options are planned near your POIs, including travel-time estimates between activities and restaurants."/>
+        <Chat agent="Dining Agent" emoji="???" msg="Date-based meal options are planned near your POIs, including travel-time estimates between activities and restaurants."/>
         {[...new Set(diningDisplay.map((d) => d.day))].sort((a, b) => a - b).map((day) => {
           const dayRows = diningDisplay.filter((d) => d.day === day);
           const dayFirst = dayRows[0] || {};
@@ -3805,7 +3895,7 @@ export default function TripWizard({
                     border:`1px solid ${T.borderLight}`,display:"flex",flexDirection:"column",gap:10,
                     opacity:approved===false?.42:1,transition:"opacity .3s" }}>
                     <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-                      <div style={{ fontSize:22,width:36,textAlign:"center" }}>{slot.meal==="Breakfast"?"🌅":slot.meal==="Lunch"?"☀️":"🌙"}</div>
+                      <div style={{ fontSize:22,width:36,textAlign:"center" }}>{slot.meal==="Breakfast"?"??":slot.meal==="Lunch"?"??":"??"}</div>
                       <div style={{ flex:1,minWidth:0 }}>
                         <div style={{ display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap" }}>
                           <span className="hd" style={{ fontWeight:700,fontSize:14 }}>{slot.meal}</span>
@@ -3866,7 +3956,7 @@ export default function TripWizard({
                             color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}><I n="check" s={14} c="#fff"/></button>
                         </div>
                       ) : (
-                        <span style={{ fontSize:16 }}>{approved?"✅":"❌"}</span>
+                        <span style={{ fontSize:16 }}>{approved?"?":"?"}</span>
                       )}
                     </div>
                   </div>
@@ -3875,33 +3965,33 @@ export default function TripWizard({
             </div>
           );
         })}
-        {Object.keys(diningApproved).length>=diningDisplay.length && <Btn onClick={handleDiningContinue} full>Continue to Itinerary →</Btn>}
+        {Object.keys(diningApproved).length>=diningDisplay.length && <Btn onClick={handleDiningContinue} full>Continue to Itinerary ?</Btn>}
       </div>
     </Shell>
   );
 
-  // ── STEP 12: ITINERARY ───────────────────────────────────────────────
+  // -- STEP 12: ITINERARY -----------------------------------------------
   if (stageKey === "itinerary") return (
-    <Shell step={step}>
-      <AgentHeader emoji="📋" name="Itinerary Agent" desc="Your complete day-by-day plan"/>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
+      <AgentHeader emoji="??" name="Itinerary Agent" desc="Your complete day-by-day plan"/>
       <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
         <BudgetMeter spent={1480} allocated={budgetPerDay*10} label="Shared Budget"/>
         {/* Personal flight summary */}
         {flightLegDisplay.length > 0 && (
           <div style={{ background:`${T.accent}08`,border:`1px solid ${T.accent}33`,borderRadius:12,padding:"12px 14px" }}>
-            <p className="hd" style={{ fontSize:13,fontWeight:700,color:T.accent,marginBottom:8 }}>✈️ Your Flights</p>
+            <p className="hd" style={{ fontSize:13,fontWeight:700,color:T.accent,marginBottom:8 }}>?? Your Flights</p>
             {flightLegDisplay.map((leg,li) => {
               const selId = selectedFlightsByLeg[leg.leg_id];
               const opt = (leg.options||[]).find(o=>o.option_id===selId);
               return opt ? (
                 <div key={li} style={{ display:"flex",justifyContent:"space-between",fontSize:12,color:T.text2,
                   padding:"4px 0",borderBottom:li<flightLegDisplay.length-1?`1px solid ${T.borderLight}`:"none" }}>
-                  <span>{leg.from_airport} → {leg.to_airport} · {opt.airline} · {opt.dep}</span>
+                  <span>{leg.from_airport} ? {leg.to_airport} · {opt.airline} · {opt.dep}</span>
                   <span className="hd" style={{ fontWeight:600,color:T.text }}>${Math.round(opt.price)}</span>
                 </div>
               ) : (
                 <div key={li} style={{ fontSize:12,color:T.text3,padding:"4px 0" }}>
-                  Leg {li+1}: {leg.from_airport} → {leg.to_airport} — not selected
+                  Leg {li+1}: {leg.from_airport} ? {leg.to_airport} — not selected
                 </div>
               );
             })}
@@ -3936,7 +4026,7 @@ export default function TripWizard({
                       </div>
                       <div style={{ display:"flex",gap:10,marginTop:2,fontSize:12,color:T.text3 }}>
                         <span>{item.time}</span>
-                        {item.loc && <span>📍 {item.loc}</span>}
+                        {item.loc && <span>?? {item.loc}</span>}
                       </div>
                     </div>
                   </div>
@@ -3954,15 +4044,15 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 13: CALENDAR SYNC ───────────────────────────────────────────
+  // -- STEP 13: CALENDAR SYNC -------------------------------------------
   if (stageKey === "sync") return (
-    <Shell step={step}>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
       <Styles/>
       <div style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
         padding:"40px 24px",textAlign:"center",animation:"scaleIn .5s ease-out" }}>
         <div style={{ position:"relative",marginBottom:24 }}>
-          <div style={{ fontSize:64,animation:"bounceIn .6s ease" }}>🎉</div>
-          {["🎊","✨","🌟","🎈","✈️"].map((e,i)=>(
+          <div style={{ fontSize:64,animation:"bounceIn .6s ease" }}>??</div>
+          {["??","?","??","??","??"].map((e,i)=>(
             <span key={i} style={{ position:"absolute",fontSize:20,
               top:`${-10+Math.sin(i*1.2)*30}px`,left:`${-20+Math.cos(i*1.2)*40}px`,
               animation:`confetti 1.5s ease-out ${.3+i*.15}s both`,pointerEvents:"none" }}>{e}</span>
@@ -3984,9 +4074,9 @@ export default function TripWizard({
         {/* Calendar sync options */}
         <div style={{ display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:360,marginBottom:32 }}>
           {[
-            { name:"Google Calendar", icon:"📅", color:"#4285F4", status:"Synced" },
-            { name:"Apple Calendar", icon:"🍎", color:"#333", status:"Synced" },
-            { name:"Outlook", icon:"📧", color:"#0078D4", status:"Pending" },
+            { name:"Google Calendar", icon:"??", color:"#4285F4", status:"Synced" },
+            { name:"Apple Calendar", icon:"??", color:"#333", status:"Synced" },
+            { name:"Outlook", icon:"??", color:"#0078D4", status:"Pending" },
           ].map((cal,i)=>(
             <div key={i} style={{ background:T.surface,borderRadius:12,padding:"12px 16px",
               border:`1px solid ${T.borderLight}`,display:"flex",alignItems:"center",gap:12,
@@ -3996,7 +4086,7 @@ export default function TripWizard({
               <span className="hd" style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:999,
                 background:cal.status==="Synced"?T.successBg:T.warningBg,
                 color:cal.status==="Synced"?T.success:T.warning }}>
-                {cal.status==="Synced"?"✓ Synced":"⏳ Pending"}</span>
+                {cal.status==="Synced"?"? Synced":"? Pending"}</span>
             </div>
           ))}
         </div>
@@ -4034,7 +4124,7 @@ export default function TripWizard({
           borderRadius:12,border:"none",background:T.secondary,color:"#fff",
           fontSize:16,fontWeight:700,cursor:"pointer",minHeight:50,
           boxShadow:`0 4px 16px ${T.secondary}35` }}>
-          View Full Itinerary →
+          View Full Itinerary ?
         </button>
         <button onClick={()=>setStep(0)} style={{ marginTop:12,background:"none",border:"none",
           color:T.text3,fontSize:13,cursor:"pointer",textDecoration:"underline",minHeight:32,padding:"8px 10px" }}>
@@ -4044,12 +4134,12 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── GROUP → INDIVIDUAL TRANSITION ────────────────────────────────────
+  // -- GROUP ? INDIVIDUAL TRANSITION ------------------------------------
   if (showGroupToIndividualTransition) return (
-    <Shell step={step}>
+    <Shell step={step} onStepSelect={setStep} syncedStageKey={initialStageKey}>
       <div style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
         padding:"40px 24px",textAlign:"center",animation:"scaleIn .5s ease-out" }}>
-        <div style={{ fontSize:64,marginBottom:24,animation:"bounceIn .6s ease" }}>🎉</div>
+        <div style={{ fontSize:64,marginBottom:24,animation:"bounceIn .6s ease" }}>??</div>
         <h2 className="hd" style={{ fontWeight:700,fontSize:26,color:T.text,marginBottom:8 }}>Group Plan Locked!</h2>
         <p style={{ color:T.text2,fontSize:15,maxWidth:360,lineHeight:1.6,marginBottom:8 }}>
           POIs, stays, and dates are confirmed for all travelers.
@@ -4062,7 +4152,7 @@ export default function TripWizard({
           style={{ padding:"14px 32px",borderRadius:12,border:"none",
             background:T.primary,color:"#fff",fontSize:16,fontWeight:700,
             cursor:"pointer",minHeight:50,boxShadow:`0 4px 16px ${T.primary}35` }}>
-          Find My Flights ✈️
+          Find My Flights ??
         </button>
       </div>
     </Shell>
@@ -4075,7 +4165,9 @@ export {
   availabilityRangeFitsTrip,
   availabilityWindowMatchesTripDays,
   countShortlistedPois,
+  countMyPoiSelections,
   mapMemberFromApi,
+  isMyPoiShortlistSelection,
   isShortlistedPoi,
   normalizeBudgetTier,
   getUserIdFromToken,
@@ -4087,3 +4179,4 @@ export {
   mapInterestAnswersToCategories,
   mapInterestAnswersToProfileInterests,
 };
+

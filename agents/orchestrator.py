@@ -2122,6 +2122,17 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
           UNIQUE (poi_id, user_id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS poi_shortlist_selections (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+          poi_id UUID NOT NULL REFERENCES pois(id) ON DELETE CASCADE,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          selected BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE (poi_id, user_id)
+        )
+        """,
     ]
     for stmt in statements:
         await conn.execute(stmt)
@@ -3373,7 +3384,7 @@ async def get_my_trips(user_id: str = Depends(get_current_user_id)):
                     FROM bucket_list_items
                     WHERE trip_id = $1
                     GROUP BY destination
-                    ORDER BY MAX(vote_score) DESC, destination ASC
+                    ORDER BY COALESCE(SUM(vote_score), 0) DESC, destination ASC
                     """,
                     trip["id"],
                 )
@@ -3708,11 +3719,11 @@ async def get_destinations(trip_id: str, user_id: str = Depends(get_current_user
 
         rows = await conn.fetch(
             """
-            SELECT destination, MAX(vote_score) AS votes
+            SELECT destination, COALESCE(SUM(vote_score), 0) AS votes
             FROM bucket_list_items
             WHERE trip_id = $1
             GROUP BY destination
-            ORDER BY MAX(vote_score) DESC, destination ASC
+            ORDER BY COALESCE(SUM(vote_score), 0) DESC, destination ASC
             """,
             trip_id,
         )
@@ -3743,13 +3754,22 @@ async def save_destinations(
             clean_destinations.append(value)
 
     async with db_pool.acquire() as conn:
-        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        trip = await conn.fetchrow("SELECT id FROM trips WHERE id = $1", trip_id)
         if not trip:
             raise HTTPException(status_code=404, detail="Trip not found")
-        if str(trip["owner_id"]) != user_id:
-            raise HTTPException(status_code=403, detail="Only owner can update destinations")
+        member = await conn.fetchrow(
+            "SELECT status FROM trip_members WHERE trip_id = $1 AND user_id = $2",
+            trip_id,
+            user_id,
+        )
+        if not member or str(member["status"] or "pending").lower() != "accepted":
+            raise HTTPException(status_code=403, detail="Only accepted members can update destinations")
 
-        await conn.execute("DELETE FROM bucket_list_items WHERE trip_id = $1", trip_id)
+        await conn.execute(
+            "DELETE FROM bucket_list_items WHERE trip_id = $1 AND added_by = $2",
+            trip_id,
+            user_id,
+        )
 
         for destination in clean_destinations:
             votes = int(body.votes.get(destination, 0))
@@ -3764,9 +3784,20 @@ async def save_destinations(
                 votes,
             )
 
+        rows = await conn.fetch(
+            """
+            SELECT destination, COALESCE(SUM(vote_score), 0) AS votes
+            FROM bucket_list_items
+            WHERE trip_id = $1
+            GROUP BY destination
+            ORDER BY COALESCE(SUM(vote_score), 0) DESC, destination ASC
+            """,
+            trip_id,
+        )
+
     return {
         "destinations": [
-            {"name": name, "votes": int(body.votes.get(name, 0))} for name in clean_destinations
+            {"name": row["destination"], "votes": int(row["votes"] or 0)} for row in rows
         ]
     }
 
@@ -3846,11 +3877,11 @@ async def get_ranked_bucket_list(trip_id: str, user_id: str = Depends(get_curren
         total_members = int(total_members_row["c"] or 1)
         rows = await conn.fetch(
             """
-            SELECT destination, MAX(country) AS country, MAX(category) AS category, MAX(vote_score) AS vote_count
+            SELECT destination, MAX(country) AS country, MAX(category) AS category, COALESCE(SUM(vote_score), 0) AS vote_count
             FROM bucket_list_items
             WHERE trip_id = $1
             GROUP BY destination
-            ORDER BY MAX(vote_score) DESC, destination ASC
+            ORDER BY COALESCE(SUM(vote_score), 0) DESC, destination ASC
             """,
             trip_id,
         )
@@ -4093,6 +4124,7 @@ async def get_pois(
                 rows = await conn.fetch(base_query, *params)
         poi_ids = [str(r["id"]) for r in rows]
         vote_rows = []
+        shortlist_rows = []
         if poi_ids:
             vote_rows = await conn.fetch(
                 """
@@ -4103,14 +4135,30 @@ async def get_pois(
                 trip_id,
                 poi_ids,
             )
+            shortlist_rows = await conn.fetch(
+                """
+                SELECT poi_id, user_id, selected
+                FROM poi_shortlist_selections
+                WHERE trip_id = $1 AND poi_id = ANY($2::uuid[])
+                """,
+                trip_id,
+                poi_ids,
+            )
     # Build vote tallies per POI
     from collections import defaultdict
     tally: dict = defaultdict(lambda: {"approve": 0, "reject": 0, "my_vote": None})
+    shortlist_tally: dict = defaultdict(lambda: {"selected": 0, "my_selected": None})
     for vr in vote_rows:
         pid = str(vr["poi_id"])
         tally[pid][str(vr["vote"])] += 1
         if str(vr["user_id"]) == str(user_id):
             tally[pid]["my_vote"] = str(vr["vote"])
+    for sr in shortlist_rows:
+        pid = str(sr["poi_id"])
+        if bool(sr["selected"]):
+            shortlist_tally[pid]["selected"] += 1
+        if str(sr["user_id"]) == str(user_id):
+            shortlist_tally[pid]["my_selected"] = bool(sr["selected"])
     return {
         "pois": [
             {
@@ -4125,6 +4173,10 @@ async def get_pois(
                 "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
                 "shortlisted": bool(row["shortlisted"]),
                 "approved": bool(row["approved"]),
+                "shortlist_counts": {
+                    "selected": shortlist_tally[str(row["id"])]["selected"],
+                    "my_selected": shortlist_tally[str(row["id"])]["my_selected"],
+                },
                 "vote_counts": {
                     "approve": tally[str(row["id"])]["approve"],
                     "reject": tally[str(row["id"])]["reject"],
@@ -4345,7 +4397,35 @@ async def shortlist_poi(
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
-        await _require_trip_owner(conn, trip_id, user_id)
+        await _require_trip_member(conn, trip_id, user_id)
+        exists = await conn.fetchval(
+            "SELECT 1 FROM pois WHERE id = $1 AND trip_id = $2",
+            poi_id,
+            trip_id,
+        )
+        if not exists:
+            raise HTTPException(status_code=404, detail="POI not found")
+        await conn.execute(
+            """
+            INSERT INTO poi_shortlist_selections (trip_id, poi_id, user_id, selected)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (poi_id, user_id)
+            DO UPDATE SET selected = EXCLUDED.selected, created_at = NOW()
+            """,
+            trip_id,
+            poi_id,
+            user_id,
+            bool(body.shortlisted),
+        )
+        selected_count = await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM poi_shortlist_selections
+            WHERE trip_id = $1 AND poi_id = $2 AND selected = true
+            """,
+            trip_id,
+            poi_id,
+        )
         row = await conn.fetchrow(
             """
             UPDATE pois
@@ -4353,19 +4433,21 @@ async def shortlist_poi(
             WHERE id = $2 AND trip_id = $3
             RETURNING id, name, category, shortlisted
             """,
-            body.shortlisted,
+            bool(selected_count),
             poi_id,
             trip_id,
         )
-        if not row:
-            raise HTTPException(status_code=404, detail="POI not found")
     return {
         "poi": {
             "poi_id": str(row["id"]),
             "name": row["name"],
             "category": row["category"],
             "shortlisted": bool(row["shortlisted"]),
-        }
+        },
+        "shortlist_counts": {
+            "selected": int(selected_count or 0),
+            "my_selected": bool(body.shortlisted),
+        },
     }
 
 
