@@ -39,14 +39,28 @@ function normalizeApiBase(raw){
   return v.replace(/\/+$/,"");
 }
 
+function coerceApiBaseHost(rawBase){
+  var base=normalizeApiBase(rawBase);
+  if(!base)return "";
+  try{
+    var u=new URL(base);
+    var h=String(u.hostname||"").toLowerCase();
+    if(h==="wanderplan-orchestrator.onrender.com"){
+      u.hostname="wanderplan-ai.onrender.com";
+      return normalizeApiBase(u.toString());
+    }
+  }catch(e){}
+  return base;
+}
+
 function resolveApiBase(){
   // CRA/webpack inlines REACT_APP_* at build time.
-  var envBase=normalizeApiBase((process.env.REACT_APP_API_BASE)||"");
+  var envBase=coerceApiBaseHost((process.env.REACT_APP_API_BASE)||"");
   if(envBase)return envBase;
   if(typeof window!=="undefined"){
     try{
       var sp=new URLSearchParams(window.location.search||"");
-      var q=normalizeApiBase(sp.get("api_base")||"");
+      var q=coerceApiBaseHost(sp.get("api_base")||"");
       if(q)return q;
     }catch(e){}
     var host=String(window.location.hostname||"").toLowerCase();

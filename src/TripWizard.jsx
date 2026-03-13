@@ -30,13 +30,27 @@ function normalizeApiBase(raw) {
   return v.replace(/\/+$/, "");
 }
 
+function coerceApiBaseHost(rawBase) {
+  const base = normalizeApiBase(rawBase);
+  if (!base) return "";
+  try {
+    const u = new URL(base);
+    const h = String(u.hostname || "").toLowerCase();
+    if (h === "wanderplan-orchestrator.onrender.com") {
+      u.hostname = "wanderplan-ai.onrender.com";
+      return normalizeApiBase(u.toString());
+    }
+  } catch {}
+  return base;
+}
+
 function resolveApiBase() {
-  const envBase = normalizeApiBase(process.env.REACT_APP_API_BASE || "");
+  const envBase = coerceApiBaseHost(process.env.REACT_APP_API_BASE || "");
   if (envBase) return envBase;
   if (typeof window !== "undefined") {
     try {
       const sp = new URLSearchParams(window.location.search || "");
-      const q = normalizeApiBase(sp.get("api_base") || "");
+      const q = coerceApiBaseHost(sp.get("api_base") || "");
       if (q) return q;
     } catch {}
     const host = String(window.location.hostname || "").toLowerCase();
