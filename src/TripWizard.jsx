@@ -66,8 +66,39 @@ function resolveApiBase() {
 const API_BASE = resolveApiBase();
 const TRIP_SESSION_KEY = "wanderplan.tripSession";
 
+function apiFallbackUrlFor(url) {
+  try {
+    const u = new URL(String(url || ""));
+    const h = String(u.hostname || "").toLowerCase();
+    if (h === "wanderplan-ai.onrender.com") {
+      u.hostname = "wanderplan-orchestrator.onrender.com";
+      return u.toString();
+    }
+    if (h === "wanderplan-orchestrator.onrender.com") {
+      u.hostname = "wanderplan-ai.onrender.com";
+      return u.toString();
+    }
+  } catch {}
+  return "";
+}
+
 async function apiJson(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, options);
+  const url = `${API_BASE}${path}`;
+  const fallback = apiFallbackUrlFor(url);
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch (err) {
+    if (fallback && fallback !== url) {
+      try {
+        res = await fetch(fallback, options);
+      } catch {
+        throw err;
+      }
+    } else {
+      throw err;
+    }
+  }
   const text = await res.text();
   let body = null;
   try {

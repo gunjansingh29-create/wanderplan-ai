@@ -80,6 +80,22 @@ function toApiUrl(path){
   return API_BASE+p;
 }
 
+function apiFallbackUrlFor(url){
+  try{
+    var u=new URL(String(url||""));
+    var host=String(u.hostname||"").toLowerCase();
+    if(host==="wanderplan-ai.onrender.com"){
+      u.hostname="wanderplan-orchestrator.onrender.com";
+      return u.toString();
+    }
+    if(host==="wanderplan-orchestrator.onrender.com"){
+      u.hostname="wanderplan-ai.onrender.com";
+      return u.toString();
+    }
+  }catch(e){}
+  return "";
+}
+
 var API_BASE=resolveApiBase();
 var LLM_PROXY=normalizeApiBase((process.env.REACT_APP_LLM_PROXY)||"")||(""+API_BASE+"/llm/messages");
 var CREW_COLORS=[C.sky,C.coral,C.grn,C.purp,C.tealL,C.gold];
@@ -141,12 +157,22 @@ async function apiJson(path, options, token){
   if(opts.body&&typeof opts.body==="object"){hdrs["Content-Type"]="application/json";opts.body=JSON.stringify(opts.body);}
   opts.headers=hdrs;
   var url=toApiUrl(path);
+  var fallbackUrl=apiFallbackUrlFor(url);
   var r=null;
   try{
     r=await fetch(url,opts);
   }catch(e){
-    var netMsg=String(e&&e.message||"Failed to fetch");
-    throw new Error("Network error calling "+url+". Check REACT_APP_API_BASE and backend CORS (FRONTEND_ORIGINS). "+netMsg);
+    if(fallbackUrl&&fallbackUrl!==url){
+      try{
+        r=await fetch(fallbackUrl,opts);
+      }catch(e2){
+        var netMsg2=String(e2&&e2.message||String(e&&e.message)||"Failed to fetch");
+        throw new Error("Network error calling "+url+" (fallback "+fallbackUrl+" also failed). Check REACT_APP_API_BASE and backend CORS (FRONTEND_ORIGINS). "+netMsg2);
+      }
+    }else{
+      var netMsg=String(e&&e.message||"Failed to fetch");
+      throw new Error("Network error calling "+url+". Check REACT_APP_API_BASE and backend CORS (FRONTEND_ORIGINS). "+netMsg);
+    }
   }
   var txt=await r.text();
   var data=null;
