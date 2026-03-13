@@ -51,8 +51,10 @@ function resolveApiBase(){
     }catch(e){}
     var host=String(window.location.hostname||"").toLowerCase();
     if(host==="localhost"||host==="127.0.0.1")return "http://localhost:8000";
-    // Safe production fallback when env is missing in Vercel.
-    return "https://wanderplan-orchestrator.onrender.com";
+    // Production safety: map known frontend host -> backend host.
+    if(host==="wanderplan-orchestrator.onrender.com")return "https://wanderplan-ai.onrender.com";
+    if(host==="wanderplan-ai.onrender.com")return "https://wanderplan-ai.onrender.com";
+    return "https://wanderplan-ai.onrender.com";
   }
   return "http://localhost:8000";
 }

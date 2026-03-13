@@ -22,7 +22,34 @@ const shadow = {
   glow: "0 0 20px rgba(13,115,119,0.15)",
 };
 
-const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
+function normalizeApiBase(raw) {
+  let v = String(raw || "").trim();
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    v = v.slice(1, -1).trim();
+  }
+  return v.replace(/\/+$/, "");
+}
+
+function resolveApiBase() {
+  const envBase = normalizeApiBase(process.env.REACT_APP_API_BASE || "");
+  if (envBase) return envBase;
+  if (typeof window !== "undefined") {
+    try {
+      const sp = new URLSearchParams(window.location.search || "");
+      const q = normalizeApiBase(sp.get("api_base") || "");
+      if (q) return q;
+    } catch {}
+    const host = String(window.location.hostname || "").toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1") return "http://localhost:8000";
+    // Production safety: known frontend host -> backend host.
+    if (host === "wanderplan-orchestrator.onrender.com") return "https://wanderplan-ai.onrender.com";
+    if (host === "wanderplan-ai.onrender.com") return "https://wanderplan-ai.onrender.com";
+    return "https://wanderplan-ai.onrender.com";
+  }
+  return "http://localhost:8000";
+}
+
+const API_BASE = resolveApiBase();
 const TRIP_SESSION_KEY = "wanderplan.tripSession";
 
 async function apiJson(path, options = {}) {
