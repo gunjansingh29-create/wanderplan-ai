@@ -110,9 +110,14 @@ _env_allowed_origins = [
     if o.strip()
 ]
 _allowed_origins = list(dict.fromkeys(_default_allowed_origins + _env_allowed_origins))
+_allowed_origin_regex = os.getenv(
+    "FRONTEND_ORIGIN_REGEX",
+    r"^https://[a-z0-9-]+\.(onrender\.com|vercel\.app)$",
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_origin_regex=_allowed_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
