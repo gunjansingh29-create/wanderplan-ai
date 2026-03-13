@@ -234,6 +234,10 @@ class PoiApprovalRequest(BaseModel):
     approved: bool
 
 
+class PoiShortlistRequest(BaseModel):
+    shortlisted: bool
+
+
 class PoiVoteRequest(BaseModel):
     vote: str  # "approve" or "reject"
 
@@ -247,6 +251,7 @@ class PoiSyncItemRequest(BaseModel):
     tags: list[str] = []
     rating: Optional[float] = None
     cost_estimate_usd: float = 0
+    shortlisted: bool = False
     approved: bool = False
 
 
@@ -1923,6 +1928,7 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
           tags TEXT[] DEFAULT '{}',
           rating NUMERIC(3,1),
           cost_estimate_usd NUMERIC(10,2) DEFAULT 0,
+          shortlisted BOOLEAN DEFAULT FALSE,
           approved BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
@@ -2119,6 +2125,7 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
     ]
     for stmt in statements:
         await conn.execute(stmt)
+    await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS shortlisted BOOLEAN DEFAULT FALSE")
 
 
 @app.on_event("startup")
@@ -3991,6 +3998,7 @@ async def get_pois(
     user_id: str = Depends(get_current_user_id),
     destination: Optional[str] = None,
     limit: int = 20,
+    shortlisted: Optional[bool] = None,
     approved: Optional[bool] = None,
 ):
     if db_pool is None:
@@ -3998,7 +4006,7 @@ async def get_pois(
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
         base_query = """
-            SELECT id, name, category, city, country, lat, lng, tags, rating, cost_estimate_usd, approved
+            SELECT id, name, category, city, country, lat, lng, tags, rating, cost_estimate_usd, shortlisted, approved
             FROM pois
             WHERE trip_id = $1
         """
@@ -4006,6 +4014,10 @@ async def get_pois(
         if destination:
             base_query += " AND (city ILIKE $2 OR country ILIKE $2)"
             params.append(f"%{destination}%")
+        if shortlisted is not None:
+            idx = len(params) + 1
+            base_query += f" AND shortlisted = ${idx}"
+            params.append(shortlisted)
         if approved is not None:
             idx = len(params) + 1
             base_query += f" AND approved = ${idx}"
@@ -4013,65 +4025,72 @@ async def get_pois(
         base_query += f" ORDER BY rating DESC NULLS LAST, created_at DESC LIMIT {max(1, min(limit, 50))}"
         rows = await conn.fetch(base_query, *params)
         if len(rows) == 0:
-            fallback_city = destination
-            fallback_country = "Japan"
-            if not fallback_city:
-                top_dest = await conn.fetchrow(
-                    """
-                    SELECT destination, country
-                    FROM bucket_list_items
-                    WHERE trip_id = $1
-                    ORDER BY vote_score DESC, created_at ASC
-                    LIMIT 1
-                    """,
-                    trip_id,
-                )
-                if top_dest:
-                    fallback_city = top_dest["destination"]
-                    fallback_country = top_dest["country"] or fallback_country
-            if not fallback_city:
-                fallback_city = "Tokyo"
-            counts = await _trip_interest_category_counter(conn, trip_id)
-            ranked_categories = [cat for cat, _ in sorted(counts.items(), key=lambda x: (-x[1], x[0]))]
-            if not ranked_categories:
-                ranked_categories = ["food", "culture"]
-            inserted = 0
-            for cat in ranked_categories[:3]:
-                for poi in POI_CATALOG.get(cat, []):
-                    await conn.execute(
+            existing_trip_poi_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM pois WHERE trip_id = $1",
+                trip_id,
+            )
+            if existing_trip_poi_count:
+                rows = []
+            else:
+                fallback_city = destination
+                fallback_country = "Japan"
+                if not fallback_city:
+                    top_dest = await conn.fetchrow(
                         """
-                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, approved)
-                        VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, true)
-                        ON CONFLICT DO NOTHING
+                        SELECT destination, country
+                        FROM bucket_list_items
+                        WHERE trip_id = $1
+                        ORDER BY vote_score DESC, created_at ASC
+                        LIMIT 1
                         """,
                         trip_id,
-                        poi["name"],
-                        poi["category"],
-                        fallback_city,
-                        fallback_country,
-                        poi["tags"],
-                        poi["rating"],
-                        poi["cost"],
                     )
-                    inserted += 1
-            if inserted == 0:
-                for poi in POI_CATALOG["food"]:
-                    await conn.execute(
-                        """
-                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, approved)
-                        VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, true)
-                        ON CONFLICT DO NOTHING
-                        """,
-                        trip_id,
-                        poi["name"],
-                        poi["category"],
-                        fallback_city,
-                        fallback_country,
-                        poi["tags"],
-                        poi["rating"],
-                        poi["cost"],
-                    )
-            rows = await conn.fetch(base_query, *params)
+                    if top_dest:
+                        fallback_city = top_dest["destination"]
+                        fallback_country = top_dest["country"] or fallback_country
+                if not fallback_city:
+                    fallback_city = "Tokyo"
+                counts = await _trip_interest_category_counter(conn, trip_id)
+                ranked_categories = [cat for cat, _ in sorted(counts.items(), key=lambda x: (-x[1], x[0]))]
+                if not ranked_categories:
+                    ranked_categories = ["food", "culture"]
+                inserted = 0
+                for cat in ranked_categories[:3]:
+                    for poi in POI_CATALOG.get(cat, []):
+                        await conn.execute(
+                            """
+                            INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved)
+                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, false, false)
+                            ON CONFLICT DO NOTHING
+                            """,
+                            trip_id,
+                            poi["name"],
+                            poi["category"],
+                            fallback_city,
+                            fallback_country,
+                            poi["tags"],
+                            poi["rating"],
+                            poi["cost"],
+                        )
+                        inserted += 1
+                if inserted == 0:
+                    for poi in POI_CATALOG["food"]:
+                        await conn.execute(
+                            """
+                            INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved)
+                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, false, false)
+                            ON CONFLICT DO NOTHING
+                            """,
+                            trip_id,
+                            poi["name"],
+                            poi["category"],
+                            fallback_city,
+                            fallback_country,
+                            poi["tags"],
+                            poi["rating"],
+                            poi["cost"],
+                        )
+                rows = await conn.fetch(base_query, *params)
         poi_ids = [str(r["id"]) for r in rows]
         vote_rows = []
         if poi_ids:
@@ -4104,6 +4123,7 @@ async def get_pois(
                 "tags": row["tags"] or [],
                 "rating": float(row["rating"] or 0),
                 "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
+                "shortlisted": bool(row["shortlisted"]),
                 "approved": bool(row["approved"]),
                 "vote_counts": {
                     "approve": tally[str(row["id"])]["approve"],
@@ -4155,6 +4175,7 @@ async def sync_pois(
                 "tags": tags,
                 "rating": rating,
                 "cost_estimate_usd": cost_estimate,
+                "shortlisted": bool(item.shortlisted),
                 "approved": bool(item.approved),
             }
         )
@@ -4191,9 +4212,10 @@ async def sync_pois(
                         tags = $5::text[],
                         rating = $6,
                         cost_estimate_usd = $7,
-                        approved = $8
-                    WHERE id = $9 AND trip_id = $10
-                    RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                        shortlisted = $8,
+                        approved = $9
+                    WHERE id = $10 AND trip_id = $11
+                    RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved
                     """,
                     item["name"],
                     item["category"],
@@ -4202,6 +4224,7 @@ async def sync_pois(
                     item["tags"],
                     item["rating"],
                     item["cost_estimate_usd"],
+                    item["shortlisted"],
                     item["approved"],
                     pid,
                     trip_id,
@@ -4230,15 +4253,17 @@ async def sync_pois(
                             tags = $3::text[],
                             rating = $4,
                             cost_estimate_usd = $5,
-                            approved = $6
-                        WHERE id = $7 AND trip_id = $8
-                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                            shortlisted = $6,
+                            approved = $7
+                        WHERE id = $8 AND trip_id = $9
+                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved
                         """,
                         item["category"],
                         item["country"],
                         item["tags"],
                         item["rating"],
                         item["cost_estimate_usd"],
+                        item["shortlisted"],
                         item["approved"],
                         existing["id"],
                         trip_id,
@@ -4246,9 +4271,9 @@ async def sync_pois(
                 else:
                     updated = await conn.fetchrow(
                         """
-                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, approved)
-                        VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6::text[], $7, $8, $9)
-                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved)
+                        VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6::text[], $7, $8, $9, $10)
+                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved
                         """,
                         trip_id,
                         item["name"],
@@ -4258,6 +4283,7 @@ async def sync_pois(
                         item["tags"],
                         item["rating"],
                         item["cost_estimate_usd"],
+                        item["shortlisted"],
                         item["approved"],
                     )
             if updated:
@@ -4274,6 +4300,7 @@ async def sync_pois(
                 "tags": row["tags"] or [],
                 "rating": float(row["rating"] or 0),
                 "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
+                "shortlisted": bool(row["shortlisted"]),
                 "approved": bool(row["approved"]),
             }
             for row in synced_rows
@@ -4308,6 +4335,40 @@ async def approve_poi(
     return {"poi": {"poi_id": str(row["id"]), "name": row["name"], "category": row["category"], "approved": bool(row["approved"])}}
 
 
+@app.post("/trips/{trip_id}/pois/{poi_id}/shortlist")
+async def shortlist_poi(
+    trip_id: str,
+    poi_id: str,
+    body: PoiShortlistRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_owner(conn, trip_id, user_id)
+        row = await conn.fetchrow(
+            """
+            UPDATE pois
+            SET shortlisted = $1
+            WHERE id = $2 AND trip_id = $3
+            RETURNING id, name, category, shortlisted
+            """,
+            body.shortlisted,
+            poi_id,
+            trip_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="POI not found")
+    return {
+        "poi": {
+            "poi_id": str(row["id"]),
+            "name": row["name"],
+            "category": row["category"],
+            "shortlisted": bool(row["shortlisted"]),
+        }
+    }
+
+
 @app.post("/trips/{trip_id}/pois/{poi_id}/vote")
 async def vote_poi(
     trip_id: str,
@@ -4320,11 +4381,15 @@ async def vote_poi(
     vote = "approve" if str(body.vote).lower() in {"approve", "yes", "true", "include"} else "reject"
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
-        await conn.execute(
-            "SELECT 1 FROM pois WHERE id = $1 AND trip_id = $2",
+        poi = await conn.fetchrow(
+            "SELECT shortlisted FROM pois WHERE id = $1 AND trip_id = $2",
             poi_id,
             trip_id,
         )
+        if not poi:
+            raise HTTPException(status_code=404, detail="POI not found")
+        if not bool(poi["shortlisted"]):
+            raise HTTPException(status_code=409, detail="POI is not on the shared shortlist")
         await conn.execute(
             """
             INSERT INTO poi_votes (trip_id, poi_id, user_id, vote)
@@ -4354,14 +4419,11 @@ async def consolidate_poi_votes(
     trip_id: str,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Organizer locks POI stage: approve POIs with majority votes, reject the rest."""
+    """Organizer locks POI voting: approve shortlisted POIs with majority votes, reject the rest."""
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
-        await _require_trip_member(conn, trip_id, user_id)
-        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
-        if not trip:
-            raise HTTPException(status_code=404, detail="Trip not found")
+        await _require_trip_owner(conn, trip_id, user_id)
         member_count = await conn.fetchval(
             "SELECT COUNT(*) FROM trip_members WHERE trip_id = $1 AND status = 'accepted'",
             trip_id,
@@ -4370,6 +4432,7 @@ async def consolidate_poi_votes(
         rows = await conn.fetch(
             """
             SELECT p.id,
+                   p.shortlisted,
                    COUNT(pv.id) FILTER (WHERE pv.vote = 'approve') AS approve_count,
                    COUNT(pv.id) FILTER (WHERE pv.vote = 'reject')  AS reject_count
             FROM pois p
@@ -4382,10 +4445,11 @@ async def consolidate_poi_votes(
         approved_ids = []
         rejected_ids = []
         for row in rows:
+            if not bool(row["shortlisted"]):
+                rejected_ids.append(row["id"])
+                continue
             approve_count = int(row["approve_count"] or 0)
-            reject_count = int(row["reject_count"] or 0)
-            total_votes = approve_count + reject_count
-            if total_votes == 0 or approve_count >= majority_needed:
+            if approve_count >= majority_needed:
                 approved_ids.append(row["id"])
             else:
                 rejected_ids.append(row["id"])
@@ -4403,6 +4467,7 @@ async def consolidate_poi_votes(
             )
     return {
         "ok": True,
+        "shortlisted_count": len(approved_ids) + len(rejected_ids),
         "approved_count": len(approved_ids),
         "rejected_count": len(rejected_ids),
         "majority_needed": majority_needed,
@@ -5034,6 +5099,12 @@ async def submit_availability(trip_id: str, body: AvailabilityRequest, user_id: 
     if not body.date_ranges:
         raise HTTPException(status_code=422, detail="Provide at least one date range")
 
+    trip_days = 1
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        trip = await conn.fetchrow("SELECT duration_days FROM trips WHERE id = $1", trip_id)
+        trip_days = max(1, int((trip["duration_days"] if trip else 0) or 1))
+
     normalized_ranges: list[tuple[date, date]] = []
     for idx, window in enumerate(body.date_ranges):
         start_raw = str((window or {}).get("start") or "").strip()[:10]
@@ -5047,6 +5118,8 @@ async def submit_availability(trip_id: str, body: AvailabilityRequest, user_id: 
             raise HTTPException(status_code=422, detail=f"Range {idx + 1} has invalid dates")
         if end_date < start_date:
             raise HTTPException(status_code=422, detail=f"Range {idx + 1} has end before start")
+        if _inclusive_day_count(start_date, end_date) < trip_days:
+            raise HTTPException(status_code=422, detail=f"Range {idx + 1} must fit at least {trip_days} days")
         normalized_ranges.append((start_date, end_date))
 
     async with db_pool.acquire() as conn:
@@ -5095,12 +5168,43 @@ def _common_overlap_windows(
     return current
 
 
+def _inclusive_day_count(start: date, end: date) -> int:
+    return max(1, (end - start).days + 1)
+
+
+def _enumerate_trip_windows(
+    ranges: list[tuple[date, date]],
+    trip_days: int,
+) -> list[tuple[date, date]]:
+    required_days = max(1, int(trip_days or 1))
+    windows: list[tuple[date, date]] = []
+    seen: set[tuple[date, date]] = set()
+    for start, end in ranges:
+        span_days = _inclusive_day_count(start, end)
+        if span_days < required_days:
+            continue
+        for offset in range(0, span_days - required_days + 1):
+            win_start = start + timedelta(days=offset)
+            win_end = win_start + timedelta(days=required_days - 1)
+            item = (win_start, win_end)
+            if item in seen:
+                continue
+            seen.add(item)
+            windows.append(item)
+    windows.sort(key=lambda item: (item[0], item[1]))
+    return windows
+
+
 @app.get("/trips/{trip_id}/availability/overlap")
 async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
+        trip = await conn.fetchrow(
+            "SELECT duration_days FROM trips WHERE id = $1",
+            trip_id,
+        )
         members = await conn.fetch(
             """
             SELECT tm.user_id, u.name, u.email
@@ -5115,6 +5219,7 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
             "SELECT state FROM trip_planning_states WHERE trip_id = $1",
             trip_id,
         )
+    trip_days = max(1, int((trip["duration_days"] if trip else 0) or 1))
     planning_state = (planning_state_row["state"] or {}) if planning_state_row else {}
     locked_window = planning_state.get("availability_locked_window") if isinstance(planning_state, dict) else None
     if not isinstance(locked_window, dict):
@@ -5127,6 +5232,7 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
             "closest_windows": [],
             "member_windows": [],
             "members_total": 0,
+            "required_trip_days": trip_days,
             "prompt_members_to_adjust": True,
             "message": "No members found",
             "locked_window": locked_window,
@@ -5156,16 +5262,16 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
     full_overlap_windows = []
     if all(by_member.get(uid) for uid in member_ids):
         full_overlap_windows = _common_overlap_windows(member_ids, by_member)
-    if full_overlap_windows:
-        full_overlap_windows.sort(key=lambda item: (-(item[1] - item[0]).days, item[0]))
-        best_start, best_end = full_overlap_windows[0]
+    exact_overlap_windows = _enumerate_trip_windows(full_overlap_windows, trip_days)
+    if exact_overlap_windows:
+        best_start, best_end = exact_overlap_windows[0]
         overlapping_windows = [
             {
                 "start": start.isoformat(),
                 "end": end.isoformat(),
-                "overlap_days": max(1, (end - start).days + 1),
+                "overlap_days": _inclusive_day_count(start, end),
             }
-            for start, end in full_overlap_windows[:5]
+            for start, end in exact_overlap_windows[:5]
         ]
         return {
             "overlap": {"start": best_start.isoformat(), "end": best_end.isoformat()},
@@ -5173,8 +5279,9 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
             "closest_windows": [],
             "member_windows": member_windows_payload,
             "members_total": len(member_ids),
+            "required_trip_days": trip_days,
             "prompt_members_to_adjust": False,
-            "message": "Common overlap found",
+            "message": f"Common {trip_days}-day overlap found",
             "locked_window": locked_window,
             "is_locked": bool(locked_window),
         }
@@ -5185,34 +5292,37 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
         for start, end in ranges
     ]
     suggestions = []
+    seen_windows: set[tuple[date, date]] = set()
     for item in all_windows:
-        start = item["start"]
-        end = min(item["end"], start + timedelta(days=6))
-        members_available = []
-        for uid in member_ids:
-            has_window = any(r[0] <= start and r[1] >= end for r in by_member.get(uid, []))
-            if has_window:
-                members_available.append(uid)
-        members_to_adjust = [uid for uid in member_ids if uid not in members_available]
-        overlap_days = (end - start).days
-        if overlap_days >= 3:
+        candidate_windows = _enumerate_trip_windows([(item["start"], item["end"])], trip_days)
+        for start, end in candidate_windows:
+            if (start, end) in seen_windows:
+                continue
+            seen_windows.add((start, end))
+            members_available = []
+            for uid in member_ids:
+                has_window = any(r[0] <= start and r[1] >= end for r in by_member.get(uid, []))
+                if has_window:
+                    members_available.append(uid)
+            members_to_adjust = [uid for uid in member_ids if uid not in members_available]
             suggestions.append(
                 {
                     "window": {"start": start.isoformat(), "end": end.isoformat()},
                     "members_available": members_available,
                     "members_to_adjust": members_to_adjust,
-                    "overlap_days": overlap_days,
+                    "overlap_days": _inclusive_day_count(start, end),
                 }
             )
-    suggestions.sort(key=lambda item: (-len(item["members_available"]), len(item["members_to_adjust"])))
+    suggestions.sort(key=lambda item: (-len(item["members_available"]), len(item["members_to_adjust"]), item["window"]["start"]))
     return {
         "overlap": None,
         "overlapping_windows": [],
         "closest_windows": suggestions[:5],
         "member_windows": member_windows_payload,
         "members_total": len(member_ids),
+        "required_trip_days": trip_days,
         "prompt_members_to_adjust": True,
-        "message": "No common overlap found. Ask some members to adjust dates.",
+        "message": f"No common {trip_days}-day overlap found. Ask some members to adjust dates.",
         "locked_window": locked_window,
         "is_locked": bool(locked_window),
     }
@@ -5241,11 +5351,12 @@ async def lock_availability_window(
 
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
-        trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
+        trip = await conn.fetchrow("SELECT owner_id, duration_days FROM trips WHERE id = $1", trip_id)
         if not trip:
             raise HTTPException(status_code=404, detail="Trip not found")
         if str(trip["owner_id"]) != str(user_id):
             raise HTTPException(status_code=403, detail="Only the trip owner can lock travel dates")
+        trip_days = max(1, int(trip["duration_days"] or 1))
 
         members = await conn.fetch(
             "SELECT user_id FROM trip_members WHERE trip_id = $1 AND status = 'accepted'",
@@ -5264,6 +5375,9 @@ async def lock_availability_window(
 
         if not member_ids or not all(by_member.get(uid) for uid in member_ids):
             raise HTTPException(status_code=422, detail="Every accepted member must submit availability before locking dates")
+
+        if _inclusive_day_count(lock_start, lock_end) != trip_days:
+            raise HTTPException(status_code=422, detail=f"Locked dates must cover exactly {trip_days} days")
 
         overlaps = _common_overlap_windows(member_ids, by_member)
         is_within_overlap = any(lock_start >= start and lock_end <= end for start, end in overlaps)

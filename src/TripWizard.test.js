@@ -1,4 +1,19 @@
-import { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode, mapInterestAnswersToCategories, mapInterestAnswersToProfileInterests } from "./TripWizard";
+import {
+  availabilityRangeFitsTrip,
+  availabilityWindowMatchesTripDays,
+  countShortlistedPois,
+  getUserIdFromToken,
+  inclusiveIsoDays,
+  isShortlistedPoi,
+  mapMemberFromApi,
+  normalizeBudgetTier,
+  normalizeFlightLegRows,
+  normalizeAirportCode,
+  inferAirportCode,
+  mapInterestAnswersToCategories,
+  mapInterestAnswersToProfileInterests,
+  summarizePoiVoteCounts,
+} from "./TripWizard";
 
 describe("TripWizard token helpers", () => {
   test("extracts user id from test token format", () => {
@@ -28,6 +43,108 @@ describe("TripWizard token helpers", () => {
       .replace(/=+$/g, "");
     const jwtWithUserId = `x.${payloadUserId}.y`;
     expect(getUserIdFromToken(jwtWithUserId)).toBe("user-id-999");
+  });
+});
+
+describe("TripWizard availability date helpers", () => {
+  test("counts calendar days inclusively", () => {
+    expect(inclusiveIsoDays("2026-06-01", "2026-06-10")).toBe(10);
+    expect(inclusiveIsoDays("2026-06-01", "2026-06-01")).toBe(1);
+  });
+
+  test("requires each member availability range to fit the full trip length", () => {
+    expect(
+      availabilityRangeFitsTrip({ start: "2026-06-01", end: "2026-06-10" }, 10)
+    ).toBe(true);
+    expect(
+      availabilityRangeFitsTrip({ start: "2026-06-01", end: "2026-06-09" }, 10)
+    ).toBe(false);
+  });
+
+  test("requires locked travel dates to match the trip length exactly", () => {
+    expect(
+      availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-10" }, 10)
+    ).toBe(true);
+    expect(
+      availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-11" }, 10)
+    ).toBe(false);
+    expect(
+      availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-09" }, 10)
+    ).toBe(false);
+  });
+});
+
+describe("TripWizard member profile helpers", () => {
+  test("preserves backend budget tier on trip members", () => {
+    const member = mapMemberFromApi({
+      user_id: "user-1",
+      email: "alex@example.com",
+      status: "accepted",
+      profile: {
+        display_name: "Alex",
+        budget_tier: "premium",
+        dietary: ["vegetarian"],
+      },
+    });
+
+    expect(member.profile.display_name).toBe("Alex");
+    expect(member.profile.budget_tier).toBe("premium");
+    expect(member.profile.dietary).toEqual(["vegetarian"]);
+  });
+
+  test("normalizes unknown budget tiers to moderate", () => {
+    expect(normalizeBudgetTier("luxury")).toBe("luxury");
+    expect(normalizeBudgetTier("")).toBe("moderate");
+    expect(normalizeBudgetTier("cheap")).toBe("moderate");
+  });
+});
+
+describe("TripWizard POI shortlist helpers", () => {
+  test("treats backend shortlisted POIs as part of the shared voting list", () => {
+    expect(isShortlistedPoi({ shortlisted: true }, false)).toBe(true);
+    expect(isShortlistedPoi({ shortlisted: false }, true)).toBe(true);
+    expect(isShortlistedPoi({ shortlisted: false }, false)).toBe(false);
+  });
+
+  test("counts the shared shortlist from backend state plus optimistic organizer changes", () => {
+    const poiRows = [
+      { id: "poi-1", shortlisted: true },
+      { id: "poi-2", shortlisted: false },
+      { id: "poi-3", shortlisted: false },
+    ];
+    const poiApproved = {
+      1: true,
+      2: false,
+    };
+
+    expect(countShortlistedPois(poiRows, poiApproved)).toBe(2);
+  });
+
+  test("summarizes POI vote counts for majority labels", () => {
+    expect(summarizePoiVoteCounts({ approve: 3, reject: 1 })).toEqual({
+      approve: 3,
+      reject: 1,
+      totalVotes: 4,
+      outcome: "accept",
+    });
+    expect(summarizePoiVoteCounts({ approve: 1, reject: 3 })).toEqual({
+      approve: 1,
+      reject: 3,
+      totalVotes: 4,
+      outcome: "reject",
+    });
+    expect(summarizePoiVoteCounts({ approve: 2, reject: 2 })).toEqual({
+      approve: 2,
+      reject: 2,
+      totalVotes: 4,
+      outcome: "split",
+    });
+    expect(summarizePoiVoteCounts()).toEqual({
+      approve: 0,
+      reject: 0,
+      totalVotes: 0,
+      outcome: "pending",
+    });
   });
 });
 

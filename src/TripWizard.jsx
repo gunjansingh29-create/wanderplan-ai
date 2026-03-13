@@ -134,6 +134,7 @@ function toInitials(value) {
 function mapMemberFromApi(member) {
   const display = member?.email || member?.name || member?.user_id || "member";
   const isAccepted = member?.status === "accepted" || member?.role === "owner";
+  const profile = member?.profile && typeof member.profile === "object" ? member.profile : {};
   return {
     name: display,
     status: isAccepted ? "done" : "pending",
@@ -141,7 +142,53 @@ function mapMemberFromApi(member) {
     email: member?.email || "",
     userId: member?.user_id || "",
     role: member?.role || "member",
+    profile: {
+      display_name: profile?.display_name || member?.name || member?.email || display,
+      interests: profile?.interests && typeof profile.interests === "object" ? profile.interests : {},
+      budget_tier: profile?.budget_tier || "moderate",
+      dietary: Array.isArray(profile?.dietary) ? profile.dietary : [],
+    },
   };
+}
+
+function normalizeBudgetTier(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "budget" || v === "moderate" || v === "premium" || v === "luxury") return v;
+  return "moderate";
+}
+
+function budgetTierMeta(tier) {
+  const key = normalizeBudgetTier(tier);
+  return {
+    budget: { label: "Budget", range: "$50-$100/day", color: T.success },
+    moderate: { label: "Moderate", range: "$100-$200/day", color: T.primary },
+    premium: { label: "Premium", range: "$200-$400/day", color: T.warning },
+    luxury: { label: "Luxury", range: "$400+/day", color: T.secondary },
+  }[key];
+}
+
+function isShortlistedPoi(poi, localApproved) {
+  if (poi?.shortlisted === true) return true;
+  return localApproved === true;
+}
+
+function countShortlistedPois(poiRows, poiApproved) {
+  return (Array.isArray(poiRows) ? poiRows : []).filter((poi, idx) => (
+    isShortlistedPoi(poi, poiApproved?.[idx])
+  )).length;
+}
+
+function summarizePoiVoteCounts(voteCounts) {
+  const approve = Math.max(0, Number(voteCounts?.approve || 0));
+  const reject = Math.max(0, Number(voteCounts?.reject || 0));
+  const totalVotes = approve + reject;
+  let outcome = "pending";
+  if (totalVotes > 0) {
+    if (approve > reject) outcome = "accept";
+    else if (reject > approve) outcome = "reject";
+    else outcome = "split";
+  }
+  return { approve, reject, totalVotes, outcome };
 }
 
 function getUserIdFromToken(token) {
@@ -405,6 +452,28 @@ function diffIsoDays(startIso, endIso) {
   return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 86400000));
 }
 
+function inclusiveIsoDays(startIso, endIso) {
+  return diffIsoDays(startIso, endIso) + 1;
+}
+
+function availabilityRangeFitsTrip(range, tripDays) {
+  const start = String(range?.start || "");
+  const end = String(range?.end || "");
+  const requiredDays = Math.max(1, Number(tripDays || 1));
+  if (!start || !end) return false;
+  if (end < start) return false;
+  return inclusiveIsoDays(start, end) >= requiredDays;
+}
+
+function availabilityWindowMatchesTripDays(window, tripDays) {
+  const start = String(window?.start || "");
+  const end = String(window?.end || "");
+  const requiredDays = Math.max(1, Number(tripDays || 1));
+  if (!start || !end) return false;
+  if (end < start) return false;
+  return inclusiveIsoDays(start, end) === requiredDays;
+}
+
 function formatClock(value) {
   if (!value) return "--:--";
   try {
@@ -550,7 +619,8 @@ const I = ({n,s=18,c="currentColor"}) => {
 const STAGES = [
   { key:"create",    label:"Create",       phase:"setup",      icon:"users",    emoji:"👋" },
   { key:"bucket",    label:"Destinations", phase:"setup",      icon:"heart",    emoji:"🌍" },
-  { key:"pois",      label:"POIs",         phase:"group",      icon:"camera",   emoji:"📍" },
+  { key:"pois",      label:"POI Shortlist",phase:"group",      icon:"camera",   emoji:"📍" },
+  { key:"poiVote",   label:"POI Vote",     phase:"group",      icon:"thumb",    emoji:"🗳️" },
   { key:"duration",  label:"Duration",     phase:"group",      icon:"clock",    emoji:"⏱️" },
   { key:"stays",     label:"Stays",        phase:"group",      icon:"hotel",    emoji:"🏨" },
   { key:"avail",     label:"Dates",        phase:"group",      icon:"calendar", emoji:"🗓️" },
@@ -693,9 +763,12 @@ function YN({ title, subtitle, desc, tags=[], agent="AI", onYes, onNo, children 
 // ── GROUP ROOM ──────────────────────────────────────────────────────────
 // Wraps each group-phase stage with a member vote bar + "Lock it in" button.
 
-function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLock, onVote, onVeto, onOverride, myVote, isLocked }) {
+function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLock, onVote, onVeto, onOverride, myVote, isLocked, currentUserId }) {
   const votes = memberVotes[stageKey] || {};
-  const others = members.filter(m => m.initials !== "YO");
+  // Exclude the current user (organizer) from the "others" denominator
+  const others = members.filter(m =>
+    currentUserId ? (m.userId !== currentUserId) : (m.initials !== "YO")
+  );
   const yesCount = Object.values(votes).filter(v => v === "yes").length;
   const totalVoters = others.length;
   const hasMajority = yesCount >= Math.ceil(totalVoters * 0.5) || totalVoters === 0;
@@ -707,7 +780,7 @@ function GroupRoom({ stageKey, children, members, memberVotes, isOrganizer, onLo
         display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         <span style={{ fontSize:12, color:T.text3, fontWeight:600 }}>Group vote:</span>
         {members.map(m => {
-          const isCurrentUser = m.initials === "YO" || (currentUserId && m.userId === currentUserId);
+          const isCurrentUser = currentUserId ? m.userId === currentUserId : m.initials === "YO";
           const isOrgIcon = isCurrentUser && isOrganizer;
           const vote = votes[m.initials] === "yes" ? "yes" : (isOrgIcon ? "organizer" : (votes[m.initials] || "pending"));
           return (
@@ -937,6 +1010,15 @@ function loadCrewForEmail(viewerEmail) {
   } catch { return []; }
 }
 
+function readLocalProfileForEmail(email) {
+  try {
+    const profiles = JSON.parse(localStorage.getItem(LOCAL_PROFILE_BY_EMAIL_KEY) || "{}");
+    return profiles[String(email || "").toLowerCase().trim()] || {};
+  } catch {
+    return {};
+  }
+}
+
 const DEST_RESULTS_SEED = [
   { name:"Santorini, Greece",  score:92, months:[5,6,9,10], votes:4 },
   { name:"Kyoto, Japan",       score:87, months:[3,4,10,11], votes:3 },
@@ -1074,6 +1156,7 @@ export default function TripWizard({
       : DEST_RESULTS_SEED.map((d) => d.name)
   );
   const [poiApproved, setPoiApproved] = useState({});
+  const [poiVoteSelections, setPoiVoteSelections] = useState({});
   const [poiVoteCounts, setPoiVoteCounts] = useState({}); // {poi_id: {approve, reject, my_vote}}
   const [interestAnswers, setInterestAnswers] = useState({});
   const [selectedFlightsByLeg, setSelectedFlightsByLeg] = useState({});
@@ -1102,8 +1185,9 @@ export default function TripWizard({
   const [itineraryRows, setItineraryRows] = useState([]);
   const [availabilitySummary, setAvailabilitySummary] = useState(null);
   const [availabilityRanges, setAvailabilityRanges] = useState([
-    { start: isoDaysFromNow(30), end: isoDaysFromNow(44) },
+    { start: isoDaysFromNow(30), end: isoDaysFromNow(39) },
   ]);
+  const [tripDurationDays, setTripDurationDays] = useState(10);
   const [availabilityBusy, setAvailabilityBusy] = useState(false);
   const [availabilityLockBusy, setAvailabilityLockBusy] = useState(false);
   const [selectedOverlapIndex, setSelectedOverlapIndex] = useState(0);
@@ -1135,6 +1219,24 @@ export default function TripWizard({
   };
   const stageKey = STAGES[step]?.key;
   const currentUserId = getUserIdFromToken(authToken);
+  const requiredTripDays = Math.max(1, Number(availabilitySummary?.required_trip_days || tripDurationDays || 10));
+  const sharedBudgetTotal = budgetPerDay * requiredTripDays;
+  const shortlistedPoiCount = countShortlistedPois(poiRows, poiApproved);
+  const memberBudgetPreferences = members.map((member, idx) => {
+    const localProfile = readLocalProfileForEmail(member?.email);
+    const tier = normalizeBudgetTier(
+      member?.profile?.budget_tier || localProfile?.budget_tier || localProfile?.budget_preference || "moderate"
+    );
+    return {
+      key: member?.userId || member?.email || `${member?.name || "member"}-${idx}`,
+      name: member?.profile?.display_name || localProfile?.display_name || localProfile?.name || member?.name || member?.email || `Member ${idx + 1}`,
+      initials: member?.initials || toInitials(member?.name || member?.email || `Member ${idx + 1}`),
+      tier,
+      meta: budgetTierMeta(tier),
+      isOrganizer: member?.role === "owner" || (member?.userId && member.userId === tripOwnerId),
+      isCurrentUser: !!currentUserId && member?.userId === currentUserId,
+    };
+  });
   if (typeof membersRef !== "undefined") { membersRef.current = members; currentUserIdRef.current = currentUserId; }
   const joinedCount = members.filter((m) => m.status === "done").length;
   const isOrganizer = tripOwnerId
@@ -1143,6 +1245,10 @@ export default function TripWizard({
 
   // Lock a group stage and advance; last group stage triggers transition screen
   const lockStage = async (key) => {
+    if (key === "pois" && shortlistedPoiCount === 0) {
+      setApiError("Shortlist at least one POI before moving to voting.");
+      return;
+    }
     setLockedStages(prev => ({ ...prev, [key]: true }));
     // Persist organizer approval to backend (also cast vote so crew see it)
     if (tripId && authToken && !demoMode) {
@@ -1157,13 +1263,26 @@ export default function TripWizard({
         body: JSON.stringify({ action: "approved" }),
       }).catch(() => {});
     }
-    if (key === "pois" && tripId && authToken && !demoMode) {
+    if (key === "bucket" && tripId && authToken && !demoMode && destinations.length > 0) {
+      const votes = {};
+      destinations.forEach(d => { votes[d] = 1; });
+      try {
+        await apiJson(`/trips/${tripId}/destinations`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ destinations, votes }),
+        });
+      } catch { /* non-fatal — destinations saved on best-effort basis */ }
+    }
+    if (key === "poiVote" && tripId && authToken && !demoMode) {
       try {
         await apiJson(`/trips/${tripId}/pois/consolidate`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         });
-      } catch { /* non-fatal — itinerary will use whatever is approved */ }
+      } catch {
+        /* non-fatal — itinerary will use whatever is approved */
+      }
     }
     if (key === "budget") {
       if (tripId && authToken) {
@@ -1192,7 +1311,9 @@ export default function TripWizard({
   // Submit current user's vote for a group stage
   const handleMemberVote = async (key) => {
     setMyVotes(prev => ({ ...prev, [key]: "yes" }));
-    setMemberVotes(prev => ({ ...prev, [key]: { ...(prev[key] || {}), YO: "yes" } }));
+    // Use the actual member initials for the current user; fall back to "YO" for demo/anonymous
+    const myInitials = members.find(m => m.userId === currentUserId)?.initials || "YO";
+    setMemberVotes(prev => ({ ...prev, [key]: { ...(prev[key] || {}), [myInitials]: "yes" } }));
     if (!tripId || !authToken || demoMode) return;
     try {
       await apiJson(`/trips/${tripId}/consensus/stages/${key}/vote`, {
@@ -1203,7 +1324,23 @@ export default function TripWizard({
     } catch { setMyVotes(prev => ({ ...prev, [key]: undefined })); }
   };
 
-  // Organizer member override: mark a specific member as agreed
+  // Non-organizer "I Agree" for bucket stage: save own destination choices then vote
+  const handleBucketMemberVote = async () => {
+    if (tripId && authToken && !demoMode && destinations.length > 0) {
+      const votes = {};
+      destinations.forEach(d => { votes[d] = 1; });
+      try {
+        await apiJson(`/trips/${tripId}/destinations`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ destinations, votes }),
+        });
+      } catch { /* non-fatal */ }
+    }
+    await handleMemberVote("bucket");
+  };
+
+  // Organizer member override: mark a specific member as agreed (visual only — organizer can lock regardless)
   const handleOrganizerMemberOverride = (key, initials) => {
     setMemberVotes(prev => ({ ...prev, [key]: { ...(prev[key] || {}), [initials]: "yes" } }));
   };
@@ -1369,6 +1506,11 @@ export default function TripWizard({
           bestWindow: row.best_window,
         }))
       : destResults;
+  const timingWindowSummary = timingDisplay
+    .map((row) => (row?.bestWindow ? `${row.name}: ${row.bestWindow}` : ""))
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" | ");
   const poiDisplay = poiRows.length > 0
     ? poiRows.map((poi) => ({
         name: poi.name,
@@ -1542,6 +1684,9 @@ export default function TripWizard({
     if (savedTrip?.name) {
       setTripName(savedTrip.name);
     }
+    if (savedTrip?.duration_days) {
+      setTripDurationDays(Math.max(1, Number(savedTrip.duration_days || 10)));
+    }
     if (Array.isArray(savedTrip?.members) && savedTrip.members.length > 0) {
       setMembers(savedTrip.members.map(mapMemberFromApi));
     }
@@ -1582,9 +1727,13 @@ export default function TripWizard({
           if (!cancelled) {
             setAvailabilitySummary(overlap || null);
             setSelectedOverlapIndex(0);
+            const mine = (overlap?.member_windows || []).find((member) => member.user_id === currentUserId);
+            const myWindow = mine?.windows?.[0];
             if (overlap?.locked_window?.start && overlap?.locked_window?.end) {
               setAvailabilityRanges([{ start: overlap.locked_window.start, end: overlap.locked_window.end }]);
               applyLockedWindowToFlightDates(overlap.locked_window.start, overlap.locked_window.end);
+            } else if (myWindow?.start && myWindow?.end) {
+              setAvailabilityRanges([{ start: myWindow.start, end: myWindow.end }]);
             }
           }
         }
@@ -1594,18 +1743,30 @@ export default function TripWizard({
           });
           if (!cancelled) {
             setPoiRows(res?.pois || []);
-            // Populate vote counts and pre-fill user's own vote
-            const counts = {};
-            const approved = {};
+            const shortlisted = {};
             (res?.pois || []).forEach((poi, idx) => {
+              if (poi?.shortlisted === true) shortlisted[idx] = true;
+              else if (poi?.shortlisted === false) shortlisted[idx] = false;
+            });
+            setPoiApproved(prev => ({ ...prev, ...shortlisted }));
+          }
+        }
+        if (stageKey === "poiVote") {
+          const res = await apiJson(`/trips/${tripId}/pois?limit=20&shortlisted=true`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (!cancelled) {
+            setPoiRows(res?.pois || []);
+            const counts = {};
+            const mine = {};
+            (res?.pois || []).forEach((poi) => {
               if (poi.vote_counts) {
                 counts[poi.poi_id] = poi.vote_counts;
-                if (poi.vote_counts.my_vote === "approve") approved[idx] = true;
-                else if (poi.vote_counts.my_vote === "reject") approved[idx] = false;
+                if (poi.vote_counts.my_vote) mine[poi.poi_id] = poi.vote_counts.my_vote;
               }
             });
             setPoiVoteCounts(counts);
-            setPoiApproved(prev => ({ ...prev, ...approved }));
+            setPoiVoteSelections(mine);
           }
         }
         if (stageKey === "flights") {
@@ -1690,7 +1851,9 @@ export default function TripWizard({
     if (!GROUP_STAGES.includes(stageKey)) return;
     // Post-hydration members have real userId, not "YO" — check both ways
     const others = members.filter(m => m.initials !== "YO" && m.userId !== currentUserId);
-    if (others.length === 0) {
+    // bucket and pois require explicit user interaction before locking — never auto-lock them
+    const noAutoLock = stageKey === "bucket" || stageKey === "pois" || stageKey === "poiVote";
+    if (others.length === 0 && !noAutoLock) {
       const t = setTimeout(() => lockStage(stageKey), 400);
       return () => clearTimeout(t);
     }
@@ -1751,31 +1914,26 @@ export default function TripWizard({
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
-  // ── Auto-submit stage-level "agree" vote once user has voted on all POIs
-  useEffect(() => {
-    if (stageKey !== "pois") return;
-    if (poiDisplay.length === 0) return;
-    const votedCount = Object.keys(poiApproved).length;
-    if (votedCount >= poiDisplay.length && !myVotes["pois"]) {
-      handleMemberVote("pois");
-    }
-  }, [poiApproved, poiDisplay.length, stageKey]);
-
   // ── Poll POI vote counts every 5 s so all members see live tallies ──────────
   useEffect(() => {
-    if (stageKey !== "pois" || !tripId || !authToken || demoMode) return;
+    if (stageKey !== "poiVote" || !tripId || !authToken || demoMode) return;
     let cancelled = false;
     async function syncPoiVotes() {
       try {
-        const res = await apiJson(`/trips/${tripId}/pois?limit=20`, {
+        const res = await apiJson(`/trips/${tripId}/pois?limit=20&shortlisted=true`, {
           headers: { Authorization: `Bearer ${authToken}` },
         });
         if (cancelled) return;
         const counts = {};
+        const mine = {};
         (res?.pois || []).forEach(poi => {
-          if (poi.vote_counts) counts[poi.poi_id] = poi.vote_counts;
+          if (poi.vote_counts) {
+            counts[poi.poi_id] = poi.vote_counts;
+            if (poi.vote_counts.my_vote) mine[poi.poi_id] = poi.vote_counts.my_vote;
+          }
         });
         setPoiVoteCounts(counts);
+        setPoiVoteSelections(mine);
       } catch { /* ignore */ }
     }
     const interval = setInterval(syncPoiVotes, 5000);
@@ -2113,20 +2271,37 @@ export default function TripWizard({
   };
 
   const handlePoiDecision = async (index, approved) => {
-    setPoiApproved((prev) => ({ ...prev, [index]: approved }));
     const row = poiRows[index];
     const poiId = row?.poi_id || row?.id;
     if (!poiId || !tripId || !authToken) return;
-    try {
-      const resp = await apiJson(`/trips/${tripId}/pois/${poiId}/vote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ vote: approved ? "approve" : "reject" }),
-      });
-      if (resp?.vote_counts) {
-        setPoiVoteCounts(prev => ({ ...prev, [poiId]: resp.vote_counts }));
-      }
-    } catch { /* non-fatal */ }
+    if (stageKey === "pois") {
+      setPoiApproved((prev) => ({ ...prev, [index]: approved }));
+      setPoiRows((prev) => prev.map((poi, poiIndex) => (
+        poiIndex === index ? { ...poi, shortlisted: approved } : poi
+      )));
+      try {
+        await apiJson(`/trips/${tripId}/pois/${poiId}/shortlist`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ shortlisted: approved }),
+        });
+      } catch { /* non-fatal */ }
+      return;
+    }
+    if (stageKey === "poiVote") {
+      const vote = approved ? "approve" : "reject";
+      setPoiVoteSelections((prev) => ({ ...prev, [poiId]: vote }));
+      try {
+        const resp = await apiJson(`/trips/${tripId}/pois/${poiId}/vote`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ vote }),
+        });
+        if (resp?.vote_counts) {
+          setPoiVoteCounts(prev => ({ ...prev, [poiId]: resp.vote_counts }));
+        }
+      } catch { /* non-fatal */ }
+    }
   };
 
   const applyLockedWindowToFlightDates = (startIso, endIso) => {
@@ -2157,14 +2332,15 @@ export default function TripWizard({
     setApiError("");
     if (demoMode) {
       const demoStart = availabilityRanges[0]?.start || isoDaysFromNow(30);
-      const demoEnd = availabilityRanges[0]?.end || isoDaysFromNow(44);
+      const demoEnd = availabilityRanges[0]?.end || shiftIsoDate(demoStart, requiredTripDays - 1);
       setAvailabilitySummary({
-        overlap: { start: demoStart, end: demoEnd },
-        overlapping_windows: [{ start: demoStart, end: demoEnd, overlap_days: Math.max(1, diffIsoDays(demoStart, demoEnd) + 1) }],
+        overlap: { start: demoStart, end: shiftIsoDate(demoStart, requiredTripDays - 1) },
+        overlapping_windows: [{ start: demoStart, end: shiftIsoDate(demoStart, requiredTripDays - 1), overlap_days: requiredTripDays }],
         members_total: 1,
-        member_windows: [],
+        member_windows: [{ user_id: currentUserId || "demo", name: "You", email: "", windows: [{ start: demoStart, end: demoEnd }] }],
+        required_trip_days: requiredTripDays,
         prompt_members_to_adjust: false,
-        message: "Common overlap found",
+        message: `Common ${requiredTripDays}-day overlap found`,
         locked_window: null,
         is_locked: false,
       });
@@ -2179,6 +2355,10 @@ export default function TripWizard({
     }
     if (range.end < range.start) {
       setApiError("End date cannot be before start date.");
+      return;
+    }
+    if (!availabilityRangeFitsTrip(range, requiredTripDays)) {
+      setApiError(`Availability must fit at least ${requiredTripDays} consecutive days.`);
       return;
     }
 
@@ -2207,6 +2387,14 @@ export default function TripWizard({
 
   const handleAvailabilityLockAndContinue = async () => {
     setApiError("");
+    const memberWindows = Array.isArray(availabilitySummary?.member_windows) ? availabilitySummary.member_windows : [];
+    const allMembersSubmitted =
+      memberWindows.length >= (availabilitySummary?.members_total || 0) &&
+      memberWindows.every((member) => Array.isArray(member.windows) && member.windows.length > 0);
+    if (!allMembersSubmitted) {
+      setApiError("Wait until every accepted crew member submits a date range that fits the full trip.");
+      return;
+    }
     const overlapCandidates = Array.isArray(availabilitySummary?.overlapping_windows)
       ? availabilitySummary.overlapping_windows
       : [];
@@ -2214,6 +2402,10 @@ export default function TripWizard({
     const lockWindow = selectedOverlap?.window || selectedOverlap;
     if (!lockWindow?.start || !lockWindow?.end) {
       setApiError("Find a common overlap window before locking dates.");
+      return;
+    }
+    if (!availabilityWindowMatchesTripDays(lockWindow, requiredTripDays)) {
+      setApiError(`Final travel dates must cover exactly ${requiredTripDays} days.`);
       return;
     }
 
@@ -2716,77 +2908,234 @@ export default function TripWizard({
     </Shell>
   );
 
-  // ── STEP 2: POIs (group chatroom) ────────────────────────────────────
+  // ── STEP 2: POI SHORTLIST ─────────────────────────────────────────────
   if (stageKey === "pois") return (
     <Shell step={step}>
-      <AgentHeader emoji="📍" name="POI Discovery" desc="Vote on activities — organizer locks the list"/>
-      <GroupRoom stageKey="pois" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey] || (Object.keys(poiApproved).length >= poiDisplay.length && poiDisplay.length > 0 ? "yes" : undefined)} isLocked={lockedStages[stageKey]}>
-        <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-          <Chat agent="POI Agent" emoji="📍" msg="Here are top activity picks for your destinations. Approve or skip each one — your crew can also vote!"/>
-          {poiDisplay.map((poi,i)=>{
-            const catColors = { nature:T.success, food:T.primary, culture:T.warning };
-            const approved = poiApproved[i];
-            return (
-              <div key={i} style={{ background:T.surface,borderRadius:14,overflow:"hidden",border:`1px solid ${T.borderLight}`,
-                boxShadow:shadow.sm,display:"flex",gap:0,animation:`fadeUp .35s ease-out ${i*.08}s both`,
-                opacity:approved===false?.45:1,transition:"opacity .3s" }}>
-                <div style={{ width:80,minHeight:100,flexShrink:0,
-                  background:`linear-gradient(135deg,${catColors[poi.cat]||T.primary}25,${catColors[poi.cat]||T.primary}08)`,
-                  display:"flex",alignItems:"center",justifyContent:"center" }}>
-                  <I n={poi.cat==="food"?"food":poi.cat==="culture"?"hotel":"camera"} s={24} c={catColors[poi.cat]||T.primary}/>
+      <AgentHeader emoji="📍" name="POI Discovery" desc="Accept LLM suggestions into one shared shortlist for the next voting screen"/>
+      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        <div style={{ background:T.surface, borderRadius:12, padding:"10px 14px", border:`1px solid ${T.borderLight}`,
+          display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span style={{ fontSize:12, color:T.text3, fontWeight:600 }}>Shortlist stage:</span>
+          <span style={{ fontSize:12, color:T.text2 }}>
+            LLM-generated POIs are curated here, then the shared shortlist moves to the voting screen.
+          </span>
+          <span style={{ fontSize:11, fontWeight:700, color:T.primary,
+            background:`${T.primary}15`, padding:"2px 8px", borderRadius:20, marginLeft:"auto" }}>
+            {shortlistedPoiCount} shortlisted
+          </span>
+        </div>
+        <Chat agent="POI Agent" emoji="📍" msg="These are LLM-generated activity options. Accept the ones that should go into the shared crew voting list on the next screen."/>
+        {poiDisplay.map((poi,i)=>{
+          const catColors = { nature:T.success, food:T.primary, culture:T.warning };
+          const shortlisted = poiRows[i]?.shortlisted === true || poiApproved[i] === true;
+          const rejected = poiRows[i]?.shortlisted === false || poiApproved[i] === false;
+          return (
+            <div key={poi.poi_id || poi.id || i} style={{ background:T.surface,borderRadius:14,overflow:"hidden",border:`1px solid ${T.borderLight}`,
+              boxShadow:shadow.sm,display:"flex",gap:0,animation:`fadeUp .35s ease-out ${i*.08}s both`,
+              opacity:rejected?.45:1,transition:"opacity .3s" }}>
+              <div style={{ width:80,minHeight:100,flexShrink:0,
+                background:`linear-gradient(135deg,${catColors[poi.cat]||T.primary}25,${catColors[poi.cat]||T.primary}08)`,
+                display:"flex",alignItems:"center",justifyContent:"center" }}>
+                <I n={poi.cat==="food"?"food":poi.cat==="culture"?"hotel":"camera"} s={24} c={catColors[poi.cat]||T.primary}/>
+              </div>
+              <div style={{ padding:"12px 14px",flex:1,minWidth:0 }}>
+                <div style={{ display:"flex",alignItems:"center",gap:5,marginBottom:3 }}>
+                  <span style={{ background:`${catColors[poi.cat]}18`,color:catColors[poi.cat],
+                    padding:"1px 7px",borderRadius:999,fontSize:10,fontWeight:600,textTransform:"capitalize" }}>{poi.cat}</span>
+                  <span style={{ fontSize:11,color:T.warning,display:"flex",alignItems:"center",gap:2 }}>
+                    <I n="star" s={11} c={T.warning}/> {poi.rating}</span>
+                  <span style={{ fontSize:10.5,color:T.text3,marginLeft:"auto" }}>{poi.dest}</span>
                 </div>
-                <div style={{ padding:"12px 14px",flex:1,minWidth:0 }}>
-                  <div style={{ display:"flex",alignItems:"center",gap:5,marginBottom:3 }}>
-                    <span style={{ background:`${catColors[poi.cat]}18`,color:catColors[poi.cat],
-                      padding:"1px 7px",borderRadius:999,fontSize:10,fontWeight:600,textTransform:"capitalize" }}>{poi.cat}</span>
-                    <span style={{ fontSize:11,color:T.warning,display:"flex",alignItems:"center",gap:2 }}>
-                      <I n="star" s={11} c={T.warning}/> {poi.rating}</span>
-                    <span style={{ fontSize:10.5,color:T.text3,marginLeft:"auto" }}>{poi.dest}</span>
-                  </div>
-                  <h4 className="hd" style={{ fontWeight:600,fontSize:14,marginBottom:5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{poi.name}</h4>
-                  <div style={{ display:"flex",gap:10,marginBottom:6,fontSize:12,color:T.text2 }}>
-                    <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="clock" s={12} c={T.text3}/> {poi.dur}h</span>
-                    <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="dollar" s={12} c={T.text3}/> {poi.cost>0?`$${poi.cost}`:"Free"}</span>
-                  </div>
-                  <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginBottom:8 }}>
-                    {poi.tags.map(t=><span key={t} style={{ background:T.bg,color:T.text2,padding:"1px 7px",borderRadius:999,fontSize:10 }}>{t}</span>)}
-                  </div>
-                  {(() => {
-                    const poiId = poi.poi_id || poi.id;
-                    const vc = poiVoteCounts[poiId] || { approve: 0, reject: 0 };
-                    const totalVotes = vc.approve + vc.reject;
-                    return (
-                      <>
-                        {totalVotes > 0 && (
-                          <div style={{ display:"flex", gap:6, marginBottom:6, alignItems:"center" }}>
-                            <span style={{ fontSize:10, color:T.success, fontWeight:600 }}>👍 {vc.approve}</span>
-                            <span style={{ fontSize:10, color:T.error, fontWeight:600 }}>👎 {vc.reject}</span>
-                            {vc.approve > vc.reject && <span style={{ fontSize:9, color:T.success }}>✓ majority want this</span>}
-                            {vc.reject > vc.approve && <span style={{ fontSize:9, color:T.error }}>✗ majority skip</span>}
-                            {vc.approve === vc.reject && totalVotes > 0 && <span style={{ fontSize:9, color:T.warning }}>⚡ split vote</span>}
-                          </div>
-                        )}
-                        <div style={{ display:"flex", gap:8 }}>
-                          <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
-                            border: approved===false?"none":`1.5px solid ${T.error}40`,
-                            background:approved===false?T.error:"transparent",
-                            color:approved===false?"#fff":T.error,
-                            fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Skip</button>
-                          <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
-                            border:"none",
-                            background:approved===true?T.success:T.primary,
-                            color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
-                            boxShadow:`0 2px 6px ${approved===true?T.success:T.primary}30` }} className="hd">✓ Include</button>
-                        </div>
-                      </>
-                    );
-                  })()}
+                <h4 className="hd" style={{ fontWeight:600,fontSize:14,marginBottom:5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{poi.name}</h4>
+                <div style={{ display:"flex",gap:10,marginBottom:6,fontSize:12,color:T.text2 }}>
+                  <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="clock" s={12} c={T.text3}/> {poi.dur}h</span>
+                  <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="dollar" s={12} c={T.text3}/> {poi.cost>0?`$${poi.cost}`:"Free"}</span>
+                </div>
+                <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginBottom:8 }}>
+                  {poi.tags.map(t=><span key={t} style={{ background:T.bg,color:T.text2,padding:"1px 7px",borderRadius:999,fontSize:10 }}>{t}</span>)}
+                </div>
+                <p style={{ fontSize:11,color:T.text3,marginBottom:8 }}>
+                  Accepted here means it joins the shared static shortlist for crew voting on the next screen.
+                </p>
+                <div style={{ display:"flex", gap:8 }}>
+                  <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
+                    border: rejected?"none":`1.5px solid ${T.error}40`,
+                    background:rejected?T.error:"transparent",
+                    color:rejected?"#fff":T.error,
+                    fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Reject</button>
+                  <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
+                    border:"none",
+                    background:shortlisted?T.success:T.primary,
+                    color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
+                    boxShadow:`0 2px 6px ${shortlisted?T.success:T.primary}30` }} className="hd">✓ Add To Vote</button>
                 </div>
               </div>
-            );
-          })}
+            </div>
+          );
+        })}
+        {isOrganizer ? (
+          <div style={{ display:"flex", flexDirection:"column", gap:8, animation:"scaleIn .3s ease-out" }}>
+            <div style={{ display:"flex", gap:8 }}>
+              <button
+                onClick={() => lockStage("pois")}
+                className="hd"
+                style={{ flex:3, padding:"13px 20px", borderRadius:12, border:"none",
+                  background:shortlistedPoiCount > 0 ? T.primary : T.borderLight,
+                  color:shortlistedPoiCount > 0 ? "#fff" : T.text3,
+                  fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
+                  boxShadow:shortlistedPoiCount > 0 ? `0 2px 8px ${T.primary}30` : "none",
+                  transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+              >
+                <I n="check" s={16} c={shortlistedPoiCount > 0 ? "#fff" : T.text3}/>
+                Send {shortlistedPoiCount} POI{shortlistedPoiCount === 1 ? "" : "s"} To Voting →
+              </button>
+              <button
+                onClick={() => handleOrganizerVeto("pois")}
+                className="hd"
+                style={{ flex:1, padding:"13px 12px", borderRadius:12,
+                  border:`1.5px solid ${T.error}60`,
+                  background:`${T.error}08`, color:T.error,
+                  fontSize:13, fontWeight:600, cursor:"pointer", minHeight:48,
+                  transition:"all .2s", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
+              >
+                ✕ Send Back
+              </button>
+            </div>
+            <p style={{ fontSize:11, color:T.text3, textAlign:"center" }}>
+              Organizer locks the shortlist, then every crew member votes on that same static list on the next screen.
+            </p>
+          </div>
+        ) : (
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+            padding:"12px", borderRadius:12,
+            background:`${T.warning}10`, border:`1px solid ${T.warning}30` }}>
+            <span style={{ fontSize:13, color:T.warning, fontWeight:600 }}>
+              Organizer will lock the shortlist, then the crew votes on it together on the next screen.
+            </span>
+          </div>
+        )}
+      </div>
+    </Shell>
+  );
+
+  // ── STEP 3: POI VOTING ────────────────────────────────────────────────
+  if (stageKey === "poiVote") return (
+    <Shell step={step}>
+      <AgentHeader emoji="🗳️" name="POI Voting" desc="Everyone votes on the same shared shortlist before majority consolidation"/>
+      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        <div style={{ background:T.surface, borderRadius:12, padding:"10px 14px", border:`1px solid ${T.borderLight}`,
+          display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span style={{ fontSize:12, color:T.text3, fontWeight:600 }}>Voting list:</span>
+          <span style={{ fontSize:12, color:T.text2 }}>
+            This screen uses the shared shortlist saved in the previous step. Everyone should see the same POIs in the same order.
+          </span>
         </div>
-      </GroupRoom>
+        <Chat agent="POI Voting Agent" emoji="🗳️" msg="Vote accept or reject on the shared shortlist below. The organizer finalizes after majority logic is applied."/>
+        {poiDisplay.length === 0 && (
+          <div style={{ padding:"14px 16px",borderRadius:12,background:`${T.warning}10`,border:`1px solid ${T.warning}30` }}>
+            <p style={{ fontSize:13,color:T.warning,fontWeight:700 }}>No shortlisted POIs are available yet.</p>
+            <p style={{ fontSize:12,color:T.text3,marginTop:4 }}>Go back to the POI shortlist step and add at least one POI to the shared voting list.</p>
+          </div>
+        )}
+        {poiDisplay.map((poi,i)=>{
+          const catColors = { nature:T.success, food:T.primary, culture:T.warning };
+          const poiId = poi.poi_id || poi.id;
+          const voteValue = poiVoteSelections[poiId] || poiVoteCounts[poiId]?.my_vote || "";
+          const accepted = voteValue === "approve";
+          const rejected = voteValue === "reject";
+          const voteSummary = summarizePoiVoteCounts(poiVoteCounts[poiId]);
+          return (
+            <div key={poiId || i} style={{ background:T.surface,borderRadius:14,overflow:"hidden",border:`1px solid ${T.borderLight}`,
+              boxShadow:shadow.sm,display:"flex",gap:0,animation:`fadeUp .35s ease-out ${i*.08}s both`,
+              opacity:rejected?.45:1,transition:"opacity .3s" }}>
+              <div style={{ width:80,minHeight:100,flexShrink:0,
+                background:`linear-gradient(135deg,${catColors[poi.cat]||T.primary}25,${catColors[poi.cat]||T.primary}08)`,
+                display:"flex",alignItems:"center",justifyContent:"center" }}>
+                <I n={poi.cat==="food"?"food":poi.cat==="culture"?"hotel":"camera"} s={24} c={catColors[poi.cat]||T.primary}/>
+              </div>
+              <div style={{ padding:"12px 14px",flex:1,minWidth:0 }}>
+                <div style={{ display:"flex",alignItems:"center",gap:5,marginBottom:3 }}>
+                  <span style={{ background:`${catColors[poi.cat]}18`,color:catColors[poi.cat],
+                    padding:"1px 7px",borderRadius:999,fontSize:10,fontWeight:600,textTransform:"capitalize" }}>{poi.cat}</span>
+                  <span style={{ fontSize:11,color:T.warning,display:"flex",alignItems:"center",gap:2 }}>
+                    <I n="star" s={11} c={T.warning}/> {poi.rating}</span>
+                  <span style={{ fontSize:10.5,color:T.text3,marginLeft:"auto" }}>{poi.dest}</span>
+                </div>
+                <h4 className="hd" style={{ fontWeight:600,fontSize:14,marginBottom:5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{poi.name}</h4>
+                <div style={{ display:"flex",gap:10,marginBottom:6,fontSize:12,color:T.text2 }}>
+                  <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="clock" s={12} c={T.text3}/> {poi.dur}h</span>
+                  <span style={{ display:"flex",alignItems:"center",gap:3 }}><I n="dollar" s={12} c={T.text3}/> {poi.cost>0?`$${poi.cost}`:"Free"}</span>
+                </div>
+                <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginBottom:8 }}>
+                  {poi.tags.map(t=><span key={t} style={{ background:T.bg,color:T.text2,padding:"1px 7px",borderRadius:999,fontSize:10 }}>{t}</span>)}
+                </div>
+                {voteSummary.totalVotes > 0 && (
+                  <div style={{ display:"flex", gap:6, marginBottom:6, alignItems:"center" }}>
+                    <span style={{ fontSize:10, color:T.success, fontWeight:600 }}>👍 {voteSummary.approve}</span>
+                    <span style={{ fontSize:10, color:T.error, fontWeight:600 }}>👎 {voteSummary.reject}</span>
+                    {voteSummary.outcome === "accept" && <span style={{ fontSize:9, color:T.success }}>✓ majority accept</span>}
+                    {voteSummary.outcome === "reject" && <span style={{ fontSize:9, color:T.error }}>✗ majority reject</span>}
+                    {voteSummary.outcome === "split" && <span style={{ fontSize:9, color:T.warning }}>⚡ split vote</span>}
+                  </div>
+                )}
+                <div style={{ display:"flex", gap:8 }}>
+                  <button onClick={()=>handlePoiDecision(i, false)} style={{ flex:1,padding:"8px",borderRadius:8,
+                    border: rejected?"none":`1.5px solid ${T.error}40`,
+                    background:rejected?T.error:"transparent",
+                    color:rejected?"#fff":T.error,
+                    fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36 }} className="hd">✗ Reject</button>
+                  <button onClick={()=>handlePoiDecision(i, true)} style={{ flex:1,padding:"8px",borderRadius:8,
+                    border:"none",
+                    background:accepted?T.success:T.primary,
+                    color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",minHeight:36,
+                    boxShadow:`0 2px 6px ${accepted?T.success:T.primary}30` }} className="hd">✓ Accept</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {isOrganizer ? (
+          <div style={{ display:"flex", flexDirection:"column", gap:8, animation:"scaleIn .3s ease-out" }}>
+            <div style={{ display:"flex", gap:8 }}>
+              <button
+                onClick={() => lockStage("poiVote")}
+                className="hd"
+                style={{ flex:3, padding:"13px 20px", borderRadius:12, border:"none",
+                  background:poiDisplay.length > 0 ? T.primary : T.borderLight,
+                  color:poiDisplay.length > 0 ? "#fff" : T.text3,
+                  fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
+                  boxShadow:poiDisplay.length > 0 ? `0 2px 8px ${T.primary}30` : "none",
+                  transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+              >
+                <I n="check" s={16} c={poiDisplay.length > 0 ? "#fff" : T.text3}/>
+                Finalize Majority Vote →
+              </button>
+              <button
+                onClick={() => handleOrganizerVeto("poiVote")}
+                className="hd"
+                style={{ flex:1, padding:"13px 12px", borderRadius:12,
+                  border:`1.5px solid ${T.error}60`,
+                  background:`${T.error}08`, color:T.error,
+                  fontSize:13, fontWeight:600, cursor:"pointer", minHeight:48,
+                  transition:"all .2s", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
+              >
+                ✕ Send Back
+              </button>
+            </div>
+            <p style={{ fontSize:11, color:T.text3, textAlign:"center" }}>
+              Finalization applies backend majority logic to the shared shortlist and passes only approved POIs to later trip steps.
+            </p>
+          </div>
+        ) : (
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+            padding:"12px", borderRadius:12,
+            background:`${T.warning}10`, border:`1px solid ${T.warning}30` }}>
+            <span style={{ fontSize:13, color:T.warning, fontWeight:600 }}>
+              Vote on the shared shortlist above. Organizer will finalize once crew voting is complete.
+            </span>
+          </div>
+        )}
+      </div>
     </Shell>
   );
 
@@ -2794,7 +3143,7 @@ export default function TripWizard({
   if (stageKey === "duration") return (
     <Shell step={step}>
       <AgentHeader emoji="⏱️" name="Duration Calculator" desc="How many days you need"/>
-      <GroupRoom stageKey="duration" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+      <GroupRoom stageKey="duration" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]} currentUserId={currentUserId}>
         <Chat agent="Duration Agent" emoji="⏱️" msg="Let me calculate the optimal trip length based on your approved activities..."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .3s both" }}>
@@ -2810,8 +3159,11 @@ export default function TripWizard({
           <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0 0",
             borderTop:`2px solid ${T.primary}20`,marginTop:4 }}>
             <span className="hd" style={{ fontWeight:700,fontSize:16,color:T.primary }}>Total</span>
-            <span className="hd" style={{ fontWeight:700,fontSize:16,color:T.primary }}>10 days</span>
+            <span className="hd" style={{ fontWeight:700,fontSize:16,color:T.primary }}>{requiredTripDays} days</span>
           </div>
+          <p style={{ fontSize:12,color:T.text3,marginTop:10 }}>
+            Next, every crew member submits a date range that can fit this full {requiredTripDays}-day trip before the organizer locks travel dates.
+          </p>
         </div>
       </GroupRoom>
     </Shell>
@@ -2826,16 +3178,34 @@ export default function TripWizard({
     const selectedOverlap = overlapCandidates[selectedOverlapIndex] || overlapCandidates[0] || availabilitySummary?.overlap || null;
     const selectedWindow = selectedOverlap?.window || selectedOverlap;
     const lockedWindow = availabilitySummary?.locked_window || null;
+    const memberWindows = Array.isArray(availabilitySummary?.member_windows) ? availabilitySummary.member_windows : [];
+    const submittedMembers = memberWindows.filter((member) => Array.isArray(member.windows) && member.windows.length > 0);
+    const pendingMembers = memberWindows.filter((member) => !Array.isArray(member.windows) || member.windows.length === 0);
+    const allMembersSubmitted =
+      memberWindows.length > 0 &&
+      submittedMembers.length >= (availabilitySummary?.members_total || 0) &&
+      pendingMembers.length === 0;
+    const myRange = availabilityRanges[0] || { start: "", end: "" };
+    const myRangeDays = myRange.start && myRange.end ? inclusiveIsoDays(myRange.start, myRange.end) : 0;
     return (
       <Shell step={step}>
-        <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc="Collecting availability and locking the trip window"/>
-        <GroupRoom stageKey="avail" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
-          <Chat agent="Sync Agent" emoji="🗓️" msg="Each member should submit an available start and end date. Then we compute overlap and lock one window for the trip."/>
+        <AgentHeader emoji="🗓️" name="Schedule Sync Agent" desc={`Collecting crew availability for one locked ${requiredTripDays}-day trip window`}/>
+        <GroupRoom stageKey="avail" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]} currentUserId={currentUserId}>
+          <Chat agent="Sync Agent" emoji="🗓️" msg={`Each crew member must submit a date range that can fit the full ${requiredTripDays}-day trip. Once every accepted member has input dates, we lock one overlapping ${requiredTripDays}-day window.`}/>
           <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm,animation:"fadeUp .35s ease-out .2s both" }}>
-            <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:10 }}>Your Availability</p>
+            <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:6 }}>Your Availability</p>
+            <p style={{ fontSize:12,color:T.text3,marginBottom:10 }}>
+              Submit a range that can accommodate at least {requiredTripDays} consecutive travel days.
+            </p>
+            {timingWindowSummary && (
+              <div style={{ padding:"10px 12px",borderRadius:10,background:`${T.warning}12`,border:`1px solid ${T.warning}33`,marginBottom:10 }}>
+                <p style={{ fontSize:11,color:T.warning,fontWeight:700,marginBottom:4 }}>Best-time guidance</p>
+                <p style={{ fontSize:11,color:T.text2 }}>{timingWindowSummary}</p>
+              </div>
+            )}
             <div style={{ display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8 }}>
               <div>
-                <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text3,marginBottom:6 }}>Start date</label>
+                <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text3,marginBottom:6 }}>Available from</label>
                 <input
                   type="date"
                   value={availabilityRanges[0]?.start || ""}
@@ -2844,7 +3214,7 @@ export default function TripWizard({
                 />
               </div>
               <div>
-                <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text3,marginBottom:6 }}>End date</label>
+                <label className="hd" style={{ display:"block",fontSize:12,fontWeight:600,color:T.text3,marginBottom:6 }}>Available through</label>
                 <input
                   type="date"
                   value={availabilityRanges[0]?.end || ""}
@@ -2853,12 +3223,16 @@ export default function TripWizard({
                 />
               </div>
             </div>
+            <p style={{ fontSize:11,color:myRangeDays >= requiredTripDays ? T.success : T.text3,marginTop:8 }}>
+              Current range: {myRangeDays > 0 ? `${myRangeDays} day${myRangeDays === 1 ? "" : "s"}` : "not set"}.
+              {myRangeDays > 0 && myRangeDays < requiredTripDays ? ` Increase it to at least ${requiredTripDays} days.` : ""}
+            </p>
             <button
               onClick={handleAvailabilitySearch}
               disabled={availabilityBusy}
               style={{ marginTop:12,width:"100%",minHeight:42,padding:"10px 12px",borderRadius:10,border:"none",background:availabilityBusy?T.border:T.primary,color:availabilityBusy?T.text3:"#fff",fontSize:14,fontWeight:600,cursor:availabilityBusy?"default":"pointer" }}
             >
-              {availabilityBusy ? "Saving and calculating overlap..." : "Save Availability & Find Common Window"}
+              {availabilityBusy ? "Saving and recalculating crew overlap..." : `Save Availability & Check ${requiredTripDays}-Day Overlap`}
             </button>
           </div>
 
@@ -2866,8 +3240,29 @@ export default function TripWizard({
             <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,boxShadow:shadow.sm,animation:"fadeUp .35s ease-out .25s both" }}>
               <p className="hd" style={{ fontWeight:700,fontSize:15,marginBottom:8 }}>Crew Overlap</p>
               <p style={{ fontSize:12,color:T.text3,marginBottom:10 }}>
-                Accepted members: {availabilitySummary?.members_total || 0}
+                Accepted members: {availabilitySummary?.members_total || 0}. Submitted: {submittedMembers.length}/{availabilitySummary?.members_total || 0}.
               </p>
+              <div style={{ display:"flex",flexDirection:"column",gap:8,marginBottom:12 }}>
+                {memberWindows.map((member, idx) => {
+                  const firstWindow = Array.isArray(member.windows) ? member.windows[0] : null;
+                  const isMe = member.user_id === currentUserId;
+                  return (
+                    <div key={`${member.user_id || member.email || idx}`} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,background:isMe?`${T.primary}10`:T.bg,border:`1px solid ${isMe ? T.primary + "33" : T.borderLight}` }}>
+                      <div>
+                        <p className="hd" style={{ fontSize:12,fontWeight:700,color:T.text }}>{member.name || member.email || "Crew member"}{isMe ? " (You)" : ""}</p>
+                        <p style={{ fontSize:11,color:T.text3 }}>
+                          {firstWindow?.start && firstWindow?.end
+                            ? `${firstWindow.start} → ${firstWindow.end} (${inclusiveIsoDays(firstWindow.start, firstWindow.end)} days)`
+                            : "Waiting for availability input"}
+                        </p>
+                      </div>
+                      <span style={{ fontSize:10,fontWeight:700,padding:"4px 8px",borderRadius:999,background:firstWindow ? `${T.success}15` : `${T.warning}15`,color:firstWindow ? T.success : T.warning }}>
+                        {firstWindow ? "Submitted" : "Pending"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
               {hasCommonOverlap && (
                 <div style={{ display:"flex",flexDirection:"column",gap:8,marginBottom:10 }}>
                   {overlapCandidates.length > 0 ? overlapCandidates.map((win, idx) => {
@@ -2878,12 +3273,12 @@ export default function TripWizard({
                         key={`${windowValue?.start || "start"}-${windowValue?.end || "end"}-${idx}`}
                         onClick={() => setSelectedOverlapIndex(idx)}
                         style={{ textAlign:"left",padding:"10px 12px",borderRadius:10,border:`2px solid ${isSelected ? T.success : T.borderLight}`,background:isSelected?`${T.success}12`:T.bg,cursor:"pointer" }}
-                      >
+                        >
                         <span className="hd" style={{ fontWeight:700,fontSize:13,color:T.text }}>
                           {windowValue?.start} → {windowValue?.end}
                         </span>
                         <span style={{ display:"block",fontSize:11,color:T.text3,marginTop:3 }}>
-                          {win?.overlap_days || Math.max(1, diffIsoDays(windowValue?.start, windowValue?.end) + 1)} day overlap
+                          Exact {win?.overlap_days || Math.max(1, diffIsoDays(windowValue?.start, windowValue?.end) + 1)}-day trip window for all accepted members
                         </span>
                       </button>
                     );
@@ -2893,7 +3288,7 @@ export default function TripWizard({
                         {availabilitySummary?.overlap?.start} → {availabilitySummary?.overlap?.end}
                       </span>
                       <span style={{ display:"block",fontSize:11,color:T.text3,marginTop:3 }}>
-                        Common overlap found for all accepted members.
+                        Common {requiredTripDays}-day overlap found for all accepted members.
                       </span>
                     </div>
                   )}
@@ -2901,16 +3296,23 @@ export default function TripWizard({
               )}
               {!hasCommonOverlap && (
                 <div style={{ padding:"10px 12px",borderRadius:10,background:T.errorBg,border:`1px solid ${T.error}33`,marginBottom:10 }}>
-                  <p style={{ fontSize:12,color:T.error,fontWeight:600 }}>No common overlap yet.</p>
+                  <p style={{ fontSize:12,color:T.error,fontWeight:600 }}>No common {requiredTripDays}-day overlap yet.</p>
                   <p style={{ fontSize:11,color:T.text3,marginTop:4 }}>
-                    Ask members to submit wider date ranges.
+                    Ask crew members to widen or shift their ranges until one exact {requiredTripDays}-day window works for everyone.
+                  </p>
+                </div>
+              )}
+              {!allMembersSubmitted && (
+                <div style={{ padding:"10px 12px",borderRadius:10,background:`${T.warning}12`,border:`1px solid ${T.warning}33`,marginBottom:10 }}>
+                  <p style={{ fontSize:12,color:T.warning,fontWeight:700 }}>
+                    Waiting on {pendingMembers.length} crew member{pendingMembers.length === 1 ? "" : "s"} to submit availability.
                   </p>
                 </div>
               )}
               {lockedWindow && (
                 <div style={{ padding:"10px 12px",borderRadius:10,background:T.successBg,border:`1px solid ${T.success}33`,marginBottom:10 }}>
                   <p style={{ fontSize:12,color:T.success,fontWeight:700 }}>
-                    Locked window: {lockedWindow.start} → {lockedWindow.end}
+                    Locked travel dates: {lockedWindow.start} → {lockedWindow.end}
                   </p>
                 </div>
               )}
@@ -2926,8 +3328,50 @@ export default function TripWizard({
   // ── STEP 8: BUDGET ───────────────────────────────────────────────────
   if (stageKey === "budget") return (
     <Shell step={step}>
-      <AgentHeader emoji="💰" name="Budget Agent" desc="Setting your spending plan"/>
-      <GroupRoom stageKey="budget" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+      <AgentHeader emoji="💰" name="Budget Agent" desc="Organizer finalizes the shared budget after reviewing crew preferences"/>
+      <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+        <div style={{ background:T.surface, borderRadius:12, padding:"10px 14px", border:`1px solid ${T.borderLight}`,
+          display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span style={{ fontSize:12, color:T.text3, fontWeight:600 }}>Budget approval:</span>
+          <span style={{ fontSize:12, color:isOrganizer ? T.primary : T.text2, fontWeight:700 }}>
+            {isOrganizer ? "You are the organizer for this step" : "Organizer reviews crew preferences and locks the budget"}
+          </span>
+          {lockedStages[stageKey] && (
+            <span style={{ fontSize:11, fontWeight:700, color:T.success,
+              background:`${T.success}15`, padding:"2px 8px", borderRadius:20, marginLeft:"auto" }}>Locked</span>
+          )}
+        </div>
+        <Chat agent="Budget Agent" emoji="💰" msg="I pulled each crew member's saved budget preference. The organizer sets one shared daily budget after reviewing the group profile."/>
+        <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
+          boxShadow:shadow.sm, animation:"fadeUp .35s ease-out .15s both" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,flexWrap:"wrap",gap:8 }}>
+            <p className="hd" style={{ fontWeight:700,fontSize:15 }}>Crew Budget Preferences</p>
+            <span style={{ fontSize:12,color:T.text3 }}>{memberBudgetPreferences.length} member{memberBudgetPreferences.length === 1 ? "" : "s"}</span>
+          </div>
+          <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+            {memberBudgetPreferences.map((member) => (
+              <div key={member.key} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 12px",
+                borderRadius:10,background:member.isCurrentUser?`${T.primary}10`:T.bg,border:`1px solid ${member.isCurrentUser ? `${T.primary}33` : T.borderLight}` }}>
+                <div style={{ display:"flex",alignItems:"center",gap:10,minWidth:0 }}>
+                  <div style={{ width:30,height:30,borderRadius:999,background:`linear-gradient(135deg,${T.primary}80,${T.accent}80)`,
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#fff",flexShrink:0 }}>
+                    {member.initials}
+                  </div>
+                  <div style={{ minWidth:0 }}>
+                    <p className="hd" style={{ fontSize:12,fontWeight:700,color:T.text }}>
+                      {member.name}{member.isCurrentUser ? " (You)" : ""}{member.isOrganizer ? " · Organizer" : ""}
+                    </p>
+                    <p style={{ fontSize:11,color:T.text3 }}>{member.meta.range}</p>
+                  </div>
+                </div>
+                <span style={{ fontSize:10,fontWeight:700,padding:"4px 8px",borderRadius:999,
+                  background:`${member.meta.color}15`,color:member.meta.color,flexShrink:0 }}>
+                  {member.meta.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
         <Chat agent="Budget Agent" emoji="💰" msg="What's your per-person daily budget? Drag the slider to set it."/>
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
           boxShadow:shadow.sm, animation:"fadeUp .4s ease-out .2s both" }}>
@@ -2940,10 +3384,16 @@ export default function TripWizard({
           </label>
           <input id="budget-slider" aria-label="Daily budget" type="range" min={50} max={800} step={10} value={budgetPerDay}
             onChange={e=>setBudgetPerDay(Number(e.target.value))}
-            style={{ width:"100%",accentColor:T.primary,height:6 }}/>
+            disabled={!isOrganizer}
+            style={{ width:"100%",accentColor:T.primary,height:6,opacity:isOrganizer?1:.6,cursor:isOrganizer?"pointer":"default" }}/>
           <div style={{ display:"flex",justifyContent:"space-between",fontSize:11,color:T.text3,marginTop:6 }}>
             <span>$50</span><span>$200</span><span>$400</span><span>$800</span>
           </div>
+          <p style={{ fontSize:11,color:T.text3,marginTop:10 }}>
+            {isOrganizer
+              ? "Use the crew preferences above as guidance, then lock the shared per-person daily budget."
+              : "Only the organizer can set the final shared budget. Your saved profile preference is shown above for reference."}
+          </p>
         </div>
         {/* Budget allocation — flights removed (individual cost) */}
         <div style={{ background:T.surface,borderRadius:14,padding:18,border:`1px solid ${T.borderLight}`,
@@ -2954,16 +3404,16 @@ export default function TripWizard({
               background:`conic-gradient(${T.primary} 0% 40%, ${T.secondary} 40% 65%, ${T.warning} 65% 85%, ${T.accent} 85% 95%, ${T.text3} 95% 100%)` }}>
               <div style={{ position:"absolute",inset:18,borderRadius:999,background:T.surface,
                 display:"flex",alignItems:"center",justifyContent:"center" }}>
-                <span className="hd" style={{ fontWeight:700,fontSize:14,color:T.text }}>${budgetPerDay*10}</span>
+                <span className="hd" style={{ fontWeight:700,fontSize:14,color:T.text }}>${sharedBudgetTotal}</span>
               </div>
             </div>
             <div style={{ display:"flex",flexDirection:"column",gap:6,flex:1 }}>
               {[
-                { label:"Stays",pct:40,color:T.primary,amt:budgetBreakdown?.accommodation ?? budgetPerDay*10*.4 },
-                { label:"Food",pct:25,color:T.secondary,amt:budgetBreakdown?.dining ?? budgetPerDay*10*.25 },
-                { label:"Activities",pct:20,color:T.warning,amt:budgetBreakdown?.activities ?? budgetPerDay*10*.2 },
-                { label:"Transport",pct:10,color:T.accent,amt:budgetBreakdown?.transport ?? budgetPerDay*10*.1 },
-                { label:"Buffer",pct:5,color:T.text3,amt:budgetBreakdown?.misc ?? budgetPerDay*10*.05 },
+                { label:"Stays",pct:40,color:T.primary,amt:budgetBreakdown?.accommodation ?? sharedBudgetTotal*.4 },
+                { label:"Food",pct:25,color:T.secondary,amt:budgetBreakdown?.dining ?? sharedBudgetTotal*.25 },
+                { label:"Activities",pct:20,color:T.warning,amt:budgetBreakdown?.activities ?? sharedBudgetTotal*.2 },
+                { label:"Transport",pct:10,color:T.accent,amt:budgetBreakdown?.transport ?? sharedBudgetTotal*.1 },
+                { label:"Buffer",pct:5,color:T.text3,amt:budgetBreakdown?.misc ?? sharedBudgetTotal*.05 },
               ].map((c,i)=>(
                 <div key={i} style={{ display:"flex",alignItems:"center",gap:8 }}>
                   <div style={{ width:10,height:10,borderRadius:3,background:c.color,flexShrink:0 }}/>
@@ -2977,7 +3427,47 @@ export default function TripWizard({
             ✈️ Flights are selected individually and not included in this shared budget.
           </p>
         </div>
-      </GroupRoom>
+        {isOrganizer ? (
+          <div style={{ display:"flex", flexDirection:"column", gap:8, animation:"scaleIn .3s ease-out" }}>
+            <div style={{ display:"flex", gap:8 }}>
+              <button
+                onClick={() => lockStage(stageKey)}
+                className="hd"
+                style={{ flex:3, padding:"13px 20px", borderRadius:12, border:"none",
+                  background:T.primary, color:"#fff",
+                  fontSize:15, fontWeight:600, cursor:"pointer", minHeight:48,
+                  boxShadow:`0 2px 8px ${T.primary}30`,
+                  transition:"all .3s", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}
+              >
+                <I n="check" s={16} c="#fff"/>
+                {lockedStages[stageKey] ? "Update & Lock Budget →" : "Finalize Shared Budget →"}
+              </button>
+              <button
+                onClick={() => handleOrganizerVeto(stageKey)}
+                className="hd"
+                style={{ flex:1, padding:"13px 12px", borderRadius:12,
+                  border:`1.5px solid ${T.error}60`,
+                  background:`${T.error}08`, color:T.error,
+                  fontSize:13, fontWeight:600, cursor:"pointer", minHeight:48,
+                  transition:"all .2s", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}
+              >
+                ✕ Send Back
+              </button>
+            </div>
+            <p style={{ fontSize:11, color:T.text3, textAlign:"center" }}>
+              Budget is organizer-final. Crew profile budget tiers are shown above as input for this decision.
+            </p>
+          </div>
+        ) : (
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+            padding:"12px", borderRadius:12,
+            background:`${T.warning}10`, border:`1px solid ${T.warning}30` }}>
+            <span style={{ fontSize:13, color:T.warning, fontWeight:600 }}>
+              Organizer is reviewing crew preferences and will lock the shared budget.
+            </span>
+          </div>
+        )}
+      </div>
     </Shell>
   );
 
@@ -3225,7 +3715,7 @@ export default function TripWizard({
   if (stageKey === "stays") return (
     <Shell step={step}>
       <AgentHeader emoji="🏨" name="Stays Agent" desc="Finding perfect accommodations"/>
-      <GroupRoom stageKey="stays" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]}>
+      <GroupRoom stageKey="stays" members={members} memberVotes={memberVotes} isOrganizer={isOrganizer} onLock={lockStage} onVote={handleMemberVote} onVeto={handleOrganizerVeto} onOverride={handleOrganizerMemberOverride} myVote={myVotes[stageKey]} isLocked={lockedStages[stageKey]} currentUserId={currentUserId}>
         <Chat agent="Stays Agent" emoji="🏨" msg="Here are my top picks for each destination, matched to your budget and preferences:"/>
         {stayDisplay.map((s,i)=>{
           const picked = stayPicks[i];
@@ -3581,4 +4071,19 @@ export default function TripWizard({
   return null;
 }
 
-export { getUserIdFromToken, normalizeFlightLegRows, normalizeAirportCode, inferAirportCode, mapInterestAnswersToCategories, mapInterestAnswersToProfileInterests };
+export {
+  availabilityRangeFitsTrip,
+  availabilityWindowMatchesTripDays,
+  countShortlistedPois,
+  mapMemberFromApi,
+  isShortlistedPoi,
+  normalizeBudgetTier,
+  getUserIdFromToken,
+  inclusiveIsoDays,
+  summarizePoiVoteCounts,
+  normalizeFlightLegRows,
+  normalizeAirportCode,
+  inferAirportCode,
+  mapInterestAnswersToCategories,
+  mapInterestAnswersToProfileInterests,
+};
