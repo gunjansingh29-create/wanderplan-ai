@@ -98,20 +98,21 @@ Central coordinator that:
 """
 app = FastAPI()
 
-_allowed_origins = os.getenv(
-    "FRONTEND_ORIGINS",
-    ",".join(
-        [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "https://wanderplan-orchestrator.onrender.com",
-            "https://wanderplan-ai.onrender.com",
-        ]
-    ),
-)
+_default_allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://wanderplan-orchestrator.onrender.com",
+    "https://wanderplan-ai.onrender.com",
+]
+_env_allowed_origins = [
+    o.strip()
+    for o in os.getenv("FRONTEND_ORIGINS", "").split(",")
+    if o.strip()
+]
+_allowed_origins = list(dict.fromkeys(_default_allowed_origins + _env_allowed_origins))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _allowed_origins.split(",") if o.strip()],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
