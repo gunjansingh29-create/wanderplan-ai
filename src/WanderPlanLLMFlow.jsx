@@ -31,6 +31,55 @@ async function sv(k,v){
   try{window.localStorage.setItem(k,txt);}catch(e){}
 }
 
+function emptyUserState(){
+  return {name:"",email:"",styles:[],interests:{},budget:"moderate",dietary:[]};
+}
+
+function accountCacheKey(baseKey,token,email){
+  var base=String(baseKey||"").trim();
+  if(!base)return "";
+  var uid=userIdFromToken(token||"");
+  if(uid)return base+":uid:"+uid;
+  var em=String(email||"").trim().toLowerCase();
+  if(em)return base+":email:"+em;
+  return base;
+}
+
+async function ldAccount(baseKey,token,email,fb){
+  var miss={};
+  var scopedKey=accountCacheKey(baseKey,token,email);
+  if(scopedKey&&scopedKey!==baseKey){
+    var scoped=await ld(scopedKey,miss);
+    if(scoped!==miss)return scoped;
+  }
+  return ld(baseKey,fb);
+}
+
+async function svAccount(baseKey,token,email,value){
+  var scopedKey=accountCacheKey(baseKey,token,email);
+  return sv(scopedKey||baseKey,value);
+}
+
+function mergeProfileIntoUser(baseUser,profile,emailHint,nameHint){
+  var base=Object.assign(emptyUserState(),baseUser||{});
+  var prof=(profile&&typeof profile==="object")?profile:{};
+  var merged=Object.assign({},base,{
+    name:prof.display_name||nameHint||base.name||"",
+    email:String(emailHint||base.email||"").trim().toLowerCase(),
+    styles:Array.isArray(prof.travel_styles)?prof.travel_styles:(base.styles||[]),
+    interests:(prof.interests&&typeof prof.interests==="object")?prof.interests:(base.interests||{}),
+    budget:prof.budget_tier||base.budget||"moderate",
+    dietary:Array.isArray(prof.dietary)?prof.dietary:(base.dietary||[])
+  });
+  return merged;
+}
+
+function normalizePersonalBucketItems(items){
+  return (Array.isArray(items)?items:[]).map(function(it){
+    return Object.assign({id:it.id},it);
+  });
+}
+
 function normalizeApiBase(raw){
   var v=String(raw||"").trim();
   if((v.startsWith('"')&&v.endsWith('"'))||(v.startsWith("'")&&v.endsWith("'"))){
@@ -265,6 +314,20 @@ function readVoteForVoter(row,voter){
   return "";
 }
 
+function isCurrentVoteVoter(voter,currentVoter){
+  var voterAliases=voteKeyAliasesFor(voter);
+  var currentAliases=voteKeyAliasesFor(currentVoter);
+  for(var i=0;i<voterAliases.length;i++){
+    if(currentAliases.indexOf(voterAliases[i])>=0)return true;
+  }
+  return false;
+}
+
+function canEditVoteForMember(voter,currentVoter,isOrganizer){
+  if(isOrganizer)return true;
+  return isCurrentVoteVoter(voter,currentVoter);
+}
+
 function canonicalDestinationVoteKey(name,fallback){
   var raw=String(name||"").trim().toLowerCase();
   var slug=raw.replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
@@ -302,6 +365,21 @@ function readDestinationVoteRow(votesMap,dest){
   pushKey(legacyKey);
   pushKey(canonicalDestinationVoteKey(dest&&dest.name,legacyKey||voteKey));
   return mergeVoteRows(votesMap,aliases);
+}
+
+function summarizeDestinationVotes(votesMap,dest,voters,majorityNeeded){
+  var row=readDestinationVoteRow(votesMap,dest);
+  var up=0;var down=0;var votedCount=0;
+  (Array.isArray(voters)?voters:[]).forEach(function(voter){
+    var val=readVoteForVoter(row,voter);
+    if(val==="up"){up++;votedCount++;}
+    else if(val==="down"){down++;votedCount++;}
+  });
+  var totalVoters=(Array.isArray(voters)?voters:[]).length;
+  var needed=Math.max(1,Number(majorityNeeded)||0||1);
+  var allVoted=votedCount===totalVoters&&totalVoters>0;
+  var majorityWin=up>=needed&&up>down;
+  return {row:row,up:up,down:down,votedCount:votedCount,allVoted:allVoted,majorityWin:majorityWin};
 }
 
 function canonicalPoiVoteKey(poi,idx){
@@ -787,7 +865,7 @@ export default function WanderPlan(){
   var[pendingInviteAction,setPIA]=useState("accept");
   var[pendingTripJoinId,setPTJ]=useState("");
   var[pendingTripJoinAction,setPTJA]=useState("");
-  var[user,setUser]=useState({name:"",email:"",styles:[],interests:{},budget:"moderate",dietary:[]});
+  var[user,setUser]=useState(emptyUserState());
   var[crew,setCrew]=useState([]);
   var[bucket,setBucket]=useState([]);
   var[trips,setTrips]=useState([]);
@@ -872,7 +950,6 @@ export default function WanderPlan(){
         setCM(tripActionInUrl==="reject"?"Trip invitation detected. Sign in to reject this trip invite.":"Trip invitation detected. Sign in to review this trip invite.");
       }
     }catch(e){}
-    var u=await ld("wp-u",null);if(u)setUser(u);
     var savedCreds=await ld("wp-login-creds",null);
     if(savedCreds&&savedCreds.remember){
       setRememberCreds(true);
@@ -880,9 +957,11 @@ export default function WanderPlan(){
       if(savedCreds.password)setSigninPass(savedCreds.password);
     }
     var tok=await ld("wp-auth","");if(tok)setAT(tok);
-    var c=await ld("wp-c",null);if(c)setCrew(c);
-    var b=await ld("wp-b",null);if(b)setBucket(b);
-    var t=await ld("wp-t",null);if(t)setTrips(t);
+    var accountEmail=String(savedCreds&&savedCreds.email||"").trim().toLowerCase();
+    var u=await ldAccount("wp-u",tok,accountEmail,null);if(u)setUser(Object.assign(emptyUserState(),u));
+    var c=await ldAccount("wp-c",tok,accountEmail,null);if(c)setCrew(c);
+    var b=await ldAccount("wp-b",tok,accountEmail,null);if(b)setBucket(b);
+    var t=await ldAccount("wp-t",tok,accountEmail,null);if(t)setTrips(t);
     var ch=await ld("wp-ch",null);if(ch&&ch.length>1)setBC(ch);
     setLd(true);
     if(tok){
@@ -890,34 +969,16 @@ export default function WanderPlan(){
         await acceptPendingInvite(tok,inviteTokenInUrl,inviteActionInUrl);
       }catch(e){}
       try{
-        var prof=await apiJson("/me/profile",{method:"GET"},tok);
-        if(prof&&prof.profile){
-          setUser(function(p){return Object.assign({},p,{name:prof.profile.display_name||p.name,email:p.email,styles:prof.profile.travel_styles||[],interests:prof.profile.interests||{},budget:prof.profile.budget_tier||p.budget,dietary:prof.profile.dietary||[]});});
-        }
+        await hydrateSignedInSession(tok,{baseUser:u||Object.assign(emptyUserState(),{email:accountEmail})});
       }catch(e){}
-      setPH(true);
-      try{
-        var bl=await apiJson("/me/bucket-list",{method:"GET"},tok);
-        if(bl&&Array.isArray(bl.items)&&bl.items.length>=0)setBucket(bl.items.map(function(it){return Object.assign({id:it.id},it);}));
-      }catch(e){}
-      try{
-        var peers=await apiJson("/crew/peer-profiles",{method:"GET"},tok);
-        if(peers&&Array.isArray(peers.peers)){
-          setCrew(peers.peers.map(function(p,i){
-            var dn=(p.profile&&p.profile.display_name)||p.name||p.email||("Member "+(i+1));
-            return {id:p.peer_user_id,name:dn,ini:iniFromName(dn),color:CREW_COLORS[i%CREW_COLORS.length],status:"accepted",email:p.email||"",profile:(p&&p.profile&&typeof p.profile==="object")?p.profile:{},relation:"crew"};
-          }));
-        }
-      }catch(e){}
-      try{await refreshTripsFromBackend(tok);}catch(e){}
       setSc("dash");
     }
   })();},[]);
-  useEffect(function(){if(loaded)sv("wp-u",user);},[user,loaded]);
+  useEffect(function(){if(loaded)svAccount("wp-u",authToken,user.email,user);},[user,loaded,authToken]);
   useEffect(function(){if(loaded){if(rememberCreds)sv("wp-auth",authToken||"");else sv("wp-auth","");}},[authToken,loaded,rememberCreds]);
-  useEffect(function(){if(loaded)sv("wp-c",crew);},[crew,loaded]);
-  useEffect(function(){if(loaded)sv("wp-b",bucket);},[bucket,loaded]);
-  useEffect(function(){if(loaded)sv("wp-t",trips);},[trips,loaded]);
+  useEffect(function(){if(loaded)svAccount("wp-c",authToken,user.email,crew);},[crew,loaded,authToken,user.email]);
+  useEffect(function(){if(loaded)svAccount("wp-b",authToken,user.email,bucket);},[bucket,loaded,authToken,user.email]);
+  useEffect(function(){if(loaded)svAccount("wp-t",authToken,user.email,trips);},[trips,loaded,authToken,user.email]);
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
   useEffect(function(){if(chatRef.current)chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
   useEffect(function(){if(sc==="new_trip"){setTIM("");setTIL({});}},[sc]);
@@ -1044,13 +1105,13 @@ export default function WanderPlan(){
       }
     }catch(e){}
   }
-  async function refreshTripsFromBackend(token){
+  async function refreshTripsFromBackend(token,emailOverride){
     var tok=token||authToken;
     if(!tok)return;
     try{
       var r=await apiJson("/me/trips",{method:"GET"},tok);
       var items=(r&&Array.isArray(r.trips))?r.trips:[];
-      var myEmail=String(user.email||"").trim().toLowerCase();
+      var myEmail=String(emailOverride||user.email||"").trim().toLowerCase();
       var mapped=items.map(function(t){
         var myStatusRaw=String(t.my_status||"pending").toLowerCase();
         var tripStatusRaw=String(t.status||"planning").toLowerCase();
@@ -1151,6 +1212,43 @@ export default function WanderPlan(){
         });
       });
     }catch(e){}
+  }
+
+  async function hydrateSignedInSession(token,opts){
+    var o=opts||{};
+    var baseUser=Object.assign(emptyUserState(),o.baseUser||{});
+    var emailHint=String(o.email||baseUser.email||"").trim().toLowerCase();
+    var nameHint=String(o.name||baseUser.name||"").trim();
+    var seededUser=Object.assign({},baseUser,{
+      email:emailHint||baseUser.email||"",
+      name:baseUser.name||nameHint||""
+    });
+    setPH(false);
+    setUser(seededUser);
+    setBucket([]);
+    setCrew([]);
+    setTrips([]);
+    try{
+      var prof=await apiJson("/me/profile",{method:"GET"},token);
+      if(prof&&prof.profile){
+        setUser(mergeProfileIntoUser(seededUser,prof.profile,emailHint,nameHint));
+      }
+    }catch(e){}
+    try{
+      var bl=await apiJson("/me/bucket-list",{method:"GET"},token);
+      if(bl&&Array.isArray(bl.items))setBucket(normalizePersonalBucketItems(bl.items));
+    }catch(e){}
+    try{
+      var peers=await apiJson("/crew/peer-profiles",{method:"GET"},token);
+      if(peers&&Array.isArray(peers.peers)){
+        setCrew(peers.peers.map(function(p,i){
+          var dn=(p.profile&&p.profile.display_name)||p.name||p.email||("Member "+(i+1));
+          return {id:p.peer_user_id,name:dn,ini:iniFromName(dn),color:CREW_COLORS[i%CREW_COLORS.length],status:"accepted",email:p.email||"",profile:(p&&p.profile&&typeof p.profile==="object")?p.profile:{},relation:"crew"};
+        }));
+      }
+    }catch(e){}
+    try{await refreshTripsFromBackend(token,emailHint);}catch(e){}
+    setPH(true);
   }
   function mapBackendPois(rows){
     return (Array.isArray(rows)?rows:[]).map(function(x){
@@ -1644,18 +1742,16 @@ export default function WanderPlan(){
     try{
       var reg=await apiJson("/auth/login",{method:"POST",body:{email:email,password:signinPass}});
       if(reg&&reg.accessToken){
-        setPH(true);
         if(rememberCreds){
           sv("wp-login-creds",{remember:true,email:email,password:signinPass});
         }else{
           sv("wp-login-creds",{remember:false,email:"",password:""});
         }
         setAT(reg.accessToken);
-        upU("email",email);
-        if(reg.name&&!user.name)upU("name",reg.name);
+        var loginBaseUser=Object.assign(emptyUserState(),{email:email,name:String(reg.name||"").trim()});
         await acceptPendingInvite(reg.accessToken);
         await processPendingTripInvite(reg.accessToken);
-        await refreshTripsFromBackend(reg.accessToken);
+        await hydrateSignedInSession(reg.accessToken,{baseUser:loginBaseUser,email:email,name:reg.name});
         go("dash");
       }
     }catch(e){
@@ -1680,18 +1776,16 @@ export default function WanderPlan(){
     try{
       var reg=await apiJson("/auth/register",{method:"POST",body:{email:email,password:signinPass,name:name}});
       if(reg&&reg.accessToken){
-        setPH(true);
         if(rememberCreds){
           sv("wp-login-creds",{remember:true,email:email,password:signinPass});
         }else{
           sv("wp-login-creds",{remember:false,email:"",password:""});
         }
         setAT(reg.accessToken);
-        upU("email",email);
-        if(reg.name&&!user.name)upU("name",reg.name);
+        var signupBaseUser=Object.assign(emptyUserState(),user||{},{email:email,name:name||String(reg.name||"").trim()||String(user&&user.name||"").trim()});
         await acceptPendingInvite(reg.accessToken);
         await processPendingTripInvite(reg.accessToken);
-        await refreshTripsFromBackend(reg.accessToken);
+        await hydrateSignedInSession(reg.accessToken,{baseUser:signupBaseUser,email:email,name:signupBaseUser.name});
         go("ob1");
       }
     }catch(e){setAE(String(e&&e.message||"Sign up failed"));}
@@ -2485,6 +2579,7 @@ export default function WanderPlan(){
       return {id:sid||("trip-dest-"+idx),vote_key:voteKey,name:raw,country:"",bestMonths:[],costPerDay:0,tags:[],bestTimeDesc:"",costNote:""};
     }).filter(Boolean);
     var currentPlannerId=getCurrentPlannerId();
+    var currentVoteActor={id:currentPlannerId,userId:userIdFromToken(authToken),email:user.email||""};
     var destVoteVoters=[{
       id:currentPlannerId,
       userId:userIdFromToken(authToken),
@@ -2508,19 +2603,11 @@ export default function WanderPlan(){
     });
     var majorityNeeded=Math.floor(Math.max(destVoteVoters.length,1)/2)+1;
     function getDestVoteSummary(dest){
-      var row=readDestinationVoteRow(destMemberVotes,dest);
-      var up=0;var down=0;var votedCount=0;
-      destVoteVoters.forEach(function(v){
-        var val=readVoteForVoter(row,v);
-        if(val==="up"){up++;votedCount++;}
-        else if(val==="down"){down++;votedCount++;}
-      });
-      var allVoted=votedCount===destVoteVoters.length&&destVoteVoters.length>0;
-      var majorityWin=up>=majorityNeeded&&up>down;
-      return {up:up,down:down,votedCount:votedCount,allVoted:allVoted,majorityWin:majorityWin};
+      var summary=summarizeDestinationVotes(destMemberVotes,dest,destVoteVoters,majorityNeeded);
+      return {up:summary.up,down:summary.down,votedCount:summary.votedCount,allVoted:summary.allVoted,majorityWin:summary.majorityWin};
     }
     function castDestVote(dest,voter,vote){
-      if(!voter||voter.id!==currentPlannerId)return;
+      if(!voter||!canEditVoteForMember(voter,currentVoteActor,organizerMode))return;
       var aliases=voteKeyAliasesFor(voter);
       if(aliases.length===0)return;
       var voteKey=String(dest&&dest.vote_key||dest&&dest.id||"").trim();
@@ -2890,7 +2977,7 @@ export default function WanderPlan(){
             {destVoteVoters.map(function(vr){
               var row=readDestinationVoteRow(destMemberVotes,d);
               var vv=readVoteForVoter(row,vr);
-              var canEdit=vr.id===currentPlannerId;
+              var canEdit=canEditVoteForMember(vr,currentVoteActor,organizerMode);
               return(<div key={vr.id} style={{display:"flex",alignItems:"center",gap:6}}>
                 <Avi ini={vr.ini} color={vr.color} size={24} name={vr.name}/>
                 <button disabled={!canEdit} onClick={function(){castDestVote(d,vr,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(vv==="up"?C.grn+"55":C.grn+"35"),background:vv==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
@@ -3014,7 +3101,7 @@ export default function WanderPlan(){
               var aliases=voteKeyAliasesFor(vm);
               var hasExisting=aliases.some(function(k){return row[k]!==undefined;});
               if(hasExisting)return;
-              var seedVal=(vm.id===currentPlannerId)?"up":"";
+              var seedVal=isCurrentVoteVoter(vm,currentVoteActor)?"up":"";
               aliases.forEach(function(k){row[k]=seedVal;});
             });
             next[voteKey]=row;
@@ -3162,7 +3249,7 @@ export default function WanderPlan(){
         return String(a.poi.name||"").localeCompare(String(b.poi.name||""));
       });
       function castPoiVote(voteKey,idx,member,vote){
-        if(!member||member.id!==currentPlannerId)return;
+        if(!member||!canEditVoteForMember(member,currentVoteActor,organizerMode))return;
         var aliases=voteKeyAliasesFor(member);
         if(aliases.length===0)return;
         setPV(function(prev){
@@ -3201,7 +3288,7 @@ export default function WanderPlan(){
                 var rowMeta=readPoiVoteRow(poiVotes,r.poi,r.idx);
                 var row=rowMeta.row;
                 var v=readVoteForVoter(row,vm);
-                var canEdit=vm.id===currentPlannerId;
+                var canEdit=canEditVoteForMember(vm,currentVoteActor,organizerMode);
                 return(<div key={vm.id} style={{display:"flex",alignItems:"center",gap:6}}>
                   <Avi ini={vm.ini} color={vm.color} size={24} name={vm.name}/>
                   <button disabled={!canEdit} onClick={function(){castPoiVote(r.vote_key,r.idx,vm,"up");}} style={{width:28,height:28,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:13,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"\uD83D\uDC4D"}</button>
@@ -3637,4 +3724,4 @@ export default function WanderPlan(){
   );
 }
 
-export { makeVoteUserId, voteKeyAliasesFor, readVoteForVoter, mergeVoteRows, readDestinationVoteRow, summarizeInterestConsensus };
+export { accountCacheKey, canEditVoteForMember, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor };
