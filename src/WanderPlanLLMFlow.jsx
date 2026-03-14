@@ -328,6 +328,39 @@ function canEditVoteForMember(voter,currentVoter,isOrganizer){
   return isCurrentVoteVoter(voter,currentVoter);
 }
 
+function dedupeVoteVoters(voters){
+  var out=[];
+  var aliasToIdx={};
+  (Array.isArray(voters)?voters:[]).forEach(function(voter){
+    var aliases=voteKeyAliasesFor(voter);
+    var foundIdx=undefined;
+    for(var i=0;i<aliases.length;i++){
+      if(aliasToIdx[aliases[i]]!==undefined){
+        foundIdx=aliasToIdx[aliases[i]];
+        break;
+      }
+    }
+    if(foundIdx===undefined){
+      foundIdx=out.length;
+      out.push(voter);
+    }else{
+      var existing=out[foundIdx]||{};
+      out[foundIdx]=Object.assign({},voter,existing,{
+        id:existing.id||voter.id||"",
+        userId:existing.userId||voter.userId||"",
+        email:existing.email||voter.email||"",
+        name:existing.name||voter.name||"",
+        ini:existing.ini||voter.ini||"",
+        color:existing.color||voter.color||""
+      });
+    }
+    aliases.forEach(function(alias){
+      aliasToIdx[alias]=foundIdx;
+    });
+  });
+  return out;
+}
+
 function canonicalDestinationVoteKey(name,fallback){
   var raw=String(name||"").trim().toLowerCase();
   var slug=raw.replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
@@ -369,17 +402,30 @@ function readDestinationVoteRow(votesMap,dest){
 
 function summarizeDestinationVotes(votesMap,dest,voters,majorityNeeded){
   var row=readDestinationVoteRow(votesMap,dest);
+  var normalizedVoters=dedupeVoteVoters(voters);
   var up=0;var down=0;var votedCount=0;
-  (Array.isArray(voters)?voters:[]).forEach(function(voter){
+  normalizedVoters.forEach(function(voter){
     var val=readVoteForVoter(row,voter);
     if(val==="up"){up++;votedCount++;}
     else if(val==="down"){down++;votedCount++;}
   });
-  var totalVoters=(Array.isArray(voters)?voters:[]).length;
+  var totalVoters=normalizedVoters.length;
   var needed=Math.max(1,Number(majorityNeeded)||0||1);
   var allVoted=votedCount===totalVoters&&totalVoters>0;
   var majorityWin=up>=needed&&up>down;
   return {row:row,up:up,down:down,votedCount:votedCount,allVoted:allVoted,majorityWin:majorityWin};
+}
+
+function buildCurrentVoteActor(token,userState,tripId){
+  var uid=String(userIdFromToken(token)||"").trim();
+  var email=String(userState&&userState.email||"").trim().toLowerCase();
+  var tid=String(tripId||"").trim();
+  var sharedTrip=!!(token&&tid&&isUuidLike(tid));
+  return {
+    id:sharedTrip?makeVoteUserId(uid,email,""):makeVoteUserId(uid,email,"me"),
+    userId:uid,
+    email:email
+  };
 }
 
 function canonicalPoiVoteKey(poi,idx){
@@ -1417,7 +1463,8 @@ export default function WanderPlan(){
     }catch(e){}
   }
   function getCurrentPlannerId(){
-    return makeVoteUserId(userIdFromToken(authToken),user.email,"me");
+    var tid=String(currentTripId||newTrip.id||"").trim();
+    return buildCurrentVoteActor(authToken,user,tid).id;
   }
   async function refreshTripPlanningState(token,tripId){
     var tok=token||authToken;
@@ -2578,8 +2625,9 @@ export default function WanderPlan(){
       var sid=("trip-dest-"+idx+"-"+raw.toLowerCase().replace(/[^a-z0-9]+/g,"-")).replace(/^-+|-+$/g,"");
       return {id:sid||("trip-dest-"+idx),vote_key:voteKey,name:raw,country:"",bestMonths:[],costPerDay:0,tags:[],bestTimeDesc:"",costNote:""};
     }).filter(Boolean);
-    var currentPlannerId=getCurrentPlannerId();
-    var currentVoteActor={id:currentPlannerId,userId:userIdFromToken(authToken),email:user.email||""};
+    var syncedTripId=String(currentTripId||tr.id||newTrip.id||"").trim();
+    var currentVoteActor=buildCurrentVoteActor(authToken,user,syncedTripId);
+    var currentPlannerId=currentVoteActor.id;
     var destVoteVoters=[{
       id:currentPlannerId,
       userId:userIdFromToken(authToken),
@@ -2591,8 +2639,10 @@ export default function WanderPlan(){
     tm.forEach(function(m,mi){
       var st=mapTripMemberStatus(m&&(m.trip_status||m.status));
       if(st==="accepted"||tripJoined[m.id]){
+        var memberVoteId=makeVoteUserId(m.id,m.email,"");
+        if(!memberVoteId)return;
         destVoteVoters.push({
-          id:makeVoteUserId(m.id,m.email,("member-"+mi)),
+          id:memberVoteId,
           userId:m.id||"",
           email:m.email||"",
           name:m.name||m.email||("Member "+(mi+1)),
@@ -2601,6 +2651,7 @@ export default function WanderPlan(){
         });
       }
     });
+    destVoteVoters=dedupeVoteVoters(destVoteVoters);
     var majorityNeeded=Math.floor(Math.max(destVoteVoters.length,1)/2)+1;
     function getDestVoteSummary(dest){
       var summary=summarizeDestinationVotes(destMemberVotes,dest,destVoteVoters,majorityNeeded);
@@ -3724,4 +3775,4 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, canEditVoteForMember, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor };
+export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, dedupeVoteVoters, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor };

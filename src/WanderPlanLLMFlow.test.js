@@ -2,7 +2,9 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   accountCacheKey,
+  buildCurrentVoteActor,
   canEditVoteForMember,
+  dedupeVoteVoters,
   emptyUserState,
   isCurrentVoteVoter,
   makeVoteUserId,
@@ -141,6 +143,62 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     expect(canEditVoteForMember(crew, current, false)).toBe(false);
   });
 
+  test("dedupeVoteVoters merges the same member represented by uuid and email aliases", () => {
+    expect(
+      dedupeVoteVoters([
+        {
+          id: "email:bob@test.com",
+          email: "bob@test.com",
+          name: "Bob Email",
+        },
+        {
+          id: "00000000-0000-0000-0000-000000000002",
+          userId: "00000000-0000-0000-0000-000000000002",
+          email: "bob@test.com",
+          name: "Bob UUID",
+        },
+      ])
+    ).toEqual([
+      expect.objectContaining({
+        id: "email:bob@test.com",
+        userId: "00000000-0000-0000-0000-000000000002",
+        email: "bob@test.com",
+      }),
+    ]);
+  });
+
+  test("buildCurrentVoteActor avoids transient me id for synced trips", () => {
+    expect(
+      buildCurrentVoteActor(
+        "test-token:user-123",
+        { email: "" },
+        "00000000-0000-0000-0000-000000000111"
+      )
+    ).toEqual({
+      id: "user-123",
+      userId: "user-123",
+      email: "",
+    });
+    expect(
+      buildCurrentVoteActor(
+        "",
+        { email: "crew@test.com" },
+        "00000000-0000-0000-0000-000000000111"
+      )
+    ).toEqual({
+      id: "email:crew@test.com",
+      userId: "",
+      email: "crew@test.com",
+    });
+    expect(
+      buildCurrentVoteActor("", { email: "" }, "")
+    ).toEqual({
+      id: "me",
+      userId: "",
+      email: "",
+    });
+  });
+
   test("mergeVoteRows combines votes stored under multiple destination aliases", () => {
     expect(
       mergeVoteRows(
@@ -242,6 +300,33 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     expect(summary.up).toBe(2);
     expect(summary.down).toBe(1);
     expect(summary.votedCount).toBe(3);
+    expect(summary.allVoted).toBe(true);
+    expect(summary.majorityWin).toBe(true);
+  });
+
+  test("summarizeDestinationVotes dedupes overlapping voter aliases before counting", () => {
+    const voters = [
+      { id: "user-a" },
+      { id: "email:bob@test.com", email: "bob@test.com" },
+      {
+        id: "00000000-0000-0000-0000-000000000002",
+        userId: "00000000-0000-0000-0000-000000000002",
+        email: "bob@test.com",
+      },
+    ];
+    const summary = summarizeDestinationVotes(
+      {
+        "dest:kyoto": {
+          "user-a": "up",
+          "00000000-0000-0000-0000-000000000002": "up",
+        },
+      },
+      { name: "Kyoto", vote_key: "dest:kyoto" },
+      voters,
+      2
+    );
+    expect(summary.up).toBe(2);
+    expect(summary.votedCount).toBe(2);
     expect(summary.allVoted).toBe(true);
     expect(summary.majorityWin).toBe(true);
   });
