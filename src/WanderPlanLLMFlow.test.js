@@ -16,6 +16,7 @@ import {
   readVoteForVoter,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
+  wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
 
@@ -67,6 +68,15 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
     ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+  });
+
+  test("wizardSyncIntervalMs uses fast polling for collaborative steps", () => {
+    expect(wizardSyncIntervalMs(1)).toBe(1200);
+    expect(wizardSyncIntervalMs(2)).toBe(1200);
+    expect(wizardSyncIntervalMs(3)).toBe(1200);
+    expect(wizardSyncIntervalMs(5)).toBe(1200);
+    expect(wizardSyncIntervalMs(6)).toBe(1200);
+    expect(wizardSyncIntervalMs(4)).toBe(3000);
   });
 });
 

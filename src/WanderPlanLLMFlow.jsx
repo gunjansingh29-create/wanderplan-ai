@@ -428,6 +428,12 @@ function buildCurrentVoteActor(token,userState,tripId){
   };
 }
 
+function wizardSyncIntervalMs(stepNum){
+  var step=Number(stepNum||0);
+  if(step===1||step===2||step===3||step===5||step===6)return 1200;
+  return 3000;
+}
+
 function canonicalPoiVoteKey(poi,idx){
   var pid=String(poi&&poi.poi_id||"").trim();
   if(pid)return "poi:"+pid;
@@ -1522,6 +1528,24 @@ export default function WanderPlan(){
       return r;
     }).catch(function(){return null;});
   }
+  function profilePayloadFor(userState){
+    var u=Object.assign(emptyUserState(),userState||{});
+    return {
+      display_name:u.name||"",
+      travel_styles:u.styles||[],
+      interests:u.interests||{},
+      budget_tier:u.budget||"moderate",
+      dietary:u.dietary||[]
+    };
+  }
+  function persistProfileNow(nextUser,tripId){
+    var tid=String(tripId||currentTripId||newTrip.id||"").trim();
+    if(!authToken)return Promise.resolve(null);
+    return apiJson("/me/profile",{method:"PUT",body:profilePayloadFor(nextUser)},authToken).then(function(r){
+      if(tid&&isUuidLike(tid))refreshCurrentTripSharedState(authToken,tid).catch(function(){});
+      return r;
+    }).catch(function(){return null;});
+  }
   function setWizardStepShared(nextStep){
     var n=Math.min(Math.max(0,Number(nextStep)||0),Math.max(WIZ.length-1,0));
     setWS(n);
@@ -1609,7 +1633,7 @@ export default function WanderPlan(){
     if(!loaded||!authToken||sc!=="wizard"||!currentTripId||!isUuidLike(currentTripId))return;
     refreshCurrentTripSharedState();
     refreshTripPlanningState();
-    var syncMs=(wizStep===2||wizStep===6)?1200:3000;
+    var syncMs=wizardSyncIntervalMs(wizStep);
     var t=setInterval(function(){
       refreshCurrentTripSharedState();
       refreshTripPlanningState();
@@ -3051,28 +3075,35 @@ export default function WanderPlan(){
 
     {wizStep===3&&(<div>
       {ab("Interest Profiler","Your profile interests merged with the group. Green = strong consensus.")}
-      {CATS.map(function(cat,i){
-        var sum=summarizeInterestConsensus(cat.id,user.interests,tm,tripJoined);
-        var my=sum.myValue;
-        var yesCount=sum.yesCount;
-        var totalCount=sum.totalCount;
-        var p=sum.pct;
-        return(<div key={cat.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:i<CATS.length-1?"1px solid "+C.border:"none"}}>
-          <span style={{flex:1,fontSize:13,color:C.tx2}}>{cat.q}</span>
-          <div style={{display:"flex",gap:4}}>
-            {[{l:"Y",v:true,c:C.grn},{l:"N",v:false,c:C.red}].map(function(o){
-              var active=my===o.v;
-              return(<button key={o.l} onClick={function(){
-                var next=Object.assign({},user.interests||{});
-                next[cat.id]=o.v;
-                upU("interests",next);
+      {(function(){
+        function setInterestForCurrentUser(catId,val){
+          var next=Object.assign({},user.interests||{});
+          next[catId]=val;
+          var nextUser=Object.assign({},user,{interests:next});
+          setUser(nextUser);
+          persistProfileNow(nextUser,currentTripId||tr.id);
+        }
+        return CATS.map(function(cat,i){
+          var sum=summarizeInterestConsensus(cat.id,user.interests,tm,tripJoined);
+          var my=sum.myValue;
+          var yesCount=sum.yesCount;
+          var totalCount=sum.totalCount;
+          var p=sum.pct;
+          return(<div key={cat.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:i<CATS.length-1?"1px solid "+C.border:"none"}}>
+            <span style={{flex:1,fontSize:13,color:C.tx2}}>{cat.q}</span>
+            <div style={{display:"flex",gap:4}}>
+              {[{l:"Y",v:true,c:C.grn},{l:"N",v:false,c:C.red}].map(function(o){
+                var active=my===o.v;
+                return(<button key={o.l} onClick={function(){
+                setInterestForCurrentUser(cat.id,o.v);
               }} style={{width:28,height:28,borderRadius:6,border:active?"2px solid "+o.c:"1.5px solid "+C.border,background:active?o.c+"12":"transparent",color:active?o.c:C.tx3,fontWeight:700,fontSize:11,cursor:"pointer"}}>{o.l}</button>);
-            })}
-          </div>
-          <div style={{width:80,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:p+"%",background:p>=70?C.grn:p>=40?C.wrn:C.red,borderRadius:999}}/></div>
-          <span style={{fontSize:12,fontWeight:600,color:p>=70?C.grn:p>=40?C.wrn:C.red,minWidth:68,textAlign:"right"}}>{p+"% ("+yesCount+"/"+totalCount+")"}</span>
-        </div>);
-      })}
+              })}
+            </div>
+            <div style={{width:80,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:p+"%",background:p>=70?C.grn:p>=40?C.wrn:C.red,borderRadius:999}}/></div>
+            <span style={{fontSize:12,fontWeight:600,color:p>=70?C.grn:p>=40?C.wrn:C.red,minWidth:68,textAlign:"right"}}>{p+"% ("+yesCount+"/"+totalCount+")"}</span>
+          </div>);
+        });
+      }())}
       {goBtn("Continue")}
     </div>)}
 
@@ -3775,4 +3806,4 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, dedupeVoteVoters, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor };
+export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, dedupeVoteVoters, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor, wizardSyncIntervalMs };
