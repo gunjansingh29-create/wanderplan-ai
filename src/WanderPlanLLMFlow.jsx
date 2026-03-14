@@ -434,6 +434,16 @@ function wizardSyncIntervalMs(stepNum){
   return 3000;
 }
 
+function resolveWizardTripId(currentTripIdValue,newTripValue,tripValue){
+  var preferred=String(currentTripIdValue||"").trim();
+  if(preferred)return preferred;
+  var tripCtx=(tripValue&&typeof tripValue==="object")?tripValue:{};
+  var tripId=String(tripCtx.id||"").trim();
+  if(tripId)return tripId;
+  var nextTrip=(newTripValue&&typeof newTripValue==="object")?newTripValue:{};
+  return String(nextTrip.id||"").trim();
+}
+
 function canonicalPoiVoteKey(poi,idx){
   var pid=String(poi&&poi.poi_id||"").trim();
   if(pid)return "poi:"+pid;
@@ -1321,7 +1331,7 @@ export default function WanderPlan(){
     });
   }
   function syncTripPoisToBackend(statusMap){
-    var tripIdForSync=String(currentTripId||newTrip.id||"").trim();
+    var tripIdForSync=resolveWizardTripId(currentTripId,newTrip);
     if(!(authToken&&tripIdForSync&&isUuidLike(tripIdForSync)))return Promise.resolve(null);
     var rows=(pois||[]);
     if(rows.length===0)return Promise.resolve(null);
@@ -1381,7 +1391,7 @@ export default function WanderPlan(){
   }
   async function refreshCurrentTripSharedState(token,tripId){
     var tok=token||authToken;
-    var tid=String(tripId||currentTripId||"").trim();
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip)).trim();
     if(!(tok&&tid&&isUuidLike(tid)))return;
     try{
       var tripRes=null;
@@ -1469,12 +1479,12 @@ export default function WanderPlan(){
     }catch(e){}
   }
   function getCurrentPlannerId(){
-    var tid=String(currentTripId||newTrip.id||"").trim();
+    var tid=resolveWizardTripId(currentTripId,newTrip);
     return buildCurrentVoteActor(authToken,user,tid).id;
   }
   async function refreshTripPlanningState(token,tripId){
     var tok=token||authToken;
-    var tid=String(tripId||currentTripId||"").trim();
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip)).trim();
     if(!(tok&&tid&&isUuidLike(tid)))return;
     try{
       var ps=await apiJson("/trips/"+tid+"/planning-state",{method:"GET"},tok);
@@ -1516,7 +1526,7 @@ export default function WanderPlan(){
     }catch(e){}
   }
   function saveTripPlanningState(patch){
-    var tid=String(currentTripId||newTrip.id||"").trim();
+    var tid=resolveWizardTripId(currentTripId,newTrip);
     if(!(authToken&&tid&&isUuidLike(tid)))return Promise.resolve(null);
     var body={merge:true,state:{}};
     if(patch&&typeof patch==="object"){
@@ -1539,7 +1549,7 @@ export default function WanderPlan(){
     };
   }
   function persistProfileNow(nextUser,tripId){
-    var tid=String(tripId||currentTripId||newTrip.id||"").trim();
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip)).trim();
     if(!authToken)return Promise.resolve(null);
     return apiJson("/me/profile",{method:"PUT",body:profilePayloadFor(nextUser)},authToken).then(function(r){
       if(tid&&isUuidLike(tid))refreshCurrentTripSharedState(authToken,tid).catch(function(){});
@@ -1568,7 +1578,7 @@ export default function WanderPlan(){
   }
   function isWizardOrganizer(tripCtx){
     var tr=tripCtx||newTrip||{};
-    var tid=String(currentTripId||tr.id||"").trim();
+    var tid=resolveWizardTripId(currentTripId,newTrip,tr);
     if(!isUuidLike(tid))return true;
     var hasRoleHints=!!(tr&&((tr.my_status!==undefined&&tr.my_status!==null)||(tr.my_role!==undefined&&tr.my_role!==null)||(tr.owner_id!==undefined&&tr.owner_id!==null)));
     if(!hasRoleHints)return true;
@@ -1630,7 +1640,8 @@ export default function WanderPlan(){
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,user.email]);
   useEffect(function(){
-    if(!loaded||!authToken||sc!=="wizard"||!currentTripId||!isUuidLike(currentTripId))return;
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    if(!loaded||!authToken||sc!=="wizard"||!activeTripId||!isUuidLike(activeTripId))return;
     refreshCurrentTripSharedState();
     refreshTripPlanningState();
     var syncMs=wizardSyncIntervalMs(wizStep);
@@ -1639,9 +1650,10 @@ export default function WanderPlan(){
       refreshTripPlanningState();
     },syncMs);
     return function(){clearInterval(t);};
-  },[loaded,authToken,sc,currentTripId,user.email,wizStep]);
+  },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,user.email,wizStep]);
   useEffect(function(){
-    if(!loaded||!authToken||sc!=="wizard"||!currentTripId||!isUuidLike(currentTripId))return;
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    if(!loaded||!authToken||sc!=="wizard"||!activeTripId||!isUuidLike(activeTripId))return;
     if(wizStep<5)return;
     if(!Array.isArray(pois)||pois.length===0)return;
     var patch=buildPoiOptionPoolPatch(pois,poiOptionPool);
@@ -1649,9 +1661,9 @@ export default function WanderPlan(){
     if(keys.length===0)return;
     setPOP(function(prev){return Object.assign({},prev||{},patch);});
     saveTripPlanningState({state:{poi_option_pool:patch}}).then(function(){
-      refreshTripPlanningState(authToken,currentTripId).catch(function(){});
+      refreshTripPlanningState(authToken,activeTripId).catch(function(){});
     });
-  },[loaded,authToken,sc,currentTripId,wizStep,pois,poiOptionPool]);
+  },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,wizStep,pois,poiOptionPool]);
   useEffect(function(){
     if(!loaded)return;
     if(!pendingTripJoinId)return;
@@ -1668,7 +1680,8 @@ export default function WanderPlan(){
     refreshCrewFromBackend();
   },[loaded,authToken,sc,wizStep,currentTripId]);
   useEffect(function(){
-    if(!loaded||!authToken||sc!=="wizard"||wizStep!==1||!currentTripId)return;
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    if(!loaded||!authToken||sc!=="wizard"||wizStep!==1||!activeTripId)return;
     var members=(newTrip&&Array.isArray(newTrip.members))?newTrip.members:[];
     var pendingMembers=members.filter(function(m){return isTripInvitePending(m);});
     if(pendingMembers.length===0)return;
@@ -1677,7 +1690,7 @@ export default function WanderPlan(){
     var sendNow=pendingMembers.filter(function(m){
       var em=String(m&&m.email||"").trim().toLowerCase();
       if(!em)return false;
-      var key=currentTripId+"|"+em;
+      var key=activeTripId+"|"+em;
       var last=Number(tripInviteAttemptRef.current[key]||0)||0;
       return (now-last)>15000;
     });
@@ -1685,10 +1698,10 @@ export default function WanderPlan(){
     sendNow.forEach(function(m){
       var em=String(m&&m.email||"").trim().toLowerCase();
       if(!em)return;
-      tripInviteAttemptRef.current[currentTripId+"|"+em]=now;
+      tripInviteAttemptRef.current[activeTripId+"|"+em]=now;
     });
     tripInviteInFlightRef.current=true;
-    Promise.resolve(inviteSelectedMembersToTrip(currentTripId,sendNow)).finally(function(){
+    Promise.resolve(inviteSelectedMembersToTrip(activeTripId,sendNow)).finally(function(){
       tripInviteInFlightRef.current=false;
     });
   },[loaded,authToken,sc,wizStep,currentTripId,newTrip]);
@@ -3806,4 +3819,4 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, dedupeVoteVoters, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, dedupeVoteVoters, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor, wizardSyncIntervalMs };

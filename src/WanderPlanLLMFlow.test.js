@@ -14,6 +14,7 @@ import {
   readDestinationVoteRow,
   voteKeyAliasesFor,
   readVoteForVoter,
+  resolveWizardTripId,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
   wizardSyncIntervalMs,
@@ -77,6 +78,18 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(wizardSyncIntervalMs(5)).toBe(1200);
     expect(wizardSyncIntervalMs(6)).toBe(1200);
     expect(wizardSyncIntervalMs(4)).toBe(3000);
+  });
+
+  test("resolveWizardTripId falls back to newTrip id when currentTripId is missing", () => {
+    expect(
+      resolveWizardTripId("", { id: "trip-from-new-trip" })
+    ).toBe("trip-from-new-trip");
+    expect(
+      resolveWizardTripId("", { id: "trip-from-new-trip" }, { id: "trip-from-view" })
+    ).toBe("trip-from-view");
+    expect(
+      resolveWizardTripId("trip-from-current", { id: "trip-from-new-trip" }, { id: "trip-from-view" })
+    ).toBe("trip-from-current");
   });
 });
 
