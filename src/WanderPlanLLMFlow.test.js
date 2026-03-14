@@ -249,6 +249,21 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     expect(row["user-b"]).toBe("up");
   });
 
+  test("readDestinationVoteRow lets canonical destination votes override stale legacy rows", () => {
+    const row = readDestinationVoteRow(
+      {
+        "trip-dest-0-auckland": {
+          "email:crew@test.com": "down",
+        },
+        "dest:auckland": {
+          "email:crew@test.com": "up",
+        },
+      },
+      { name: "Auckland", vote_key: "dest:auckland", id: "trip-dest-0-auckland" }
+    );
+    expect(row["email:crew@test.com"]).toBe("up");
+  });
+
   test("summarizeDestinationVotes counts 2 of 2 yes votes as complete majority", () => {
     const voters = [{ id: "user-a" }, { id: "user-b" }];
     const summary = summarizeDestinationVotes(
@@ -352,6 +367,77 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     expect(summary.votedCount).toBe(2);
     expect(summary.allVoted).toBe(true);
     expect(summary.majorityWin).toBe(true);
+  });
+
+  test("summarizeDestinationVotes reflects organizer veto when canonical row flips destination to in", () => {
+    const voters = [
+      { id: "organizer-1" },
+      {
+        id: "email:crew@test.com",
+        email: "crew@test.com",
+      },
+    ];
+    const summary = summarizeDestinationVotes(
+      {
+        "trip-dest-0-auckland": {
+          "organizer-1": "up",
+          "email:crew@test.com": "down",
+        },
+        "dest:auckland": {
+          "organizer-1": "up",
+          "email:crew@test.com": "up",
+        },
+      },
+      { name: "Auckland", vote_key: "dest:auckland", id: "trip-dest-0-auckland" },
+      voters,
+      2
+    );
+    expect(summary.up).toBe(2);
+    expect(summary.down).toBe(0);
+    expect(summary.votedCount).toBe(2);
+    expect(summary.allVoted).toBe(true);
+    expect(summary.majorityWin).toBe(true);
+  });
+
+  test("summarizeDestinationVotes keeps total up/down tally in sync after organizer veto", () => {
+    const voters = [
+      { id: "organizer-1" },
+      { id: "email:crew@test.com", email: "crew@test.com" },
+    ];
+    const beforeVeto = summarizeDestinationVotes(
+      {
+        "dest:sydney": {
+          "organizer-1": "up",
+          "email:crew@test.com": "down",
+        },
+      },
+      { name: "Sydney", vote_key: "dest:sydney", id: "trip-dest-0-sydney" },
+      voters,
+      2
+    );
+    const afterVeto = summarizeDestinationVotes(
+      {
+        "trip-dest-0-sydney": {
+          "organizer-1": "up",
+          "email:crew@test.com": "down",
+        },
+        "dest:sydney": {
+          "organizer-1": "up",
+          "email:crew@test.com": "up",
+        },
+      },
+      { name: "Sydney", vote_key: "dest:sydney", id: "trip-dest-0-sydney" },
+      voters,
+      2
+    );
+
+    expect(beforeVeto.up).toBe(1);
+    expect(beforeVeto.down).toBe(1);
+    expect(afterVeto.up).toBe(2);
+    expect(afterVeto.down).toBe(0);
+    expect(afterVeto.votedCount).toBe(2);
+    expect(afterVeto.allVoted).toBe(true);
+    expect(afterVeto.majorityWin).toBe(true);
   });
 });
 

@@ -394,8 +394,8 @@ function readDestinationVoteRow(votesMap,dest){
   }
   var voteKey=String(dest&&dest.vote_key||"").trim();
   var legacyKey=String(dest&&dest.id||"").trim();
-  pushKey(voteKey);
   pushKey(legacyKey);
+  pushKey(voteKey);
   pushKey(canonicalDestinationVoteKey(dest&&dest.name,legacyKey||voteKey));
   return mergeVoteRows(votesMap,aliases);
 }
