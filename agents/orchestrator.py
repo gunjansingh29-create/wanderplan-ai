@@ -2994,10 +2994,11 @@ async def get_trip_planning_state(trip_id: str, user_id: str = Depends(get_curre
             "updated_by": None,
             "updated_at": None,
         }
+    state = _json_obj(row["state"])
     return {
         "trip_id": str(row["trip_id"]),
         "current_step": int(row["current_step"] or 0),
-        "state": row["state"] or {},
+        "state": state,
         "updated_by": str(row["updated_by"]) if row["updated_by"] else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
     }
@@ -3051,9 +3052,7 @@ async def put_trip_planning_state(
                 """,
                 trip_id,
             )
-            existing_state = (existing["state"] or {}) if existing else {}
-            if not isinstance(existing_state, dict):
-                existing_state = {}
+            existing_state = _json_obj((existing["state"] if existing else {}) or {})
             if body.merge:
                 merged_state = _deep_merge_state(existing_state, incoming_state)
             else:
@@ -3076,10 +3075,11 @@ async def put_trip_planning_state(
                 user_id,
             )
 
+    state = _json_obj(row["state"])
     return {
         "trip_id": str(row["trip_id"]),
         "current_step": int(row["current_step"] or 0),
-        "state": row["state"] or {},
+        "state": state,
         "updated_by": str(row["updated_by"]) if row["updated_by"] else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
     }
