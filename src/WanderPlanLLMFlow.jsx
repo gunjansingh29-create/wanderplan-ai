@@ -444,6 +444,16 @@ function resolveWizardTripId(currentTripIdValue,newTripValue,tripValue){
   return String(nextTrip.id||"").trim();
 }
 
+function readVoteDebugFlagFromUrl(){
+  if(typeof window==="undefined")return false;
+  try{
+    var sp=new URLSearchParams(window.location.search||"");
+    var raw=String(sp.get("debug_votes")||sp.get("debugVotes")||"").trim().toLowerCase();
+    return raw==="1"||raw==="true"||raw==="yes";
+  }catch(e){}
+  return false;
+}
+
 function canonicalPoiVoteKey(poi,idx){
   var pid=String(poi&&poi.poi_id||"").trim();
   if(pid)return "poi:"+pid;
@@ -923,6 +933,7 @@ export default function WanderPlan(){
   var[crewInviteCopyMsg,setCICM]=useState("");
   var[tripInviteMsg,setTIM]=useState("");
   var[tripInviteLinks,setTIL]=useState({});
+  var[showVoteDebug,setSVD]=useState(readVoteDebugFlagFromUrl());
   var[pendingInviteToken,setPIT]=useState("");
   var[pendingInviteAction,setPIA]=useState("accept");
   var[pendingTripJoinId,setPTJ]=useState("");
@@ -3048,6 +3059,48 @@ export default function WanderPlan(){
       <div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}>
         <p style={{fontSize:12,color:C.tealL}}>Majority needed: {majorityNeeded} of {destVoteVoters.length}</p>
       </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+        <p style={{fontSize:11,color:C.tx3}}>Debug panel helps compare organizer and crew runtime state on this step.</p>
+        <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+          {showVoteDebug?"Hide Debug":"Show Debug"}
+        </button>
+      </div>
+      {showVoteDebug&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+        <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Vote Debug</p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
+          {[
+            {l:"Resolved trip id",v:syncedTripId||"(missing)"},
+            {l:"Current vote actor",v:JSON.stringify(currentVoteActor)},
+            {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"(none)"},
+            {l:"Voter count",v:String(destVoteVoters.length)}
+          ].map(function(item){
+            return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
+              <p style={{fontSize:11,color:"#fff",wordBreak:"break-word"}}>{item.v}</p>
+            </div>);
+          })}
+        </div>
+        <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+          <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Voters</p>
+          <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:140,overflowY:"auto"}}>{JSON.stringify(destVoteVoters.map(function(v){return {id:v.id,userId:v.userId||"",email:v.email||"",name:v.name||"",aliases:voteKeyAliasesFor(v)};}),null,2)}</pre>
+        </div>
+        <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+          <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw dest_member_votes</p>
+          <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(destMemberVotes||{},null,2)}</pre>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {td.map(function(d,idx){
+            var mergedRow=readDestinationVoteRow(destMemberVotes,d);
+            var summary=summarizeDestinationVotes(destMemberVotes,d,destVoteVoters,majorityNeeded);
+            return(<div key={(d.id||d.name||"dest")+"-debug-"+idx} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+              <p style={{fontSize:11,fontWeight:700,color:"#fff",marginBottom:4}}>{d.name}</p>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>vote_key={String(d.vote_key||"")} legacy_id={String(d.id||"")}</p>
+              <p style={{fontSize:10,color:C.tealL,marginBottom:4}}>summary: {summary.up} up / {summary.down} down / {summary.votedCount} voted / allVoted={String(summary.allVoted)} / majority={String(summary.majorityWin)}</p>
+              <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:120,overflowY:"auto"}}>{JSON.stringify({merged_row:mergedRow},null,2)}</pre>
+            </div>);
+          })}
+        </div>
+      </div>)}
       {td.map(function(d){
         var s=getDestVoteSummary(d);
         return(<div key={d.id} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
