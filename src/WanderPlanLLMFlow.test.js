@@ -5,7 +5,9 @@ import {
   buildCurrentVoteActor,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
+  canonicalMealVoteKey,
   canonicalPoiVoteKeyFromStoredKey,
+  canonicalStayVoteKey,
   dedupeVoteVoters,
   emptyUserState,
   findDuplicatePoiKeys,
@@ -17,13 +19,17 @@ import {
   normalizePoiStateMap,
   normalizePersonalBucketItems,
   readDestinationVoteRow,
+  readMealVoteRow,
   readPoiVoteRow,
+  readStayVoteRow,
   voteKeyAliasesFor,
   readVoteForVoter,
   resolveWizardTripId,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
+  summarizeMealVotes,
   summarizePoiVotes,
+  summarizeStayVotes,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
@@ -568,6 +574,90 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     expect(summary.down).toBe(1);
     expect(summary.votedCount).toBe(2);
     expect(summary.totalVoters).toBe(2);
+  });
+
+  test("canonicalStayVoteKey uses stay identity across screens", () => {
+    expect(
+      canonicalStayVoteKey(
+        { name: "Grand Kyoto Palace", destination: "Kyoto", type: "Hotel" },
+        0
+      )
+    ).toBe("stay:grand-kyoto-palace-kyoto-hotel");
+  });
+
+  test("readStayVoteRow falls back to legacy index rows", () => {
+    const meta = readStayVoteRow(
+      {
+        0: { "user-a": "up" },
+      },
+      { name: "Grand Kyoto Palace", destination: "Kyoto", type: "Hotel" },
+      0
+    );
+    expect(meta.key).toBe("stay:grand-kyoto-palace-kyoto-hotel");
+    expect(meta.row).toEqual({ "user-a": "up" });
+  });
+
+  test("summarizeStayVotes counts shared stay picks correctly", () => {
+    const voters = [{ id: "user-a" }, { id: "user-b" }];
+    const summary = summarizeStayVotes(
+      {
+        "stay:grand-kyoto-palace-kyoto-hotel": {
+          "user-a": "up",
+          "user-b": "down",
+        },
+      },
+      { name: "Grand Kyoto Palace", destination: "Kyoto", type: "Hotel" },
+      0,
+      voters
+    );
+    expect(summary.up).toBe(1);
+    expect(summary.down).toBe(1);
+    expect(summary.votedCount).toBe(2);
+  });
+
+  test("canonicalMealVoteKey uses stable meal slot identity", () => {
+    expect(
+      canonicalMealVoteKey(
+        { day: 1, destination: "Kyoto" },
+        { type: "Dinner", time: "19:00" },
+        0,
+        0
+      )
+    ).toBe("meal:1-kyoto-dinner-19-00");
+  });
+
+  test("readMealVoteRow falls back to legacy day-meal index rows", () => {
+    const meta = readMealVoteRow(
+      {
+        "0-0": { "user-a": "up" },
+      },
+      { day: 1, destination: "Kyoto" },
+      { type: "Dinner", time: "19:00" },
+      0,
+      0
+    );
+    expect(meta.key).toBe("meal:1-kyoto-dinner-19-00");
+    expect(meta.row).toEqual({ "user-a": "up" });
+  });
+
+  test("summarizeMealVotes counts shared meal votes correctly", () => {
+    const voters = [{ id: "user-a" }, { id: "user-b" }];
+    const summary = summarizeMealVotes(
+      {
+        "meal:1-kyoto-dinner-19-00": {
+          "user-a": "up",
+          "user-b": "up",
+        },
+      },
+      { day: 1, destination: "Kyoto" },
+      { type: "Dinner", time: "19:00" },
+      0,
+      0,
+      voters
+    );
+    expect(summary.up).toBe(2);
+    expect(summary.down).toBe(0);
+    expect(summary.votedCount).toBe(2);
   });
 });
 

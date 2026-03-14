@@ -933,6 +933,75 @@ function normalizeStays(rows,dests,budgetTier,totalNights){
   return out;
 }
 
+function canonicalStayVoteKey(stay, idx){
+  var raw=(String(stay&&stay.name||"")+" "+String(stay&&stay.destination||"")+" "+String(stay&&stay.type||"")).trim().toLowerCase();
+  var slug=raw.replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  if(slug)return "stay:"+slug;
+  return "stay:index-"+String(idx);
+}
+
+function readStayVoteRow(votesMap, stay, idx){
+  var map=(votesMap&&typeof votesMap==="object")?votesMap:{};
+  var key=canonicalStayVoteKey(stay,idx);
+  var row=map[key];
+  if(!(row&&typeof row==="object")){
+    row=map[idx];
+    if(!(row&&typeof row==="object"))row=map[String(idx)];
+  }
+  if(!(row&&typeof row==="object"))row={};
+  return {key:key,row:row};
+}
+
+function summarizeStayVotes(votesMap, stay, idx, voters){
+  var rowMeta=readStayVoteRow(votesMap,stay,idx);
+  var row=rowMeta.row;
+  var normalizedVoters=dedupeVoteVoters(voters);
+  var up=0;var down=0;var votedCount=0;
+  normalizedVoters.forEach(function(voter){
+    var v=readVoteForVoter(row,voter);
+    if(v==="up"){up++;votedCount++;}
+    else if(v==="down"){down++;votedCount++;}
+  });
+  return {key:rowMeta.key,row:row,up:up,down:down,votedCount:votedCount,totalVoters:normalizedVoters.length};
+}
+
+function canonicalMealVoteKey(day, meal, dayIndex, mealIndex){
+  var raw=(
+    String(day&&day.day||dayIndex+1)+" "+
+    String(day&&day.destination||meal&&meal.city||"")+" "+
+    String(meal&&meal.type||"")+" "+
+    String(meal&&meal.time||"")
+  ).trim().toLowerCase();
+  var slug=raw.replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  if(slug)return "meal:"+slug;
+  return "meal:index-"+String(dayIndex)+"-"+String(mealIndex);
+}
+
+function readMealVoteRow(votesMap, day, meal, dayIndex, mealIndex){
+  var map=(votesMap&&typeof votesMap==="object")?votesMap:{};
+  var key=canonicalMealVoteKey(day,meal,dayIndex,mealIndex);
+  var row=map[key];
+  if(!(row&&typeof row==="object")){
+    var legacyKey=String(dayIndex)+"-"+String(mealIndex);
+    row=map[legacyKey];
+  }
+  if(!(row&&typeof row==="object"))row={};
+  return {key:key,row:row};
+}
+
+function summarizeMealVotes(votesMap, day, meal, dayIndex, mealIndex, voters){
+  var rowMeta=readMealVoteRow(votesMap,day,meal,dayIndex,mealIndex);
+  var row=rowMeta.row;
+  var normalizedVoters=dedupeVoteVoters(voters);
+  var up=0;var down=0;var votedCount=0;
+  normalizedVoters.forEach(function(voter){
+    var v=readVoteForVoter(row,voter);
+    if(v==="up"){up++;votedCount++;}
+    else if(v==="down"){down++;votedCount++;}
+  });
+  return {key:rowMeta.key,row:row,up:up,down:down,votedCount:votedCount,totalVoters:normalizedVoters.length};
+}
+
 function formatDateISO(d){
   var dt=d instanceof Date?d:new Date(d);
   if(Number.isNaN(dt.getTime()))dt=new Date();
@@ -1093,6 +1162,7 @@ export default function WanderPlan(){
   var[consensusMsg,setCSM]=useState("");
   var[durPerDest,setDPD]=useState({});
   var[stays,setStays]=useState([]);
+  var[stayVotes,setStayVotes]=useState({});
   var[stayLoad,setSL]=useState(false);
   var[stayDone,setSD]=useState(false);
   var[stayPick,setStayPick]=useState({});
@@ -1100,9 +1170,9 @@ export default function WanderPlan(){
   var[stayAskLoad,setSAL]=useState(false);
   var[stayChat,setSChat]=useState([]);
   var[meals,setMeals]=useState([]);
+  var[mealVotes,setMealVotes]=useState({});
   var[mealLoad,setML]=useState(false);
   var[mealDone,setMD]=useState(false);
-  var[mealStatus,setMS]=useState({});
   var[mealAsk,setMA]=useState("");
   var[mealAskLoad,setMAL]=useState(false);
   var[mealChat,setMChat]=useState([]);
@@ -1497,12 +1567,17 @@ export default function WanderPlan(){
       meal.city=String(picked.city||meal.city||"");
       meal.travelMinutes=Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(picked.travelMinutes!==undefined)?picked.travelMinutes:meal.travelMinutes)||0;
       next[dayIndex].meals[mealIndex]=meal;
+      var mealKey=canonicalMealVoteKey(next[dayIndex],meal,dayIndex,mealIndex);
+      setMealVotes(function(prevVotes){
+        var out=Object.assign({},prevVotes||{});
+        delete out[mealKey];
+        delete out[String(dayIndex)+"-"+String(mealIndex)];
+        saveTripPlanningState({state:{meal_plan:next,meal_votes:out}}).then(function(){
+          refreshTripPlanningState(authToken,currentTripId||newTrip.id).catch(function(){});
+        });
+        return out;
+      });
       return next;
-    });
-    setMS(function(prev){
-      var n=Object.assign({},prev||{});
-      delete n[dayIndex+"-"+mealIndex];
-      return n;
     });
   }
   async function refreshCurrentTripSharedState(token,tripId){
@@ -1639,6 +1714,16 @@ export default function WanderPlan(){
           });
         }
       }
+      if(Array.isArray(st.stay_options)){
+        setStays(st.stay_options);
+        setSD(st.stay_options.length>0);
+      }
+      setStayVotes((st.stay_votes&&typeof st.stay_votes==="object")?st.stay_votes:{});
+      if(Array.isArray(st.meal_plan)){
+        setMeals(st.meal_plan);
+        setMD(st.meal_plan.length>0);
+      }
+      setMealVotes((st.meal_votes&&typeof st.meal_votes==="object")?st.meal_votes:{});
     }catch(e){}
   }
   function saveTripPlanningState(patch){
@@ -1669,6 +1754,10 @@ export default function WanderPlan(){
         }
         if(state.poi_votes&&typeof state.poi_votes==="object")setPV(normalizePoiStateMap(state.poi_votes,pois,state.poi_option_pool||poiOptionPool));
         if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(normalizePoiStateMap(state.poi_member_choices,pois,state.poi_option_pool||poiOptionPool));
+        if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
+        if(state.stay_votes&&typeof state.stay_votes==="object")setStayVotes(state.stay_votes);
+        if(Array.isArray(state.meal_plan)){setMeals(state.meal_plan);setMD(state.meal_plan.length>0);}
+        if(state.meal_votes&&typeof state.meal_votes==="object")setMealVotes(state.meal_votes);
       }
       return r;
     }).catch(function(){return null;});
@@ -3788,12 +3877,79 @@ export default function WanderPlan(){
 
     {wizStep===10&&(function(){
       var grpSize=(jc||0)+1;var totalN=10;
-      var destGroups={};if(stays.length>0)stays.forEach(function(s){var d=s.destination||"Other";if(!destGroups[d])destGroups[d]=[];destGroups[d].push(s);});
+      var voteMembers=[{
+        id:currentPlannerId,
+        userId:userIdFromToken(authToken),
+        email:user.email||"",
+        name:user.name||user.email||"You",
+        ini:iniFromName(user.name||user.email||"You"),
+        color:C.gold
+      }];
+      (tm||[]).forEach(function(m){
+        voteMembers.push({
+          id:makeVoteUserId(m.id,m.email,("crew-"+voteMembers.length)),
+          userId:m.id||"",
+          email:m.email||"",
+          name:m.name||m.email||"Crew",
+          ini:m.ini||iniFromName(m.name||m.email||"Crew"),
+          color:m.color||CREW_COLORS[voteMembers.length%CREW_COLORS.length]
+        });
+      });
+      voteMembers=dedupeVoteVoters(voteMembers);
+      var majorityNeeded=Math.floor(Math.max(voteMembers.length,1)/2)+1;
+      var destGroups={};if(stays.length>0)stays.forEach(function(s,idx){var d=s.destination||"Other";if(!destGroups[d])destGroups[d]=[];destGroups[d].push({stay:s,idx:idx,localIndex:destGroups[d].length});});
       var destList=Object.keys(destGroups);
-      var allPicked=destList.length>0&&destList.every(function(d){return stayPick[d]!==undefined;});
-      var pickedStays=[];destList.forEach(function(d){if(stayPick[d]!==undefined){var s=destGroups[d][stayPick[d]];if(s)pickedStays.push(s);}});
+      function rankStayOptions(destName){
+        return (destGroups[destName]||[]).map(function(entry){
+          var summary=summarizeStayVotes(stayVotes,entry.stay,entry.idx,voteMembers);
+          return Object.assign({},entry,{summary:summary});
+        }).sort(function(a,b){
+          if(b.summary.up!==a.summary.up)return b.summary.up-a.summary.up;
+          if(a.summary.down!==b.summary.down)return a.summary.down-b.summary.down;
+          if((a.stay.ratePerNight||0)!==(b.stay.ratePerNight||0))return (a.stay.ratePerNight||0)-(b.stay.ratePerNight||0);
+          return String(a.stay.name||"").localeCompare(String(b.stay.name||""));
+        });
+      }
+      function summarizeStayDestination(destName){
+        var entries=destGroups[destName]||[];
+        var voted=0;
+        voteMembers.forEach(function(vm){
+          var hasVote=entries.some(function(entry){
+            var v=readVoteForVoter(readStayVoteRow(stayVotes,entry.stay,entry.idx).row,vm);
+            return v==="up"||v==="down";
+          });
+          if(hasVote)voted++;
+        });
+        return {votedCount:voted,allVoted:voted===voteMembers.length&&voteMembers.length>0};
+      }
+      function voteForStay(destName, chosenEntry){
+        if(!currentPlannerId||!chosenEntry)return;
+        var aliases=voteKeyAliasesFor(currentVoteActor);
+        if(aliases.length===0)return;
+        setStayVotes(function(prev){
+          var next=Object.assign({},prev||{});
+          (destGroups[destName]||[]).forEach(function(entry){
+            var rowMeta=readStayVoteRow(next,entry.stay,entry.idx);
+            var row=Object.assign({},rowMeta.row||{});
+            aliases.forEach(function(alias){row[alias]=entry.idx===chosenEntry.idx?"up":"down";});
+            next[rowMeta.key]=row;
+          });
+          saveTripPlanningState({state:{stay_votes:next}}).then(function(){
+            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          });
+          return next;
+        });
+      }
+      var allPicked=destList.length>0&&destList.every(function(d){return summarizeStayDestination(d).allVoted;});
+      var pickedStays=[];var nextStayPick={};
+      destList.forEach(function(d){
+        var ranked=rankStayOptions(d);
+        if(ranked[0]){
+          pickedStays.push(ranked[0].stay);
+          nextStayPick[d]=ranked[0].localIndex;
+        }
+      });
       var totalCost=pickedStays.reduce(function(s,st){return s+(st.ratePerNight||0)*(st.totalNights||1);},0);
-
       async function runStayLLM(){
         setSL(true);
         setSD(false);
@@ -3810,6 +3966,9 @@ export default function WanderPlan(){
           setStays(norm);
           setSL(false);
           setSD(true);
+          saveTripPlanningState({state:{stay_options:norm,stay_votes:{}}}).then(function(){
+            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          });
           if(norm.length===0){
             setSChat(function(p){return p.concat([{from:"agent",text:"I need more detail. Try: 'boutique hotels with pool in Kyoto under $180'."}]);});
           }
@@ -3819,6 +3978,9 @@ export default function WanderPlan(){
           setStays(fallbackNorm);
           setSL(false);
           setSD(true);
+          saveTripPlanningState({state:{stay_options:fallbackNorm,stay_votes:{}}}).then(function(){
+            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          });
           if(fallbackNorm.length>0){
             setSChat(function(p){return p.concat([{from:"agent",text:"LLM was unavailable, so I pulled stay options from backend search."}]);});
           }else{
@@ -3837,7 +3999,13 @@ export default function WanderPlan(){
           setSAL(false);
           if(res&&res.type==="options"&&res.stays&&res.stays.length>0){
             var norm=normalizeStays(res.stays,dests,user.budget,totalN);
-            setStays(function(prev){return prev.concat(norm);});
+            setStays(function(prev){
+              var next=(Array.isArray(prev)?prev:[]).concat(norm);
+              saveTripPlanningState({state:{stay_options:next,stay_votes:stayVotes}}).then(function(){
+                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+              });
+              return next;
+            });
             setSChat(function(p){return p.concat([{from:"agent",text:"Added "+norm.length+" new option"+(norm.length!==1?"s":"")+"! Scroll up to see them."}]);});
           }
           else if(res&&res.message){setSChat(function(p){return p.concat([{from:"agent",text:res.message}]);});}
@@ -3850,18 +4018,21 @@ export default function WanderPlan(){
         {!stayDone&&!stayLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>LLM agent will generate 2-3 stay options per destination from your budget and trip profile.</p><button onClick={runStayLLM} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>Generate Stay Options</button></div>)}
         {stayLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Analyzing destinations and generating stay options...</p></div>)}
         {stayDone&&stays.length>0&&(<div>
-          {destList.map(function(destName){var opts=destGroups[destName]||[];var picked=stayPick[destName];
+          {destList.map(function(destName){var opts=destGroups[destName]||[];var destSummary=summarizeStayDestination(destName);var ranked=rankStayOptions(destName);var leadingIdx=ranked[0]?ranked[0].idx:-1;
             return(<div key={destName} style={{marginBottom:16}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL}}/><span style={{fontSize:14,fontWeight:700}}>{destName}</span><span style={{fontSize:12,color:C.tx3}}>{opts.length} options</span></div>
-              {opts.map(function(s,si){var sel=picked===si;
-                return(<div key={si} onClick={function(){setStayPick(function(p){var n=Object.assign({},p);n[destName]=si;return n;});}} style={{background:sel?C.teal+"10":C.bg,borderRadius:12,padding:"12px 14px",marginBottom:6,border:"2px solid "+(sel?C.teal+"50":C.border),cursor:"pointer",transition:"all .2s"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL}}/><span style={{fontSize:14,fontWeight:700}}>{destName}</span><span style={{fontSize:12,color:C.tx3}}>{opts.length} options</span><span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:destSummary.allVoted?C.grnBg:C.wrnBg,color:destSummary.allVoted?C.grn:C.wrn,marginLeft:"auto"}}>{destSummary.allVoted?("Ready "+destSummary.votedCount+"/"+voteMembers.length):("Voting "+destSummary.votedCount+"/"+voteMembers.length)}</span></div>
+              {opts.map(function(entry){var s=entry.stay;var si=entry.localIndex;var summary=summarizeStayVotes(stayVotes,s,entry.idx,voteMembers);var mine=readVoteForVoter(summary.row,currentVoteActor)==="up";var leader=entry.idx===leadingIdx;
+                return(<div key={entry.idx} onClick={function(){voteForStay(destName,entry);}} style={{background:leader?C.teal+"10":C.bg,borderRadius:12,padding:"12px 14px",marginBottom:6,border:"2px solid "+(leader?C.teal+"50":C.border),cursor:"pointer",transition:"all .2s"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-                    <div><h4 style={{fontWeight:700,fontSize:14,color:sel?C.tealL:C.tx}}>{s.name}</h4><div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,marginTop:2}}><span>{s.type}</span><span style={{color:C.wrn}}>{"*"+(s.rating||4.5)}</span>{s.neighborhood&&<span>{s.neighborhood}</span>}</div></div>
+                    <div><h4 style={{fontWeight:700,fontSize:14,color:leader?C.tealL:C.tx}}>{s.name}</h4><div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,marginTop:2}}><span>{s.type}</span><span style={{color:C.wrn}}>{"*"+(s.rating||4.5)}</span>{s.neighborhood&&<span>{s.neighborhood}</span>}</div></div>
                     <div style={{textAlign:"right"}}><span style={{fontWeight:700,fontSize:16,color:C.goldT}}>{"$"+(s.ratePerNight||0)}</span><p style={{fontSize:10,color:C.tx3}}>/night x {s.totalNights||"?"}</p></div>
                   </div>
                   {s.amenities&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:4}}>{s.amenities.map(function(a){return <span key={a} style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:"rgba(255,255,255,.04)",color:C.tx2}}>{a}</span>;})}</div>}
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>{s.whyThisOne&&<p style={{fontSize:11,color:C.tealL,fontStyle:"italic",flex:1}}>{s.whyThisOne}</p>}{s.bookingSource&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:C.sky+"15",color:C.sky}}>{s.bookingSource}</span>}</div>
-                  {sel&&<div style={{marginTop:6,padding:"5px 10px",borderRadius:8,background:C.grnBg,textAlign:"center"}}><span style={{fontSize:11,fontWeight:600,color:C.grn}}>Selected</span></div>}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>{s.whyThisOne&&<p style={{fontSize:11,color:C.tealL,fontStyle:"italic",flex:1}}>{s.whyThisOne}</p>}{s.bookingSource&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:C.sky+"15",color:C.sky}}>{s.bookingSource}</span>}</div>
+                  <div style={{marginTop:6,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:11,color:mine?C.grn:C.tx3}}>{mine?"Your pick":"Tap to vote for this stay"}</span>
+                    <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:summary.up>=majorityNeeded?C.grnBg:C.surface,color:summary.up>=majorityNeeded?C.grn:C.tx2}}>{summary.up} / {voteMembers.length} votes</span>
+                  </div>
                 </div>);
               })}
             </div>);
@@ -3871,8 +4042,8 @@ export default function WanderPlan(){
             {stayChat.length>0&&(<div style={{maxHeight:160,overflowY:"auto",padding:"8px 12px"}}>{stayChat.map(function(msg,i){var isU=msg.from==="user";return(<div key={i} style={{display:"flex",justifyContent:isU?"flex-end":"flex-start",marginBottom:5}}><div style={{maxWidth:"85%",padding:"7px 11px",borderRadius:isU?"10px 10px 3px 10px":"10px 10px 10px 3px",background:isU?C.teal+"20":C.surface,border:"1px solid "+(isU?C.teal+"25":C.border),fontSize:13,lineHeight:1.5,color:isU?"#fff":C.tx2}}>{msg.text}</div></div>);})}{stayAskLoad&&<div style={{display:"flex",gap:4,padding:"4px 0"}}><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div>}</div>)}
             <div style={{display:"flex",gap:6,padding:"8px 10px",borderTop:stayChat.length>0?"1px solid "+C.border:"none"}}><input value={stayAsk} onChange={function(e){setSA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendStayChat();}} placeholder="'cheaper in Kyoto' or 'need a pool'" disabled={stayAskLoad} style={{flex:1,padding:"8px 11px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:12,color:"#fff",opacity:stayAskLoad?.5:1}}/><button onClick={sendStayChat} disabled={stayAskLoad} style={{padding:"7px 12px",borderRadius:8,border:"none",background:stayAskLoad?C.border:C.teal,color:stayAskLoad?C.tx3:"#fff",fontSize:11,fontWeight:600,cursor:stayAskLoad?"default":"pointer"}}>Ask</button></div>
           </div>
-          {allPicked&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{pickedStays.length} stays. Total: ${totalCost}</p></div>{goBtn("Confirm Stays ($"+totalCost+")")}</div>)}
-          {!allPicked&&destList.length>0&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>Pick one per destination to continue.</p>}
+          {allPicked&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{pickedStays.length} leading stays. Total: ${totalCost}</p></div><button onClick={function(){setStayPick(nextStayPick);adv();}} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{"Confirm Stays ($"+totalCost+")"}</button></div>)}
+          {!allPicked&&destList.length>0&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>Each traveler needs to vote for one stay per destination to continue.</p>}
         </div>)}
         {stayDone&&stays.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"12px 0"}}>No results. Describe what you need:</p><div style={{display:"flex",gap:6}}><input value={stayAsk} onChange={function(e){setSA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendStayChat();}} placeholder="e.g. 'Airbnbs in Santorini under $150'" style={{flex:1,padding:"9px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/><button onClick={sendStayChat} style={{padding:"8px 14px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>Ask</button></div></div>)}
       </div>);
@@ -3881,10 +4052,46 @@ export default function WanderPlan(){
     {wizStep===11&&(function(){
       var grpSize=(jc||0)+1;var dietStr=(user.dietary||[]).join(", ")||"none";
       var totalDays=10;
+      var voteMembers=[{
+        id:currentPlannerId,
+        userId:userIdFromToken(authToken),
+        email:user.email||"",
+        name:user.name||user.email||"You",
+        ini:iniFromName(user.name||user.email||"You"),
+        color:C.gold
+      }];
+      (tm||[]).forEach(function(m){
+        voteMembers.push({
+          id:makeVoteUserId(m.id,m.email,("crew-"+voteMembers.length)),
+          userId:m.id||"",
+          email:m.email||"",
+          name:m.name||m.email||"Crew",
+          ini:m.ini||iniFromName(m.name||m.email||"Crew"),
+          color:m.color||CREW_COLORS[voteMembers.length%CREW_COLORS.length]
+        });
+      });
+      voteMembers=dedupeVoteVoters(voteMembers);
+      var majorityNeeded=Math.floor(Math.max(voteMembers.length,1)/2)+1;
       var approvedMeals=[];var rejectedMeals=[];var pendingMeals=[];
-      meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){var k=di+"-"+mi;if(mealStatus[k]==="yes")approvedMeals.push(m);else if(mealStatus[k]==="no")rejectedMeals.push(m);else pendingMeals.push(m);});});
+      meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);if(summary.up>=majorityNeeded&&summary.up>summary.down)approvedMeals.push(m);else if(summary.votedCount===voteMembers.length&&summary.down>=summary.up)rejectedMeals.push(m);else pendingMeals.push(m);});});
       var allDecided=mealDone&&meals.length>0&&pendingMeals.length===0;
       var totalMealCost=approvedMeals.reduce(function(s,m){return s+(m.cost||0);},0);
+      function castMealVote(day,meal,di,mi,member,vote){
+        if(!member||!canEditVoteForMember(member,currentVoteActor,organizerMode))return;
+        var aliases=voteKeyAliasesFor(member);
+        if(aliases.length===0)return;
+        setMealVotes(function(prev){
+          var next=Object.assign({},prev||{});
+          var rowMeta=readMealVoteRow(next,day,meal,di,mi);
+          var row=Object.assign({},rowMeta.row||{});
+          aliases.forEach(function(alias){row[alias]=vote;});
+          next[rowMeta.key]=row;
+          saveTripPlanningState({state:{meal_votes:next}}).then(function(){
+            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          });
+          return next;
+        });
+      }
 
       function sendMealChat(){
         if(!mealAsk.trim()||mealAskLoad)return;var msg=mealAsk.trim();setMA("");setMAL(true);
@@ -3893,7 +4100,16 @@ export default function WanderPlan(){
         var sys="You are WanderPlan Dining Agent. User wants to modify meals. Destinations: "+destStr+". Dietary: "+dietStr+". Budget: "+user.budget+".\n\nIf new restaurants: {\"type\":\"meals\",\"day\":{\"day\":1,\"destination\":\"City\",\"meals\":[{\"type\":\"Dinner\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":30,\"dietaryOk\":true,\"note\":\"Why great\"}]}}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nONLY JSON.";
         callLLM(sys,msg,800).then(function(res){
           setMAL(false);
-          if(res&&res.type==="meals"&&res.day){setMeals(function(p){return p.concat([res.day]);});setMChat(function(p){return p.concat([{from:"agent",text:"Added new meal suggestions! Scroll up to review."}]);});}
+          if(res&&res.type==="meals"&&res.day){
+            setMeals(function(p){
+              var next=(Array.isArray(p)?p:[]).concat([res.day]);
+              saveTripPlanningState({state:{meal_plan:next,meal_votes:mealVotes}}).then(function(){
+                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+              });
+              return next;
+            });
+            setMChat(function(p){return p.concat([{from:"agent",text:"Added new meal suggestions! Scroll up to review."}]);});
+          }
           else if(res&&res.message){setMChat(function(p){return p.concat([{from:"agent",text:res.message}]);});}
           else{setMChat(function(p){return p.concat([{from:"agent",text:"Try: 'romantic dinner in Santorini' or 'vegan ramen in Kyoto' or 'cheap street food'"}]);});}
         }).catch(function(){setMAL(false);setMChat(function(p){return p.concat([{from:"agent",text:"Connection issue. Try again."}]);});});
@@ -3949,12 +4165,34 @@ export default function WanderPlan(){
                   });
                 });
                 var rows=Object.keys(byDay).sort(function(a,b){return Number(a)-Number(b);}).map(function(k){return byDay[k];});
-                setMeals(rows);setML(false);setMD(true);return;
+                setMeals(rows);setML(false);setMD(true);
+                saveTripPlanningState({state:{meal_plan:rows,meal_votes:{}}}).then(function(){
+                  refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+                });
+                return;
               }
-              return askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){setMeals(res&&res.length?res:[]);setML(false);setMD(true);});
-            }).catch(function(){askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){setMeals(res&&res.length?res:[]);setML(false);setMD(true);});});
+              return askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
+                var nextMeals=res&&res.length?res:[];
+                setMeals(nextMeals);setML(false);setMD(true);
+                saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
+                  refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+                });
+              });
+            }).catch(function(){askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
+              var nextMeals=res&&res.length?res:[];
+              setMeals(nextMeals);setML(false);setMD(true);
+              saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
+                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+              });
+            });});
           }else{
-            askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){setMeals(res&&res.length?res:[]);setML(false);setMD(true);});
+            askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
+              var nextMeals=res&&res.length?res:[];
+              setMeals(nextMeals);setML(false);setMD(true);
+              saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
+                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+              });
+            });
           }
         }} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>Plan Meals</button></div>)}
         {mealLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Finding restaurants across destinations...</p></div>)}
@@ -3962,7 +4200,7 @@ export default function WanderPlan(){
           {meals.map(function(day,di){
             return(<div key={di} style={{marginBottom:16}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>Day {day.day}</span><span style={{fontSize:12,color:C.tx3}}>{day.destination}{day.date?(" · "+day.date):""}</span></div>
-              {(day.meals||[]).map(function(m,mi){var k=di+"-"+mi;var st=mealStatus[k];var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
+              {(day.meals||[]).map(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);var st=(summary.up>=majorityNeeded&&summary.up>summary.down)?"yes":(summary.votedCount===voteMembers.length&&summary.down>=summary.up?"no":"");var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
                 var opts=Array.isArray(m.options)?m.options:[];
                 var selectedOpt=(m.selectedOption!==undefined&&m.selectedOption!==null)?m.selectedOption:0;
                 return(<div key={mi} style={{display:"flex",flexDirection:"column",gap:6,padding:"8px 0",borderBottom:mi<(day.meals||[]).length-1?"1px solid "+C.border:"none",opacity:st==="no"?.35:1}}>
@@ -3981,12 +4219,7 @@ export default function WanderPlan(){
                       </div>
                     </div>
                     <span style={{fontSize:13,fontWeight:600,color:C.goldT,flexShrink:0}}>{"$"+(m.cost||0)}</span>
-                    {!st&&(<div style={{display:"flex",gap:4,flexShrink:0}}>
-                      <button onClick={function(e){e.stopPropagation();setMS(function(p){var n=Object.assign({},p);n[k]="yes";return n;});}} style={{width:22,height:22,borderRadius:6,border:"1px solid "+C.grn+"30",background:"transparent",color:C.grn,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center"}}>Y</button>
-                      <button onClick={function(e){e.stopPropagation();setMS(function(p){var n=Object.assign({},p);n[k]="no";return n;});}} style={{width:22,height:22,borderRadius:6,border:"1px solid "+C.red+"30",background:"transparent",color:C.red,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center"}}>N</button>
-                    </div>)}
-                    {st==="yes"&&<span style={{fontSize:10,color:C.grn,flexShrink:0}}>OK</span>}
-                    {st==="no"&&<span style={{fontSize:10,color:C.red,flexShrink:0}}>X</span>}
+                    <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:999,background:st==="yes"?C.grnBg:(st==="no"?C.redBg:C.wrnBg),color:st==="yes"?C.grn:(st==="no"?C.red:C.wrn),flexShrink:0}}>{st==="yes"?"Approved":(st==="no"?"Rejected":("Voting "+summary.votedCount+"/"+voteMembers.length))}</span>
                   </div>
                   {opts.length>1&&(<div style={{display:"flex",gap:6,flexWrap:"wrap",paddingLeft:16}}>
                     {opts.map(function(opt,oi){
@@ -3994,6 +4227,17 @@ export default function WanderPlan(){
                       return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{opt.name}{" · $"+(opt.cost||0)}</button>;
                     })}
                   </div>)}
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8,paddingLeft:16}}>
+                    {voteMembers.map(function(vm){
+                      var v=readVoteForVoter(summary.row,vm);
+                      var canEdit=canEditVoteForMember(vm,currentVoteActor,organizerMode);
+                      return(<div key={vm.id} style={{display:"flex",alignItems:"center",gap:6}}>
+                        <Avi ini={vm.ini} color={vm.color} size={22} name={vm.name}/>
+                        <button disabled={!canEdit} onClick={function(e){e.stopPropagation();castMealVote(day,m,di,mi,vm,"up");}} style={{width:26,height:26,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:12,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"👍"}</button>
+                        <button disabled={!canEdit} onClick={function(e){e.stopPropagation();castMealVote(day,m,di,mi,vm,"down");}} style={{width:26,height:26,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:12,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"👎"}</button>
+                      </div>);
+                    })}
+                  </div>
                 </div>);
               })}
             </div>);
@@ -4019,7 +4263,14 @@ export default function WanderPlan(){
       var grpSize=(jc||0)+1;
       var totalDays=0;dests.forEach(function(d){var dd=durPerDest[d.name];totalDays+=dd!==undefined?dd:2;});totalDays=Math.max(totalDays+Math.max(0,dests.length-1)+1,3);
       var pStays=[];Object.keys(stayPick).forEach(function(dn){var grp=(function(){var g={};stays.forEach(function(s){var d=s.destination||"Other";if(!g[d])g[d]=[];g[d].push(s);});return g;})();if(grp[dn]&&grp[dn][stayPick[dn]])pStays.push(grp[dn][stayPick[dn]]);});
-      var appMeals=[];meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){if(mealStatus[di+"-"+mi]==="yes")appMeals.push(m);});});
+      var itineraryVoteMembers=[{
+        id:currentPlannerId,
+        userId:userIdFromToken(authToken),
+        email:user.email||""
+      }].concat((tm||[]).map(function(m){return {id:makeVoteUserId(m.id,m.email,""),userId:m.id||"",email:m.email||""};}));
+      itineraryVoteMembers=dedupeVoteVoters(itineraryVoteMembers);
+      var itineraryMajorityNeeded=Math.floor(Math.max(itineraryVoteMembers.length,1)/2)+1;
+      var appMeals=[];meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,itineraryVoteMembers);if(summary.up>=itineraryMajorityNeeded&&summary.up>summary.down)appMeals.push(m);});});
       var typeIcons={flight:"F",checkin:"C",checkout:"O",activity:"A",meal:"M",travel:"T",rest:"R"};
       var typeColors={flight:C.sky,checkin:C.grn,checkout:C.wrn,activity:C.coral,meal:C.teal,travel:C.purp,rest:"#6366F1"};
 
@@ -4068,7 +4319,14 @@ export default function WanderPlan(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var grpSize=(jc||0)+1;
       var pStays=[];Object.keys(stayPick).forEach(function(dn){var grp=(function(){var g={};stays.forEach(function(s){var d=s.destination||"Other";if(!g[d])g[d]=[];g[d].push(s);});return g;})();if(grp[dn]&&grp[dn][stayPick[dn]])pStays.push(grp[dn][stayPick[dn]]);});
-      var appMeals=[];meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){if(mealStatus[di+"-"+mi]==="yes")appMeals.push(m);});});
+      var finalVoteMembers=[{
+        id:currentPlannerId,
+        userId:userIdFromToken(authToken),
+        email:user.email||""
+      }].concat((tm||[]).map(function(m){return {id:makeVoteUserId(m.id,m.email,""),userId:m.id||"",email:m.email||""};}));
+      finalVoteMembers=dedupeVoteVoters(finalVoteMembers);
+      var finalMajorityNeeded=Math.floor(Math.max(finalVoteMembers.length,1)/2)+1;
+      var appMeals=[];meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,finalVoteMembers);if(summary.up>=finalMajorityNeeded&&summary.up>summary.down)appMeals.push(m);});});
       var totalItinCost=itin.reduce(function(s,d){return s+(d.items||[]).reduce(function(s2,it){return s2+(it.cost||0);},0);},0);
       var stayTotal=pStays.reduce(function(s,st){return s+(st.ratePerNight||0)*(st.totalNights||3);},0);
 
@@ -4102,4 +4360,4 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalPoiVoteKeyFromStoredKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readPoiVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizePoiVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
