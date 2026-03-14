@@ -484,12 +484,12 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     expect(
       findDuplicatePoiKeys([
         { poi_id: "poi-1", name: "Sky Tower", destination: "Auckland", category: "Culture" },
-        { poi_id: "poi-1", name: "Sky Tower", destination: "Auckland", category: "Culture" },
+        { poi_id: "poi-2", name: "Sky Tower", destination: "Auckland", category: "Culture" },
         { name: "Laneway Food Tour", destination: "Melbourne", category: "Food" },
       ])
     ).toEqual([
       expect.objectContaining({
-        key: "poi:poi-1",
+        key: "poi:sky-tower-auckland-culture",
         indexes: [0, 1],
       }),
     ]);
@@ -501,6 +501,11 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
         0: { name: "Sky Tower", destination: "Auckland", category: "Culture" },
       })
     ).toBe("poi:sky-tower-auckland-culture");
+    expect(
+      canonicalPoiVoteKeyFromStoredKey("poi:legacy-id", {
+        "poi:legacy-id": { poi_id: "legacy-id", name: "Sky Tower", destination: "Auckland", category: "Culture" },
+      })
+    ).toBe("poi:sky-tower-auckland-culture");
     expect(canonicalPoiVoteKeyFromStoredKey("poi:abc", {})).toBe("poi:abc");
     expect(canonicalPoiVoteKeyFromStoredKey("missing", {})).toBe("");
   });
@@ -510,9 +515,9 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
       normalizePoiStateMap(
         {
           0: { "user-a": "up" },
-          "poi:sky-tower-auckland-culture": { "user-b": "down" },
+          "poi:legacy-id": { "user-b": "down" },
         },
-        [{ name: "Sky Tower", destination: "Auckland", category: "Culture" }],
+        [{ poi_id: "legacy-id", name: "Sky Tower", destination: "Auckland", category: "Culture" }],
         {}
       )
     ).toEqual({
@@ -527,9 +532,10 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     const meta = readPoiVoteRow(
       {
         0: { "user-a": "down" },
+        "poi:legacy-id": { "user-a": "down" },
         "poi:sky-tower-auckland-culture": { "user-a": "up", "user-b": "up" },
       },
-      { name: "Sky Tower", destination: "Auckland", category: "Culture" },
+      { poi_id: "legacy-id", name: "Sky Tower", destination: "Auckland", category: "Culture" },
       0
     );
     expect(meta.key).toBe("poi:sky-tower-auckland-culture");

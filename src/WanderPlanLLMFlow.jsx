@@ -484,11 +484,11 @@ function readVoteDebugFlagFromUrl(){
 }
 
 function canonicalPoiVoteKey(poi,idx){
-  var pid=String(poi&&poi.poi_id||"").trim();
-  if(pid)return "poi:"+pid;
   var raw=(String(poi&&poi.name||"")+" "+String(poi&&poi.destination||"")+" "+String(poi&&poi.category||"")).trim().toLowerCase();
   var slug=raw.replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
   if(slug)return "poi:"+slug;
+  var pid=String(poi&&poi.poi_id||"").trim();
+  if(pid)return "poi:"+pid;
   return "poi:index-"+String(idx);
 }
 
@@ -509,8 +509,12 @@ function readPoiVoteRow(votesMap,poi,idx){
 function canonicalPoiVoteKeyFromStoredKey(key, map){
   var raw=String(key||"").trim();
   if(!raw)return "";
-  if(raw.indexOf("poi:")===0)return raw;
   var lookup=(map&&typeof map==="object")?map:{};
+  var direct=lookup[raw];
+  if(direct&&typeof direct==="object"){
+    return canonicalPoiVoteKey(direct,raw);
+  }
+  if(raw.indexOf("poi:")===0)return raw;
   var viaMap=lookup[raw];
   if(viaMap&&typeof viaMap==="object"){
     return canonicalPoiVoteKey(viaMap,raw);
@@ -524,6 +528,8 @@ function normalizePoiStateMap(rowsMap, poiList, sharedPool){
   (Array.isArray(poiList)?poiList:[]).forEach(function(poi,idx){
     lookup[String(idx)]=poi;
     lookup[canonicalPoiVoteKey(poi,idx)]=poi;
+    var legacyIdKey=String(poi&&poi.poi_id||"").trim();
+    if(legacyIdKey)lookup["poi:"+legacyIdKey]=poi;
   });
   var pool=(sharedPool&&typeof sharedPool==="object")?sharedPool:{};
   Object.keys(pool).forEach(function(key){
