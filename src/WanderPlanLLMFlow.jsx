@@ -506,6 +506,45 @@ function readPoiVoteRow(votesMap,poi,idx){
   return {key:key,row:row};
 }
 
+function canonicalPoiVoteKeyFromStoredKey(key, map){
+  var raw=String(key||"").trim();
+  if(!raw)return "";
+  if(raw.indexOf("poi:")===0)return raw;
+  var lookup=(map&&typeof map==="object")?map:{};
+  var viaMap=lookup[raw];
+  if(viaMap&&typeof viaMap==="object"){
+    return canonicalPoiVoteKey(viaMap,raw);
+  }
+  return "";
+}
+
+function normalizePoiStateMap(rowsMap, poiList, sharedPool){
+  var map=(rowsMap&&typeof rowsMap==="object")?rowsMap:{};
+  var lookup={};
+  (Array.isArray(poiList)?poiList:[]).forEach(function(poi,idx){
+    lookup[String(idx)]=poi;
+    lookup[canonicalPoiVoteKey(poi,idx)]=poi;
+  });
+  var pool=(sharedPool&&typeof sharedPool==="object")?sharedPool:{};
+  Object.keys(pool).forEach(function(key){
+    lookup[key]=pool[key];
+  });
+  var out={};
+  Object.keys(map).sort(function(a,b){
+    var aCanonical=String(a||"").trim().indexOf("poi:")===0?1:0;
+    var bCanonical=String(b||"").trim().indexOf("poi:")===0?1:0;
+    return aCanonical-bCanonical;
+  }).forEach(function(key){
+    var row=map[key];
+    if(!(row&&typeof row==="object"))return;
+    var canonicalKey=canonicalPoiVoteKeyFromStoredKey(key,lookup);
+    if(!canonicalKey)return;
+    var prev=(out[canonicalKey]&&typeof out[canonicalKey]==="object")?out[canonicalKey]:{};
+    out[canonicalKey]=Object.assign({},prev,row);
+  });
+  return out;
+}
+
 function readPoiSelectionRow(selectionMap,poi,idx){
   var map=(selectionMap&&typeof selectionMap==="object")?selectionMap:{};
   var key=canonicalPoiVoteKey(poi,idx);
@@ -1568,7 +1607,7 @@ export default function WanderPlan(){
       }
       var st=(ps&&ps.state&&typeof ps.state==="object")?ps.state:{};
       setDMV(normalizeDestinationVoteState(st.dest_member_votes));
-      setPV((st.poi_votes&&typeof st.poi_votes==="object")?st.poi_votes:{});
+      setPV(normalizePoiStateMap(st.poi_votes,pois,st.poi_option_pool));
       if(st.poi_option_pool&&typeof st.poi_option_pool==="object"){
         setPOP(st.poi_option_pool);
         setPois(function(prev){
@@ -1579,7 +1618,7 @@ export default function WanderPlan(){
           return merged;
         });
       }
-      setPMC((st.poi_member_choices&&typeof st.poi_member_choices==="object")?st.poi_member_choices:{});
+      setPMC(normalizePoiStateMap(st.poi_member_choices,pois,st.poi_option_pool));
       if(st.poi_member_choices&&typeof st.poi_member_choices==="object"){
         var me=getCurrentPlannerId();
         if(me){
@@ -1607,6 +1646,12 @@ export default function WanderPlan(){
         if(body.state.dest_member_votes&&typeof body.state.dest_member_votes==="object"){
           body.state.dest_member_votes=normalizeDestinationVoteState(body.state.dest_member_votes);
         }
+        if(body.state.poi_votes&&typeof body.state.poi_votes==="object"){
+          body.state.poi_votes=normalizePoiStateMap(body.state.poi_votes,pois,poiOptionPool);
+        }
+        if(body.state.poi_member_choices&&typeof body.state.poi_member_choices==="object"){
+          body.state.poi_member_choices=normalizePoiStateMap(body.state.poi_member_choices,pois,poiOptionPool);
+        }
       }
     }
     return apiJson("/trips/"+tid+"/planning-state",{method:"PUT",body:body},authToken).then(function(r){
@@ -1616,8 +1661,8 @@ export default function WanderPlan(){
         if(state.dest_member_votes&&typeof state.dest_member_votes==="object"){
           setDMV(normalizeDestinationVoteState(state.dest_member_votes));
         }
-        if(state.poi_votes&&typeof state.poi_votes==="object")setPV(state.poi_votes);
-        if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(state.poi_member_choices);
+        if(state.poi_votes&&typeof state.poi_votes==="object")setPV(normalizePoiStateMap(state.poi_votes,pois,state.poi_option_pool||poiOptionPool));
+        if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(normalizePoiStateMap(state.poi_member_choices,pois,state.poi_option_pool||poiOptionPool));
       }
       return r;
     }).catch(function(){return null;});
@@ -3257,12 +3302,11 @@ export default function WanderPlan(){
         });
         if(!currentPlannerId)return;
         setPMC(function(prev){
-          var next=Object.assign({},prev||{});
+          var next=normalizePoiStateMap(prev,pois,poiOptionPool);
           var rowMeta=readPoiSelectionRow(next,pois[idx],idx);
           var row=Object.assign({},rowMeta.row||{});
           row[currentPlannerId]=decision;
           next[rowMeta.key]=row;
-          next[idx]=row;
           saveTripPlanningState({state:{poi_member_choices:next}}).then(function(){
             refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
           });
@@ -3304,7 +3348,7 @@ export default function WanderPlan(){
           if(hasAnyCrewYesForIdx(i))acceptedIdx.push(i);
         });
         setPV(function(prev){
-          var next=Object.assign({},prev||{});
+          var next=normalizePoiStateMap(prev,pois,poiOptionPool);
           acceptedIdx.forEach(function(idx){
             var rowMeta=readPoiVoteRow(next,pois[idx],idx);
             var voteKey=rowMeta.key;
@@ -3317,7 +3361,6 @@ export default function WanderPlan(){
               aliases.forEach(function(k){row[k]=seedVal;});
             });
             next[voteKey]=row;
-            next[idx]=row;
           });
           saveTripPlanningState({state:{poi_votes:next}});
           return next;
@@ -3536,11 +3579,11 @@ export default function WanderPlan(){
         var aliases=voteKeyAliasesFor(member);
         if(aliases.length===0)return;
         setPV(function(prev){
-          var next=Object.assign({},prev||{});
-          var row=Object.assign({},(next[voteKey]||next[idx]||{}));
+          var next=normalizePoiStateMap(prev,pois,poiOptionPool);
+          var rowMeta=readPoiVoteRow(next,pois[idx],idx);
+          var row=Object.assign({},rowMeta.row||{});
           aliases.forEach(function(k){row[k]=vote;});
-          next[voteKey]=row;
-          next[idx]=row;
+          next[rowMeta.key]=row;
           saveTripPlanningState({state:{poi_votes:next}}).then(function(){
             refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
           });
@@ -4053,4 +4096,4 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizeDestinationVoteState, normalizePersonalBucketItems, readDestinationVoteRow, readPoiVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizePoiVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalPoiVoteKeyFromStoredKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readPoiVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizePoiVotes, voteKeyAliasesFor, wizardSyncIntervalMs };

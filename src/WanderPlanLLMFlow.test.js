@@ -5,6 +5,7 @@ import {
   buildCurrentVoteActor,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
+  canonicalPoiVoteKeyFromStoredKey,
   dedupeVoteVoters,
   emptyUserState,
   findDuplicatePoiKeys,
@@ -13,6 +14,7 @@ import {
   mergeProfileIntoUser,
   mergeVoteRows,
   normalizeDestinationVoteState,
+  normalizePoiStateMap,
   normalizePersonalBucketItems,
   readDestinationVoteRow,
   readPoiVoteRow,
@@ -491,6 +493,34 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
         indexes: [0, 1],
       }),
     ]);
+  });
+
+  test("canonicalPoiVoteKeyFromStoredKey maps legacy index keys via known poi lookup", () => {
+    expect(
+      canonicalPoiVoteKeyFromStoredKey("0", {
+        0: { name: "Sky Tower", destination: "Auckland", category: "Culture" },
+      })
+    ).toBe("poi:sky-tower-auckland-culture");
+    expect(canonicalPoiVoteKeyFromStoredKey("poi:abc", {})).toBe("poi:abc");
+    expect(canonicalPoiVoteKeyFromStoredKey("missing", {})).toBe("");
+  });
+
+  test("normalizePoiStateMap collapses legacy index rows into canonical POI keys", () => {
+    expect(
+      normalizePoiStateMap(
+        {
+          0: { "user-a": "up" },
+          "poi:sky-tower-auckland-culture": { "user-b": "down" },
+        },
+        [{ name: "Sky Tower", destination: "Auckland", category: "Culture" }],
+        {}
+      )
+    ).toEqual({
+      "poi:sky-tower-auckland-culture": {
+        "user-a": "up",
+        "user-b": "down",
+      },
+    });
   });
 
   test("readPoiVoteRow prefers canonical key over legacy index rows", () => {
