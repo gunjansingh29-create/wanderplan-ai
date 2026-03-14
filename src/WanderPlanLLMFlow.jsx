@@ -520,6 +520,37 @@ function readPoiSelectionRow(selectionMap,poi,idx){
   return {key:key,row:row};
 }
 
+function summarizePoiVotes(votesMap,poi,idx,voters){
+  var rowMeta=readPoiVoteRow(votesMap,poi,idx);
+  var row=rowMeta.row;
+  var normalizedVoters=dedupeVoteVoters(voters);
+  var up=0;var down=0;var votedCount=0;
+  normalizedVoters.forEach(function(voter){
+    var v=readVoteForVoter(row,voter);
+    if(v==="up"){up++;votedCount++;}
+    else if(v==="down"){down++;votedCount++;}
+  });
+  return {key:rowMeta.key,row:row,up:up,down:down,votedCount:votedCount,totalVoters:normalizedVoters.length};
+}
+
+function findDuplicatePoiKeys(rows){
+  var seen={};
+  var duplicates=[];
+  (Array.isArray(rows)?rows:[]).forEach(function(poi,idx){
+    var key=canonicalPoiVoteKey(poi,idx);
+    if(!seen[key]){
+      seen[key]={key:key,indexes:[idx],names:[String(poi&&poi.name||"").trim()]};
+      return;
+    }
+    seen[key].indexes.push(idx);
+    seen[key].names.push(String(poi&&poi.name||"").trim());
+  });
+  Object.keys(seen).forEach(function(key){
+    if(seen[key].indexes.length>1)duplicates.push(seen[key]);
+  });
+  return duplicates;
+}
+
 function hasAnyYesInPoiSelectionRow(row){
   var src=(row&&typeof row==="object")?row:{};
   var yes=false;
@@ -3323,6 +3354,25 @@ export default function WanderPlan(){
       }
       var poiGroupPrefs=buildPOIGroupPrefs();
       var profCount=poiGroupPrefs.memberSummaries.length;
+      var poiDebugDuplicates=findDuplicatePoiKeys(pois);
+      var poiVoteMembers=[{
+        id:currentPlannerId,
+        userId:userIdFromToken(authToken),
+        email:user.email||"",
+        name:user.name||user.email||"You",
+        ini:iniFromName(user.name||user.email||"You"),
+        color:C.gold
+      }];
+      (tm||[]).forEach(function(m){
+        poiVoteMembers.push({
+          id:makeVoteUserId(m.id,m.email,("crew-"+poiVoteMembers.length)),
+          userId:m.id||"",
+          email:m.email||"",
+          name:m.name||m.email||"Crew",
+          ini:m.ini||iniFromName(m.name||m.email||"Crew"),
+          color:m.color||CREW_COLORS[poiVoteMembers.length%CREW_COLORS.length]
+        });
+      });
 
       function addPOI(){
         if(!poiAsk.trim()||poiAskLoad)return;var msg=poiAsk.trim();setPA("");setPAL(true);
@@ -3335,6 +3385,65 @@ export default function WanderPlan(){
 
       return(<div>
         {ab("POI Discovery Agent",poiDone?(allDecided?accepted.length+" activities selected. Add more or continue.":"Accept or reject each activity:"):("Find activities matched to your group"+(profCount>0?(" ("+profCount+" crew profile"+(profCount>1?"s":"")+" included)"):".") ))}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+          <p style={{fontSize:11,color:C.tx3}}>Debug panel helps compare organizer and crew POI shortlist state on this step.</p>
+          <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            {showVoteDebug?"Hide Debug":"Show Debug"}
+          </button>
+        </div>
+        {showVoteDebug&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+          <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>POI Debug</p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
+            {[
+              {l:"Resolved trip id",v:syncedTripId||"(missing)"},
+              {l:"Current planner id",v:currentPlannerId||"(missing)"},
+              {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"(none)"},
+              {l:"POI count",v:String((pois||[]).length)},
+              {l:"Shared pool count",v:String(Object.keys(poiOptionPool||{}).length)},
+              {l:"Selection row count",v:String(Object.keys(poiMemberChoices||{}).length)},
+              {l:"Vote row count",v:String(Object.keys(poiVotes||{}).length)},
+              {l:"Duplicate canonical keys",v:String(poiDebugDuplicates.length)}
+            ].map(function(item){
+              return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
+                <p style={{fontSize:11,color:"#fff",wordBreak:"break-word"}}>{item.v}</p>
+              </div>);
+            })}
+          </div>
+          <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Voters</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:140,overflowY:"auto"}}>{JSON.stringify(poiVoteMembers.map(function(v){return {id:v.id,userId:v.userId||"",email:v.email||"",name:v.name||"",aliases:voteKeyAliasesFor(v)};}),null,2)}</pre>
+          </div>
+          <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Duplicate canonical keys</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:120,overflowY:"auto"}}>{JSON.stringify(poiDebugDuplicates,null,2)}</pre>
+          </div>
+          <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw poi_option_pool</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:160,overflowY:"auto"}}>{JSON.stringify(poiOptionPool||{},null,2)}</pre>
+          </div>
+          <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw poi_member_choices</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:160,overflowY:"auto"}}>{JSON.stringify(poiMemberChoices||{},null,2)}</pre>
+          </div>
+          <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw poi_votes</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:160,overflowY:"auto"}}>{JSON.stringify(poiVotes||{},null,2)}</pre>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {pois.map(function(p,idx){
+              var selectionMeta=readPoiSelectionRow(poiMemberChoices,p,idx);
+              var voteSummary=summarizePoiVotes(poiVotes,p,idx,poiVoteMembers);
+              var yesCount=Object.keys(selectionMeta.row||{}).filter(function(k){return String(selectionMeta.row[k]||"").trim().toLowerCase()==="yes";}).length;
+              return(<div key={voteSummary.key+"-debug-"+idx} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                <p style={{fontSize:11,fontWeight:700,color:"#fff",marginBottom:4}}>{p.name||("POI "+(idx+1))}</p>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>canonical_key={voteSummary.key} idx={idx} destination={String(p.destination||"")}</p>
+                <p style={{fontSize:10,color:C.tealL,marginBottom:4}}>shortlist_yes={yesCount} vote_summary={voteSummary.up} up / {voteSummary.down} down / {voteSummary.votedCount} voted</p>
+                <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:120,overflowY:"auto"}}>{JSON.stringify({selection_key:selectionMeta.key,selection_row:selectionMeta.row,vote_row:voteSummary.row},null,2)}</pre>
+              </div>);
+            })}
+          </div>
+        </div>)}
         {!poiDone&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent searches {dests.length} destination{dests.length>1?"s":""} based on group interests and budget.</p><button onClick={function(){
           setPL(true);
           setPS({});
@@ -3415,15 +3524,8 @@ export default function WanderPlan(){
         pois.forEach(function(p,i){if(poiStatus[i]!=="no")candidates.push({idx:i,poi:p});});
       }
       var ranked=candidates.map(function(it){
-        var rowMeta=readPoiVoteRow(poiVotes,it.poi,it.idx);
-        var row=rowMeta.row;
-        var up=0;var down=0;
-        voteMembers.forEach(function(vm){
-          var v=readVoteForVoter(row,vm);
-          if(v==="up")up++;
-          else if(v==="down")down++;
-        });
-        return Object.assign({},it,{vote_key:rowMeta.key,up:up,down:down,score:up-down});
+        var voteSummary=summarizePoiVotes(poiVotes,it.poi,it.idx,voteMembers);
+        return Object.assign({},it,{vote_key:voteSummary.key,up:voteSummary.up,down:voteSummary.down,score:voteSummary.up-voteSummary.down});
       }).sort(function(a,b){
         if(b.up!==a.up)return b.up-a.up;
         if(a.down!==b.down)return a.down-b.down;
@@ -3456,6 +3558,52 @@ export default function WanderPlan(){
       }
       return(<div>
         {ab("POI Voting Agent","Crew votes are tabulated here. Ranked from most voted to least voted.")}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+          <p style={{fontSize:11,color:C.tx3}}>Debug panel helps compare organizer and crew POI vote state on this step.</p>
+          <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            {showVoteDebug?"Hide Debug":"Show Debug"}
+          </button>
+        </div>
+        {showVoteDebug&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+          <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>POI Vote Debug</p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
+            {[
+              {l:"Resolved trip id",v:syncedTripId||"(missing)"},
+              {l:"Current vote actor",v:JSON.stringify(currentVoteActor)},
+              {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"(none)"},
+              {l:"Candidate count",v:String(candidates.length)},
+              {l:"Ranked count",v:String(ranked.length)},
+              {l:"Vote row count",v:String(Object.keys(poiVotes||{}).length)},
+              {l:"Selection row count",v:String(Object.keys(poiMemberChoices||{}).length)},
+              {l:"Duplicate canonical keys",v:String(findDuplicatePoiKeys(pois).length)}
+            ].map(function(item){
+              return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
+                <p style={{fontSize:11,color:"#fff",wordBreak:"break-word"}}>{item.v}</p>
+              </div>);
+            })}
+          </div>
+          <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Voters</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:140,overflowY:"auto"}}>{JSON.stringify(voteMembers.map(function(v){return {id:v.id,userId:v.userId||"",email:v.email||"",name:v.name||"",aliases:voteKeyAliasesFor(v)};}),null,2)}</pre>
+          </div>
+          <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw poi_votes</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:160,overflowY:"auto"}}>{JSON.stringify(poiVotes||{},null,2)}</pre>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {ranked.map(function(r){
+              var selectionMeta=readPoiSelectionRow(poiMemberChoices,r.poi,r.idx);
+              var voteSummary=summarizePoiVotes(poiVotes,r.poi,r.idx,voteMembers);
+              return(<div key={r.vote_key+"-vote-debug"} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                <p style={{fontSize:11,fontWeight:700,color:"#fff",marginBottom:4}}>{r.poi.name||("POI "+(r.idx+1))}</p>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>canonical_key={r.vote_key} idx={r.idx} destination={String(r.poi.destination||"")}</p>
+                <p style={{fontSize:10,color:C.tealL,marginBottom:4}}>summary: {voteSummary.up} up / {voteSummary.down} down / {voteSummary.votedCount} voted / score={r.score}</p>
+                <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:120,overflowY:"auto"}}>{JSON.stringify({selection_key:selectionMeta.key,selection_row:selectionMeta.row,vote_row:voteSummary.row},null,2)}</pre>
+              </div>);
+            })}
+          </div>
+        </div>)}
         {ranked.length===0&&<p style={{fontSize:13,color:C.tx2,padding:"8px 0"}}>No POIs available to vote yet. Go back to Activities and approve some first.</p>}
         {ranked.map(function(r){
           return(<div key={r.idx} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
@@ -3905,4 +4053,4 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, dedupeVoteVoters, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizeDestinationVoteState, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizeDestinationVoteState, normalizePersonalBucketItems, readDestinationVoteRow, readPoiVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizePoiVotes, voteKeyAliasesFor, wizardSyncIntervalMs };

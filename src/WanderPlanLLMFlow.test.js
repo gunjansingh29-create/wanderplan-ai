@@ -7,6 +7,7 @@ import {
   canonicalDestinationVoteKeyFromStoredKey,
   dedupeVoteVoters,
   emptyUserState,
+  findDuplicatePoiKeys,
   isCurrentVoteVoter,
   makeVoteUserId,
   mergeProfileIntoUser,
@@ -14,11 +15,13 @@ import {
   normalizeDestinationVoteState,
   normalizePersonalBucketItems,
   readDestinationVoteRow,
+  readPoiVoteRow,
   voteKeyAliasesFor,
   readVoteForVoter,
   resolveWizardTripId,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
+  summarizePoiVotes,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
@@ -473,6 +476,62 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     expect(afterVeto.votedCount).toBe(2);
     expect(afterVeto.allVoted).toBe(true);
     expect(afterVeto.majorityWin).toBe(true);
+  });
+
+  test("findDuplicatePoiKeys flags repeated canonical POIs in the shortlist", () => {
+    expect(
+      findDuplicatePoiKeys([
+        { poi_id: "poi-1", name: "Sky Tower", destination: "Auckland", category: "Culture" },
+        { poi_id: "poi-1", name: "Sky Tower", destination: "Auckland", category: "Culture" },
+        { name: "Laneway Food Tour", destination: "Melbourne", category: "Food" },
+      ])
+    ).toEqual([
+      expect.objectContaining({
+        key: "poi:poi-1",
+        indexes: [0, 1],
+      }),
+    ]);
+  });
+
+  test("readPoiVoteRow prefers canonical key over legacy index rows", () => {
+    const meta = readPoiVoteRow(
+      {
+        0: { "user-a": "down" },
+        "poi:sky-tower-auckland-culture": { "user-a": "up", "user-b": "up" },
+      },
+      { name: "Sky Tower", destination: "Auckland", category: "Culture" },
+      0
+    );
+    expect(meta.key).toBe("poi:sky-tower-auckland-culture");
+    expect(meta.row).toEqual({ "user-a": "up", "user-b": "up" });
+  });
+
+  test("summarizePoiVotes dedupes member aliases and counts synced votes correctly", () => {
+    const voters = [
+      { id: "organizer-1" },
+      { id: "email:crew@test.com", email: "crew@test.com" },
+      {
+        id: "00000000-0000-0000-0000-000000000002",
+        userId: "00000000-0000-0000-0000-000000000002",
+        email: "crew@test.com",
+      },
+    ];
+    const summary = summarizePoiVotes(
+      {
+        "poi:sky-tower-auckland-culture": {
+          "organizer-1": "up",
+          "00000000-0000-0000-0000-000000000002": "down",
+        },
+      },
+      { name: "Sky Tower", destination: "Auckland", category: "Culture" },
+      0,
+      voters
+    );
+    expect(summary.key).toBe("poi:sky-tower-auckland-culture");
+    expect(summary.up).toBe(1);
+    expect(summary.down).toBe(1);
+    expect(summary.votedCount).toBe(2);
+    expect(summary.totalVoters).toBe(2);
   });
 });
 
