@@ -4,12 +4,14 @@ import {
   accountCacheKey,
   buildCurrentVoteActor,
   canEditVoteForMember,
+  canonicalDestinationVoteKeyFromStoredKey,
   dedupeVoteVoters,
   emptyUserState,
   isCurrentVoteVoter,
   makeVoteUserId,
   mergeProfileIntoUser,
   mergeVoteRows,
+  normalizeDestinationVoteState,
   normalizePersonalBucketItems,
   readDestinationVoteRow,
   voteKeyAliasesFor,
@@ -234,6 +236,39 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     ).toEqual({
       "user-a": "up",
       "user-b": "down",
+    });
+  });
+
+  test("canonicalDestinationVoteKeyFromStoredKey maps legacy trip destination ids to canonical keys", () => {
+    expect(canonicalDestinationVoteKeyFromStoredKey("trip-dest-0-auckland")).toBe(
+      "dest:auckland"
+    );
+    expect(canonicalDestinationVoteKeyFromStoredKey("dest:sydney")).toBe(
+      "dest:sydney"
+    );
+    expect(canonicalDestinationVoteKeyFromStoredKey("custom-row")).toBe(
+      "custom-row"
+    );
+  });
+
+  test("normalizeDestinationVoteState collapses legacy and canonical destination rows", () => {
+    expect(
+      normalizeDestinationVoteState({
+        "trip-dest-0-auckland": {
+          "user-a": "up",
+          "email:crew@test.com": "down",
+        },
+        "dest:auckland": {
+          "email:crew@test.com": "up",
+          "user-b": "up",
+        },
+      })
+    ).toEqual({
+      "dest:auckland": {
+        "user-a": "up",
+        "email:crew@test.com": "up",
+        "user-b": "up",
+      },
     });
   });
 

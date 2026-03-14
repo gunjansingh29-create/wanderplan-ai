@@ -369,6 +369,35 @@ function canonicalDestinationVoteKey(name,fallback){
   return fb||"dest:unknown";
 }
 
+function canonicalDestinationVoteKeyFromStoredKey(key){
+  var raw=String(key||"").trim();
+  if(!raw)return "";
+  if(raw.indexOf("dest:")===0)return raw;
+  var legacyMatch=raw.match(/^trip-dest-\d+-(.+)$/i);
+  if(legacyMatch&&legacyMatch[1]){
+    return canonicalDestinationVoteKey(legacyMatch[1],raw);
+  }
+  return raw;
+}
+
+function normalizeDestinationVoteState(votesMap){
+  var map=(votesMap&&typeof votesMap==="object")?votesMap:{};
+  var out={};
+  Object.keys(map).sort(function(a,b){
+    var aCanonical=String(a||"").trim().indexOf("dest:")===0?1:0;
+    var bCanonical=String(b||"").trim().indexOf("dest:")===0?1:0;
+    return aCanonical-bCanonical;
+  }).forEach(function(key){
+    var row=map[key];
+    if(!(row&&typeof row==="object"))return;
+    var canonicalKey=canonicalDestinationVoteKeyFromStoredKey(key);
+    if(!canonicalKey)return;
+    var prev=(out[canonicalKey]&&typeof out[canonicalKey]==="object")?out[canonicalKey]:{};
+    out[canonicalKey]=Object.assign({},prev,row);
+  });
+  return out;
+}
+
 function mergeVoteRows(votesMap,keys){
   var map=(votesMap&&typeof votesMap==="object")?votesMap:{};
   var merged={};
@@ -1507,8 +1536,8 @@ export default function WanderPlan(){
         if(remoteStep!==wizStep)setWS(remoteStep);
       }
       var st=(ps&&ps.state&&typeof ps.state==="object")?ps.state:{};
-      if(st.dest_member_votes&&typeof st.dest_member_votes==="object")setDMV(st.dest_member_votes);
-      if(st.poi_votes&&typeof st.poi_votes==="object")setPV(st.poi_votes);
+      setDMV(normalizeDestinationVoteState(st.dest_member_votes));
+      setPV((st.poi_votes&&typeof st.poi_votes==="object")?st.poi_votes:{});
       if(st.poi_option_pool&&typeof st.poi_option_pool==="object"){
         setPOP(st.poi_option_pool);
         setPois(function(prev){
@@ -1519,8 +1548,8 @@ export default function WanderPlan(){
           return merged;
         });
       }
+      setPMC((st.poi_member_choices&&typeof st.poi_member_choices==="object")?st.poi_member_choices:{});
       if(st.poi_member_choices&&typeof st.poi_member_choices==="object"){
-        setPMC(st.poi_member_choices);
         var me=getCurrentPlannerId();
         if(me){
           setPS(function(prev){
@@ -1542,10 +1571,23 @@ export default function WanderPlan(){
     var body={merge:true,state:{}};
     if(patch&&typeof patch==="object"){
       if(patch.current_step!==undefined)body.current_step=Number(patch.current_step)||0;
-      if(patch.state&&typeof patch.state==="object")body.state=patch.state;
+      if(patch.state&&typeof patch.state==="object"){
+        body.state=Object.assign({},patch.state);
+        if(body.state.dest_member_votes&&typeof body.state.dest_member_votes==="object"){
+          body.state.dest_member_votes=normalizeDestinationVoteState(body.state.dest_member_votes);
+        }
+      }
     }
     return apiJson("/trips/"+tid+"/planning-state",{method:"PUT",body:body},authToken).then(function(r){
       if(r&&r.updated_at)planningStateUpdatedAtRef.current=String(r.updated_at||"");
+      var state=(r&&r.state&&typeof r.state==="object")?r.state:null;
+      if(state){
+        if(state.dest_member_votes&&typeof state.dest_member_votes==="object"){
+          setDMV(normalizeDestinationVoteState(state.dest_member_votes));
+        }
+        if(state.poi_votes&&typeof state.poi_votes==="object")setPV(state.poi_votes);
+        if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(state.poi_member_choices);
+      }
       return r;
     }).catch(function(){return null;});
   }
@@ -2710,24 +2752,15 @@ export default function WanderPlan(){
       var aliases=voteKeyAliasesFor(voter);
       if(aliases.length===0)return;
       var voteKey=String(dest&&dest.vote_key||dest&&dest.id||"").trim();
-      var legacyKey=String(dest&&dest.id||"").trim();
-      var canonicalKey=canonicalDestinationVoteKey(dest&&dest.name,legacyKey||voteKey);
-      if(!voteKey&&!legacyKey&&!canonicalKey)return;
+      var canonicalKey=canonicalDestinationVoteKey(dest&&dest.name,voteKey);
+      if(!voteKey&&!canonicalKey)return;
       setDMV(function(prev){
-        var next=Object.assign({},prev||{});
-        var voteKeys=[];
-        [voteKey,legacyKey,canonicalKey].forEach(function(key){
-          var k=String(key||"").trim();
-          if(!k||voteKeys.indexOf(k)>=0)return;
-          voteKeys.push(k);
-        });
+        var next=normalizeDestinationVoteState(prev);
+        var row=Object.assign({},readDestinationVoteRow(next,dest));
+        aliases.forEach(function(alias){row[alias]=vote;});
+        next[canonicalKey]=row;
         var patchRows={};
-        voteKeys.forEach(function(key){
-          var row=Object.assign({},next[key]||{});
-          aliases.forEach(function(alias){row[alias]=vote;});
-          next[key]=row;
-          patchRows[key]=row;
-        });
+        patchRows[canonicalKey]=row;
         saveTripPlanningState({state:{dest_member_votes:patchRows}}).then(function(){
           refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
         });
@@ -3872,4 +3905,4 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, dedupeVoteVoters, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, dedupeVoteVoters, emptyUserState, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizeDestinationVoteState, normalizePersonalBucketItems, readDestinationVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, voteKeyAliasesFor, wizardSyncIntervalMs };
