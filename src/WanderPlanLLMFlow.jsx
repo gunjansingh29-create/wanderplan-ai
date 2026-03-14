@@ -3922,16 +3922,22 @@ export default function WanderPlan(){
         });
         return {votedCount:voted,allVoted:voted===voteMembers.length&&voteMembers.length>0};
       }
-      function voteForStay(destName, chosenEntry){
-        if(!currentPlannerId||!chosenEntry)return;
-        var aliases=voteKeyAliasesFor(currentVoteActor);
+      function voteForStay(destName, chosenEntry, member, vote){
+        if(!chosenEntry||!member||!canEditVoteForMember(member,currentVoteActor,organizerMode))return;
+        var aliases=voteKeyAliasesFor(member);
         if(aliases.length===0)return;
         setStayVotes(function(prev){
           var next=Object.assign({},prev||{});
           (destGroups[destName]||[]).forEach(function(entry){
             var rowMeta=readStayVoteRow(next,entry.stay,entry.idx);
             var row=Object.assign({},rowMeta.row||{});
-            aliases.forEach(function(alias){row[alias]=entry.idx===chosenEntry.idx?"up":"down";});
+            aliases.forEach(function(alias){
+              if(vote==="up"){
+                row[alias]=entry.idx===chosenEntry.idx?"up":"down";
+              }else if(entry.idx===chosenEntry.idx){
+                row[alias]="down";
+              }
+            });
             next[rowMeta.key]=row;
           });
           saveTripPlanningState({state:{stay_votes:next}}).then(function(){
@@ -4021,8 +4027,8 @@ export default function WanderPlan(){
           {destList.map(function(destName){var opts=destGroups[destName]||[];var destSummary=summarizeStayDestination(destName);var ranked=rankStayOptions(destName);var leadingIdx=ranked[0]?ranked[0].idx:-1;
             return(<div key={destName} style={{marginBottom:16}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL}}/><span style={{fontSize:14,fontWeight:700}}>{destName}</span><span style={{fontSize:12,color:C.tx3}}>{opts.length} options</span><span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:destSummary.allVoted?C.grnBg:C.wrnBg,color:destSummary.allVoted?C.grn:C.wrn,marginLeft:"auto"}}>{destSummary.allVoted?("Ready "+destSummary.votedCount+"/"+voteMembers.length):("Voting "+destSummary.votedCount+"/"+voteMembers.length)}</span></div>
-              {opts.map(function(entry){var s=entry.stay;var si=entry.localIndex;var summary=summarizeStayVotes(stayVotes,s,entry.idx,voteMembers);var mine=readVoteForVoter(summary.row,currentVoteActor)==="up";var leader=entry.idx===leadingIdx;
-                return(<div key={entry.idx} onClick={function(){voteForStay(destName,entry);}} style={{background:leader?C.teal+"10":C.bg,borderRadius:12,padding:"12px 14px",marginBottom:6,border:"2px solid "+(leader?C.teal+"50":C.border),cursor:"pointer",transition:"all .2s"}}>
+              {opts.map(function(entry){var s=entry.stay;var summary=summarizeStayVotes(stayVotes,s,entry.idx,voteMembers);var mine=readVoteForVoter(summary.row,currentVoteActor)==="up";var leader=entry.idx===leadingIdx;
+                return(<div key={entry.idx} style={{background:leader?C.teal+"10":C.bg,borderRadius:12,padding:"12px 14px",marginBottom:6,border:"2px solid "+(leader?C.teal+"50":C.border),transition:"all .2s"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                     <div><h4 style={{fontWeight:700,fontSize:14,color:leader?C.tealL:C.tx}}>{s.name}</h4><div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,marginTop:2}}><span>{s.type}</span><span style={{color:C.wrn}}>{"*"+(s.rating||4.5)}</span>{s.neighborhood&&<span>{s.neighborhood}</span>}</div></div>
                     <div style={{textAlign:"right"}}><span style={{fontWeight:700,fontSize:16,color:C.goldT}}>{"$"+(s.ratePerNight||0)}</span><p style={{fontSize:10,color:C.tx3}}>/night x {s.totalNights||"?"}</p></div>
@@ -4030,8 +4036,19 @@ export default function WanderPlan(){
                   {s.amenities&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:4}}>{s.amenities.map(function(a){return <span key={a} style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:"rgba(255,255,255,.04)",color:C.tx2}}>{a}</span>;})}</div>}
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>{s.whyThisOne&&<p style={{fontSize:11,color:C.tealL,fontStyle:"italic",flex:1}}>{s.whyThisOne}</p>}{s.bookingSource&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:C.sky+"15",color:C.sky}}>{s.bookingSource}</span>}</div>
                   <div style={{marginTop:6,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:11,color:mine?C.grn:C.tx3}}>{mine?"Your pick":"Tap to vote for this stay"}</span>
+                    <span style={{fontSize:11,color:mine?C.grn:C.tx3}}>{mine?"Your pick":"Vote on this stay below"}</span>
                     <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:summary.up>=majorityNeeded?C.grnBg:C.surface,color:summary.up>=majorityNeeded?C.grn:C.tx2}}>{summary.up} / {voteMembers.length} votes</span>
+                  </div>
+                  <div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:8}}>
+                    {voteMembers.map(function(vm){
+                      var v=readVoteForVoter(summary.row,vm);
+                      var canEdit=canEditVoteForMember(vm,currentVoteActor,organizerMode);
+                      return(<div key={vm.id} style={{display:"flex",alignItems:"center",gap:6}}>
+                        <Avi ini={vm.ini} color={vm.color} size={22} name={vm.name}/>
+                        <button disabled={!canEdit} onClick={function(e){e.stopPropagation();voteForStay(destName,entry,vm,"up");}} style={{width:26,height:26,borderRadius:8,border:"1px solid "+(v==="up"?C.grn+"55":C.grn+"40"),background:v==="up"?C.grnBg:"transparent",color:C.grn,fontSize:12,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"👍"}</button>
+                        <button disabled={!canEdit} onClick={function(e){e.stopPropagation();voteForStay(destName,entry,vm,"down");}} style={{width:26,height:26,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:12,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"👎"}</button>
+                      </div>);
+                    })}
                   </div>
                 </div>);
               })}
