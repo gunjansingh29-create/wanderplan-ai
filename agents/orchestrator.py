@@ -5185,7 +5185,12 @@ async def submit_availability(trip_id: str, body: AvailabilityRequest, user_id: 
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
         trip = await conn.fetchrow("SELECT duration_days FROM trips WHERE id = $1", trip_id)
-        trip_days = max(1, int((trip["duration_days"] if trip else 0) or 1))
+        planning_state_row = await conn.fetchrow(
+            "SELECT state FROM trip_planning_states WHERE trip_id = $1",
+            trip_id,
+        )
+        planning_state = _json_obj((planning_state_row["state"] if planning_state_row else {}) or {})
+        trip_days = _resolve_required_trip_days(trip, planning_state)
 
     normalized_ranges: list[tuple[date, date]] = []
     for idx, window in enumerate(body.date_ranges):
@@ -5254,6 +5259,18 @@ def _inclusive_day_count(start: date, end: date) -> int:
     return max(1, (end - start).days + 1)
 
 
+def _resolve_required_trip_days(trip_row: Any, planning_state: Any) -> int:
+    base_days = max(1, int((trip_row["duration_days"] if trip_row else 0) or 1))
+    if isinstance(planning_state, dict):
+        try:
+            locked_days = planning_state.get("duration_days_locked")
+            if locked_days is not None:
+                return max(1, int(locked_days))
+        except Exception:
+            pass
+    return base_days
+
+
 def _enumerate_trip_windows(
     ranges: list[tuple[date, date]],
     trip_days: int,
@@ -5301,8 +5318,8 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
             "SELECT state FROM trip_planning_states WHERE trip_id = $1",
             trip_id,
         )
-    trip_days = max(1, int((trip["duration_days"] if trip else 0) or 1))
-    planning_state = (planning_state_row["state"] or {}) if planning_state_row else {}
+    planning_state = _json_obj((planning_state_row["state"] if planning_state_row else {}) or {})
+    trip_days = _resolve_required_trip_days(trip, planning_state)
     locked_window = planning_state.get("availability_locked_window") if isinstance(planning_state, dict) else None
     if not isinstance(locked_window, dict):
         locked_window = None
@@ -5438,7 +5455,12 @@ async def lock_availability_window(
             raise HTTPException(status_code=404, detail="Trip not found")
         if str(trip["owner_id"]) != str(user_id):
             raise HTTPException(status_code=403, detail="Only the trip owner can lock travel dates")
-        trip_days = max(1, int(trip["duration_days"] or 1))
+        planning_state_row = await conn.fetchrow(
+            "SELECT state FROM trip_planning_states WHERE trip_id = $1",
+            trip_id,
+        )
+        planning_state = _json_obj((planning_state_row["state"] if planning_state_row else {}) or {})
+        trip_days = _resolve_required_trip_days(trip, planning_state)
 
         members = await conn.fetch(
             "SELECT user_id FROM trip_members WHERE trip_id = $1 AND status = 'accepted'",
@@ -5474,7 +5496,7 @@ async def lock_availability_window(
             """,
             trip_id,
         )
-        existing_state = (existing["state"] or {}) if existing else {}
+        existing_state = _json_obj((existing["state"] if existing else {}) or {})
         if not isinstance(existing_state, dict):
             existing_state = {}
         existing_state["availability_locked_window"] = {

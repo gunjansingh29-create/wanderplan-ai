@@ -2,6 +2,7 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   accountCacheKey,
+  availabilityWindowMatchesTripDays,
   buildCurrentVoteActor,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
@@ -11,6 +12,7 @@ import {
   dedupeVoteVoters,
   emptyUserState,
   findDuplicatePoiKeys,
+  inclusiveIsoDays,
   isCurrentVoteVoter,
   makeVoteUserId,
   mergeProfileIntoUser,
@@ -90,7 +92,16 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(wizardSyncIntervalMs(3)).toBe(1200);
     expect(wizardSyncIntervalMs(5)).toBe(1200);
     expect(wizardSyncIntervalMs(6)).toBe(1200);
+    expect(wizardSyncIntervalMs(10)).toBe(1200);
+    expect(wizardSyncIntervalMs(11)).toBe(1200);
+    expect(wizardSyncIntervalMs(12)).toBe(1200);
     expect(wizardSyncIntervalMs(4)).toBe(3000);
+  });
+
+  test("availability helpers require exact trip-length windows", () => {
+    expect(inclusiveIsoDays("2026-06-01", "2026-06-10")).toBe(10);
+    expect(availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-10" }, 10)).toBe(true);
+    expect(availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-09" }, 10)).toBe(false);
   });
 
   test("resolveWizardTripId falls back to newTrip id when currentTripId is missing", () => {
