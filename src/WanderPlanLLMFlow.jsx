@@ -3153,22 +3153,43 @@ export default function WanderPlan(){
     function normAirportCode(value){
       return String(value||"").replace(/[^A-Za-z]/g,"").toUpperCase().slice(0,3);
     }
+    function explicitAirportCode(value){
+      var raw=String(value||"").trim();
+      if(/^[A-Za-z]{3}$/.test(raw))return raw.toUpperCase();
+      var parenMatch=raw.match(/\(([A-Za-z]{3})\)\s*$/);
+      if(parenMatch&&parenMatch[1])return String(parenMatch[1]).toUpperCase();
+      return "";
+    }
+    async function resolveAirportCode(value,fallbackCode){
+      var explicit=explicitAirportCode(value);
+      if(explicit)return explicit;
+      var query=String(value||"").trim();
+      if(query.length<2)return String(fallbackCode||"").trim().toUpperCase();
+      try{
+        var res=await apiJson("/airports/search?q="+encodeURIComponent(query),{method:"GET"},authToken);
+        var airports=Array.isArray(res&&res.airports)?res.airports:[];
+        var best=airports[0]||null;
+        var bestCode=String(best&&best.iata||"").trim().toUpperCase();
+        if(bestCode)return bestCode;
+      }catch(e){}
+      return String(fallbackCode||"").trim().toUpperCase();
+    }
     function flightLegInputsForDests(){
       var needed=Math.max(0,dests.length-1);
       var next=(flightLegInputs||[]).slice(0,needed);
       while(next.length<needed)next.push({to_airport:"",depart_date:""});
       return next;
     }
-    function buildMultiCitySegments(firstArrival){
+    async function buildMultiCitySegments(firstArrival){
       var segments=[];
       var prev=firstArrival;
       var extra=flightLegInputsForDests();
       for(var i=0;i<extra.length;i++){
         var seg=extra[i]||{};
-        var toCode=normAirportCode(seg.to_airport);
+        var toCode=await resolveAirportCode(seg.to_airport,"");
         var depDate=String(seg.depart_date||"").slice(0,10);
         if(!toCode||toCode.length!==3){
-          throw new Error("Enter airport code for leg "+(i+2)+".");
+          throw new Error("Enter a city or airport for leg "+(i+2)+".");
         }
         if(!depDate){
           throw new Error("Enter depart date for leg "+(i+2)+".");
@@ -3178,45 +3199,49 @@ export default function WanderPlan(){
       }
       return segments;
     }
-    function searchFlights(){
+    async function searchFlights(){
       setFErr("");
       setFC(false);
       setFBL([]);
-      var origin=normAirportCode(flightDates.origin);
-      var firstArrival=normAirportCode(flightDates.arrive);
+      var originInput=String(flightDates.origin||"").trim();
+      var firstArrivalInput=String(flightDates.arrive||"").trim();
       var departDate=String(flightDates.depart||"").slice(0,10);
       var returnDate=String(flightDates.ret||"").slice(0,10);
       if(!(authToken&&currentTripId)){setFErr("Sign in and create/save the trip first.");return;}
-      if(!origin||origin.length!==3){setFErr("Enter a valid 3-letter starting airport code.");return;}
-      if(!firstArrival||firstArrival.length!==3){setFErr("Enter a valid 3-letter arrival airport code.");return;}
+      if(originInput.length<2){setFErr("Enter your starting city or airport.");return;}
+      if(firstArrivalInput.length<2){setFErr("Enter your arrival city or airport.");return;}
       if(!departDate){setFErr("Select a departure date.");return;}
       if(!returnDate){setFErr("Select a return date.");return;}
-      var segments=[];
-      try{segments=buildMultiCitySegments(firstArrival);}catch(e){setFErr(String(e&&e.message||"Invalid multi-city segment"));return;}
       setFLoad(true);
       setFDone(false);
       setFLegs([]);
       setFSel({});
-      apiJson("/trips/"+currentTripId+"/flights/search",{method:"POST",body:{
-        origin:origin,
-        destination:firstArrival,
-        depart_date:departDate,
-        return_date:returnDate,
-        round_trip:true,
-        cabin_class:"economy",
-        multi_city_segments:segments
-      }},authToken).then(function(r){
+      try{
+        var origin=await resolveAirportCode(originInput,"");
+        var firstArrival=await resolveAirportCode(firstArrivalInput,"");
+        if(!origin||origin.length!==3){setFLoad(false);setFDone(false);setFErr("Could not match the starting city to an airport.");return;}
+        if(!firstArrival||firstArrival.length!==3){setFLoad(false);setFDone(false);setFErr("Could not match the arrival city to an airport.");return;}
+        var segments=await buildMultiCitySegments(firstArrival);
+        var r=await apiJson("/trips/"+currentTripId+"/flights/search",{method:"POST",body:{
+          origin:origin,
+          destination:firstArrival,
+          depart_date:departDate,
+          return_date:returnDate,
+          round_trip:true,
+          cabin_class:"economy",
+          multi_city_segments:segments
+        }},authToken);
         var legs=(r&&r.legs)||[];
         setFLegs(legs);
         setFDone(true);
         setFLoad(false);
         if(legs.length===0)setFErr("No flight options found.");
         logWizAction("record_selection",{key:"flights.search",value:{origin:origin,destination:firstArrival,segments:segments.length,source:r&&r.search_params&&r.search_params.source}});
-      }).catch(function(e){
+      }catch(e){
         setFLoad(false);
         setFDone(false);
         setFErr(String(e&&e.message||"Flight search failed"));
-      });
+      }
     }
     function confirmFlightsThenContinue(){
       var picked=true;
@@ -4121,13 +4146,13 @@ export default function WanderPlan(){
         {ab("Flight Agent","Search and confirm flights only after the organizer has locked the exact trip dates.")}
         {lockedWindow&&<div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}><p style={{fontSize:12,color:C.tealL}}>Locked trip dates: {lockedWindow.start} to {lockedWindow.end}</p></div>}
         <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
-          <input value={flightDates.origin||""} onChange={function(e){updFlight("origin",e.target.value.toUpperCase());}} placeholder="Start airport (e.g. DTW)" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={flightDates.arrive||""} onChange={function(e){updFlight("arrive",e.target.value.toUpperCase());}} placeholder={"Arrival airport ("+(dests[0]&&dests[0].name?dests[0].name:"leg 1")+")"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <input value={flightDates.origin||""} onChange={function(e){updFlight("origin",e.target.value);}} placeholder="Starting city or airport (e.g. Detroit)" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <input value={flightDates.arrive||""} onChange={function(e){updFlight("arrive",e.target.value);}} placeholder={"Arrival city or airport ("+(dests[0]&&dests[0].name?dests[0].name:"leg 1")+")"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
           <input value={flightDates.depart||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updFlight("depart",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
           <input value={flightDates.ret||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updFlight("ret",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
         </div>
         {extraInputs.map(function(seg,idx){return(<div key={idx} style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:8}}>
-          <input value={(flightLegInputs[idx]&&flightLegInputs[idx].to_airport)||""} onChange={function(e){updExtra(idx,"to_airport",e.target.value.toUpperCase());}} placeholder={"Leg "+(idx+2)+" arrival airport ("+(dests[idx+1]&&dests[idx+1].name?dests[idx+1].name:"")+")"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <input value={(flightLegInputs[idx]&&flightLegInputs[idx].to_airport)||""} onChange={function(e){updExtra(idx,"to_airport",e.target.value);}} placeholder={"Leg "+(idx+2)+" arrival city or airport ("+(dests[idx+1]&&dests[idx+1].name?dests[idx+1].name:"")+")"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
           <input value={(flightLegInputs[idx]&&flightLegInputs[idx].depart_date)||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updExtra(idx,"depart_date",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
         </div>);})}
         <button onClick={searchFlights} disabled={flightLoad} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:flightLoad?C.border:C.teal,color:flightLoad?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:flightLoad?"default":"pointer"}}>{flightLoad?"Searching flights...":"Search Flight Options"}</button>
