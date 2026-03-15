@@ -92,9 +92,10 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(wizardSyncIntervalMs(3)).toBe(1200);
     expect(wizardSyncIntervalMs(5)).toBe(1200);
     expect(wizardSyncIntervalMs(6)).toBe(1200);
-    expect(wizardSyncIntervalMs(10)).toBe(1200);
+    expect(wizardSyncIntervalMs(9)).toBe(1200);
     expect(wizardSyncIntervalMs(11)).toBe(1200);
     expect(wizardSyncIntervalMs(12)).toBe(1200);
+    expect(wizardSyncIntervalMs(10)).toBe(3000);
     expect(wizardSyncIntervalMs(4)).toBe(3000);
   });
 
