@@ -5312,6 +5312,29 @@ def _enumerate_trip_windows(
     return windows
 
 
+def _sanitize_locked_availability_window(
+    locked_window: Any,
+    trip_days: int,
+    overlap_windows: list[tuple[date, date]] | None = None,
+) -> dict[str, str] | None:
+    if not isinstance(locked_window, dict):
+        return None
+    try:
+        start = date.fromisoformat(str(locked_window.get("start") or "").strip()[:10])
+        end = date.fromisoformat(str(locked_window.get("end") or "").strip()[:10])
+    except Exception:
+        return None
+    if end < start or _inclusive_day_count(start, end) != max(1, int(trip_days or 1)):
+        return None
+    overlaps = overlap_windows if isinstance(overlap_windows, list) else []
+    if overlaps and not any(start >= overlap_start and end <= overlap_end for overlap_start, overlap_end in overlaps):
+        return None
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+    }
+
+
 @app.get("/trips/{trip_id}/availability/overlap")
 async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
@@ -5339,10 +5362,9 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
     planning_state = _json_obj((planning_state_row["state"] if planning_state_row else {}) or {})
     trip_days = _resolve_required_trip_days(trip, planning_state)
     locked_window = planning_state.get("availability_locked_window") if isinstance(planning_state, dict) else None
-    if not isinstance(locked_window, dict):
-        locked_window = None
 
     if not members:
+        locked_window = _sanitize_locked_availability_window(locked_window, trip_days, [])
         return {
             "overlap": None,
             "overlapping_windows": [],
@@ -5379,6 +5401,7 @@ async def get_availability_overlap(trip_id: str, user_id: str = Depends(get_curr
     full_overlap_windows = []
     if all(by_member.get(uid) for uid in member_ids):
         full_overlap_windows = _common_overlap_windows(member_ids, by_member)
+    locked_window = _sanitize_locked_availability_window(locked_window, trip_days, full_overlap_windows)
     exact_overlap_windows = _enumerate_trip_windows(full_overlap_windows, trip_days)
     if exact_overlap_windows:
         best_start, best_end = exact_overlap_windows[0]

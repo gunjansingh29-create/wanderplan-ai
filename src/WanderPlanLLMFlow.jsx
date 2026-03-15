@@ -495,6 +495,64 @@ function availabilityWindowMatchesTripDays(window, tripDays){
   return inclusiveIsoDays(window.start,window.end)===required;
 }
 
+function sanitizeAvailabilityWindow(window, tripDays){
+  if(!availabilityWindowMatchesTripDays(window,tripDays))return null;
+  return {
+    start:String(window.start||"").slice(0,10),
+    end:String(window.end||"").slice(0,10)
+  };
+}
+
+function exactAvailabilityWindows(windows, tripDays){
+  return (Array.isArray(windows)?windows:[]).filter(function(win){
+    return availabilityWindowMatchesTripDays(win,tripDays);
+  }).map(function(win){
+    return {
+      start:String(win.start||"").slice(0,10),
+      end:String(win.end||"").slice(0,10)
+    };
+  });
+}
+
+function sanitizeFlightDatesForTrip(flightDatesValue, tripDays){
+  var next=(flightDatesValue&&typeof flightDatesValue==="object")?Object.assign({},flightDatesValue):{};
+  if(next.depart||next.ret){
+    if(!availabilityWindowMatchesTripDays({start:next.depart,end:next.ret},tripDays)){
+      next.depart="";
+      next.ret="";
+    }else{
+      next.depart=String(next.depart||"").slice(0,10);
+      next.ret=String(next.ret||"").slice(0,10);
+    }
+  }
+  return next;
+}
+
+function sanitizeAvailabilityOverlapData(data, tripDays){
+  var next=(data&&typeof data==="object")?Object.assign({},data):{};
+  next.locked_window=sanitizeAvailabilityWindow(next.locked_window,tripDays);
+  next.is_locked=!!next.locked_window;
+  return next;
+}
+
+function resolveAvailabilityDraftWindow(overlapData, currentUserId, flightDatesValue, tripDays){
+  var data=sanitizeAvailabilityOverlapData(overlapData,tripDays);
+  if(data.locked_window)return data.locked_window;
+  var mine=((Array.isArray(data.member_windows)?data.member_windows:[]).find(function(member){
+    return String(member&&member.user_id||"").trim()===String(currentUserId||"").trim();
+  })||{}).windows;
+  var exactMine=exactAvailabilityWindows(mine,tripDays);
+  if(exactMine[0])return exactMine[0];
+  var validFlightDates=sanitizeFlightDatesForTrip(flightDatesValue,tripDays);
+  if(validFlightDates.depart&&validFlightDates.ret){
+    return {
+      start:String(validFlightDates.depart||"").slice(0,10),
+      end:String(validFlightDates.ret||"").slice(0,10)
+    };
+  }
+  return {start:"",end:""};
+}
+
 function tryShowDatePicker(event){
   try{
     if(event&&event.currentTarget&&typeof event.currentTarget.showPicker==="function"){
@@ -1807,7 +1865,13 @@ export default function WanderPlan(){
         setSBT(String(st.shared_budget_tier||"").trim().toLowerCase());
       }
       if(st.flight_dates&&typeof st.flight_dates==="object"){
-        setFD(function(prev){return mergeSharedFlightDates(prev,st.flight_dates,wizStep===10);});
+        var planningTripDays=Math.max(0,Number(st.duration_days_locked!==undefined?st.duration_days_locked:sharedDurationDays)||0);
+        setFD(function(prev){
+          return sanitizeFlightDatesForTrip(
+            mergeSharedFlightDates(prev,st.flight_dates,wizStep===10),
+            planningTripDays
+          );
+        });
       }
       setDMV(normalizeDestinationVoteState(st.dest_member_votes));
       setPV(normalizePoiStateMap(st.poi_votes,pois,st.poi_option_pool));
@@ -1847,14 +1911,13 @@ export default function WanderPlan(){
         setMD(st.meal_plan.length>0);
       }
       setMealVotes((st.meal_votes&&typeof st.meal_votes==="object")?st.meal_votes:{});
-      if(st.availability_locked_window&&typeof st.availability_locked_window==="object"){
-        setAData(function(prev){
-          var next=Object.assign({},(prev&&typeof prev==="object")?prev:{});
-          next.locked_window=st.availability_locked_window;
-          next.is_locked=true;
-          return next;
-        });
-      }
+      setAData(function(prev){
+        var planningTripDays=Math.max(0,Number(st.duration_days_locked!==undefined?st.duration_days_locked:sharedDurationDays)||0);
+        var next=sanitizeAvailabilityOverlapData((prev&&typeof prev==="object")?prev:{},planningTripDays);
+        next.locked_window=sanitizeAvailabilityWindow(st.availability_locked_window,planningTripDays);
+        next.is_locked=!!next.locked_window;
+        return next;
+      });
     }catch(e){}
   }
   function saveTripPlanningState(patch){
@@ -1888,20 +1951,27 @@ export default function WanderPlan(){
         if(state.duration_days_locked!==undefined)setSDD(Math.max(0,Number(state.duration_days_locked)||0));
         if(state.duration_revision_signature!==undefined)setSDSig(String(state.duration_revision_signature||"").trim());
         if(state.shared_budget_tier!==undefined)setSBT(String(state.shared_budget_tier||"").trim().toLowerCase());
-        if(state.flight_dates&&typeof state.flight_dates==="object")setFD(function(prev){return mergeSharedFlightDates(prev,state.flight_dates,wizStep===10);});
+        if(state.flight_dates&&typeof state.flight_dates==="object"){
+          var returnedTripDays=Math.max(0,Number(state.duration_days_locked!==undefined?state.duration_days_locked:sharedDurationDays)||0);
+          setFD(function(prev){
+            return sanitizeFlightDatesForTrip(
+              mergeSharedFlightDates(prev,state.flight_dates,wizStep===10),
+              returnedTripDays
+            );
+          });
+        }
         if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
         if(state.stay_votes&&typeof state.stay_votes==="object")setStayVotes(state.stay_votes);
         if(state.stay_final_choices&&typeof state.stay_final_choices==="object")setSFC(state.stay_final_choices);
         if(Array.isArray(state.meal_plan)){setMeals(state.meal_plan);setMD(state.meal_plan.length>0);}
         if(state.meal_votes&&typeof state.meal_votes==="object")setMealVotes(state.meal_votes);
-        if(state.availability_locked_window&&typeof state.availability_locked_window==="object"){
-          setAData(function(prev){
-            var next=Object.assign({},(prev&&typeof prev==="object")?prev:{});
-            next.locked_window=state.availability_locked_window;
-            next.is_locked=true;
-            return next;
-          });
-        }
+        setAData(function(prev){
+          var returnedTripDays=Math.max(0,Number(state.duration_days_locked!==undefined?state.duration_days_locked:sharedDurationDays)||0);
+          var next=sanitizeAvailabilityOverlapData((prev&&typeof prev==="object")?prev:{},returnedTripDays);
+          next.locked_window=sanitizeAvailabilityWindow(state.availability_locked_window,returnedTripDays);
+          next.is_locked=!!next.locked_window;
+          return next;
+        });
       }
       return r;
     }).catch(function(){return null;});
@@ -2049,31 +2119,10 @@ export default function WanderPlan(){
     function run(){
       fetchAvailabilityOverlap(activeTripId,authToken).then(function(res){
         if(!res)return;
-        setAData(res);
-        if(res.locked_window&&typeof res.locked_window==="object"){
-          setADraft({
-            start:String(res.locked_window.start||"").slice(0,10),
-            end:String(res.locked_window.end||"").slice(0,10)
-          });
-          return;
-        }
-        var myId=String(userIdFromToken(authToken)||"").trim();
-        var mine=((res.member_windows||[]).find(function(m){
-          return String(m.user_id||"").trim()===myId;
-        })||{}).windows||[];
-        if(mine[0]){
-          setADraft({
-            start:String(mine[0].start||"").slice(0,10),
-            end:String(mine[0].end||"").slice(0,10)
-          });
-          return;
-        }
-        if(flightDates.depart&&flightDates.ret){
-          setADraft({
-            start:String(flightDates.depart||"").slice(0,10),
-            end:String(flightDates.ret||"").slice(0,10)
-          });
-        }
+        var requiredTripDays=Math.max(1,Number(res.required_trip_days||sharedDurationDays||inclusiveIsoDays(flightDates.depart,flightDates.ret)||Number(tr.days)||10));
+        var sanitized=sanitizeAvailabilityOverlapData(res,requiredTripDays);
+        setAData(sanitized);
+        setADraft(resolveAvailabilityDraftWindow(sanitized,String(userIdFromToken(authToken)||"").trim(),flightDates,requiredTripDays));
       }).catch(function(e){
         setAErr(String(e&&e.message||"Could not load availability"));
       });
@@ -4338,14 +4387,15 @@ export default function WanderPlan(){
     {wizStep===9&&(function(){
       var requiredTripDays=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays(flightDates.depart,flightDates.ret)||Number(tr.days)||10);
       var myUserId=String(userIdFromToken(authToken)||"").trim();
-      var overlapData=(availabilityData&&typeof availabilityData==="object")?availabilityData:{};
+      var overlapData=sanitizeAvailabilityOverlapData((availabilityData&&typeof availabilityData==="object")?availabilityData:{},requiredTripDays);
+      var knownFlightDates=sanitizeFlightDatesForTrip(flightDates,requiredTripDays);
       var memberWindows=Array.isArray(overlapData.member_windows)?overlapData.member_windows:[];
-      var myWindows=((memberWindows.find(function(m){return String(m.user_id||"").trim()===myUserId;})||{}).windows)||[];
+      var myWindows=exactAvailabilityWindows(((memberWindows.find(function(m){return String(m.user_id||"").trim()===myUserId;})||{}).windows)||[],requiredTripDays);
       var draftDays=inclusiveIsoDays(availabilityDraft.start,availabilityDraft.end);
       var lockedWindow=(overlapData.locked_window&&typeof overlapData.locked_window==="object")?overlapData.locked_window:null;
       var overlappingWindows=Array.isArray(overlapData.overlapping_windows)?overlapData.overlapping_windows:[];
       var closestWindows=Array.isArray(overlapData.closest_windows)?overlapData.closest_windows:[];
-      var everyoneSubmitted=memberWindows.length>0&&memberWindows.every(function(m){return Array.isArray(m.windows)&&m.windows.length>0;});
+      var everyoneSubmitted=memberWindows.length>0&&memberWindows.every(function(m){return exactAvailabilityWindows(m.windows,requiredTripDays).length>0;});
       function updateAvailabilityField(key,val){
         setADraft(function(prev){var next=Object.assign({},prev||{});next[key]=val;return next;});
       }
@@ -4403,7 +4453,7 @@ export default function WanderPlan(){
             {[
               {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"(missing)"},
               {l:"Required trip days",v:String(requiredTripDays)},
-              {l:"Flight date range",v:(String(flightDates.depart||"").slice(0,10)||"--")+" to "+(String(flightDates.ret||"").slice(0,10)||"--")},
+              {l:"Flight date range",v:(String(knownFlightDates.depart||"").slice(0,10)||"--")+" to "+(String(knownFlightDates.ret||"").slice(0,10)||"--")},
               {l:"Locked window",v:JSON.stringify(lockedWindow||null)},
               {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"(none)"}
             ].map(function(item){
@@ -4420,7 +4470,7 @@ export default function WanderPlan(){
         </div>)}
         <div style={{padding:"12px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"15",marginBottom:12}}>
           <p style={{fontSize:12,color:C.tealL}}>Trip duration is locked at <strong>{requiredTripDays} days</strong>.</p>
-          <p style={{fontSize:12,color:C.tx2,marginTop:4}}>Known travel dates: {String(flightDates.depart||"").slice(0,10)||"--"} to {String(flightDates.ret||"").slice(0,10)||"--"}. Each traveler submits one exact {requiredTripDays}-day window that works.</p>
+          <p style={{fontSize:12,color:C.tx2,marginTop:4}}>Known travel dates: {String(knownFlightDates.depart||"").slice(0,10)||"--"} to {String(knownFlightDates.ret||"").slice(0,10)||"--"}. Each traveler submits one exact {requiredTripDays}-day window that works.</p>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10,marginBottom:12}}>
           <input value={availabilityDraft.start||""} onClick={tryShowDatePicker} onFocus={tryShowDatePicker} onChange={function(e){updateAvailabilityField("start",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
@@ -4433,13 +4483,16 @@ export default function WanderPlan(){
         {availabilityErr&&<div style={{marginBottom:12,padding:"10px 14px",borderRadius:10,background:C.redBg,border:"1px solid "+C.red+"22"}}><p style={{fontSize:12,color:C.red}}>{availabilityErr}</p></div>}
         {memberWindows.length>0&&(<div style={{marginBottom:12}}>
           {memberWindows.map(function(member){
-            var submitted=Array.isArray(member.windows)&&member.windows.length>0;
+            var exactWindows=exactAvailabilityWindows(member.windows,requiredTripDays);
+            var rawWindows=Array.isArray(member.windows)?member.windows:[];
+            var submitted=exactWindows.length>0;
+            var needsRevision=!submitted&&rawWindows.length>0;
             return(<div key={member.user_id} style={{padding:"10px 0",borderBottom:"1px solid "+C.border}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
                 <span style={{fontSize:13,fontWeight:600}}>{member.name||member.email||"Traveler"}</span>
-                <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:submitted?C.grnBg:C.wrnBg,color:submitted?C.grn:C.wrn}}>{submitted?"Submitted":"Waiting"}</span>
+                <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:submitted?C.grnBg:(needsRevision?C.redBg:C.wrnBg),color:submitted?C.grn:(needsRevision?C.red:C.wrn)}}>{submitted?"Submitted":(needsRevision?"Needs update":"Waiting")}</span>
               </div>
-              <p style={{fontSize:12,color:C.tx3,marginTop:4}}>{submitted?member.windows.map(function(win){return win.start+" to "+win.end;}).join("; "):"No dates submitted yet."}</p>
+              <p style={{fontSize:12,color:C.tx3,marginTop:4}}>{submitted?exactWindows.map(function(win){return win.start+" to "+win.end;}).join("; "):(needsRevision?"Saved window no longer matches the locked "+requiredTripDays+"-day trip.":"No dates submitted yet.")}</p>
             </div>);
           })}
         </div>)}
@@ -5091,5 +5144,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 

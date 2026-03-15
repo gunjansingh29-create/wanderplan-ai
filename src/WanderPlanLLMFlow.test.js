@@ -28,9 +28,13 @@ import {
   readStayVoteRow,
   voteKeyAliasesFor,
   readVoteForVoter,
+  resolveAvailabilityDraftWindow,
   resolveBudgetTier,
   resolveTripBudgetTier,
   resolveWizardTripId,
+  sanitizeAvailabilityOverlapData,
+  sanitizeAvailabilityWindow,
+  sanitizeFlightDatesForTrip,
   shouldResetTravelPlanForDurationChange,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
@@ -108,6 +112,51 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(inclusiveIsoDays("2026-06-01", "2026-06-10")).toBe(10);
     expect(availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-10" }, 10)).toBe(true);
     expect(availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-09" }, 10)).toBe(false);
+  });
+
+  test("availability sanitizers clear stale locked and flight windows after duration changes", () => {
+    expect(
+      sanitizeAvailabilityWindow({ start: "2026-03-22", end: "2026-03-30" }, 11)
+    ).toBeNull();
+    expect(
+      sanitizeAvailabilityOverlapData(
+        { locked_window: { start: "2026-03-22", end: "2026-03-30" }, is_locked: true },
+        11
+      )
+    ).toEqual({
+      locked_window: null,
+      is_locked: false,
+    });
+    expect(
+      sanitizeFlightDatesForTrip(
+        { origin: "Detroit", arrive: "Auckland", depart: "2026-03-22", ret: "2026-03-30" },
+        11
+      )
+    ).toEqual({
+      origin: "Detroit",
+      arrive: "Auckland",
+      depart: "",
+      ret: "",
+    });
+  });
+
+  test("resolveAvailabilityDraftWindow ignores stale member and flight windows", () => {
+    expect(
+      resolveAvailabilityDraftWindow(
+        {
+          locked_window: { start: "2026-03-22", end: "2026-03-30" },
+          member_windows: [
+            {
+              user_id: "crew-1",
+              windows: [{ start: "2026-03-22", end: "2026-03-30" }],
+            },
+          ],
+        },
+        "crew-1",
+        { depart: "2026-03-22", ret: "2026-03-30" },
+        11
+      )
+    ).toEqual({ start: "", end: "" });
   });
 
   test("mergeSharedFlightDates keeps typed city names while syncing locked dates", () => {
