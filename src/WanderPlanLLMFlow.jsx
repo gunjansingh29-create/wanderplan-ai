@@ -487,6 +487,17 @@ function tryShowDatePicker(event){
   }catch(e){}
 }
 
+function mergeSharedFlightDates(prevValue, nextValue, preserveLocationText){
+  var prev=(prevValue&&typeof prevValue==="object")?prevValue:{};
+  var next=(nextValue&&typeof nextValue==="object")?nextValue:{};
+  var merged=Object.assign({},prev,next);
+  if(preserveLocationText){
+    merged.origin=prev.origin!==undefined?prev.origin:merged.origin;
+    merged.arrive=prev.arrive!==undefined?prev.arrive:merged.arrive;
+  }
+  return merged;
+}
+
 function resolveWizardTripId(currentTripIdValue,newTripValue,tripValue){
   var preferred=String(currentTripIdValue||"").trim();
   if(preferred)return preferred;
@@ -1739,7 +1750,7 @@ export default function WanderPlan(){
         setSDD(Math.max(0,Number(st.duration_days_locked)||0));
       }
       if(st.flight_dates&&typeof st.flight_dates==="object"){
-        setFD(function(prev){return Object.assign({},prev||{},st.flight_dates);});
+        setFD(function(prev){return mergeSharedFlightDates(prev,st.flight_dates,wizStep===10);});
       }
       setDMV(normalizeDestinationVoteState(st.dest_member_votes));
       setPV(normalizePoiStateMap(st.poi_votes,pois,st.poi_option_pool));
@@ -1818,7 +1829,7 @@ export default function WanderPlan(){
         if(state.poi_votes&&typeof state.poi_votes==="object")setPV(normalizePoiStateMap(state.poi_votes,pois,state.poi_option_pool||poiOptionPool));
         if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(normalizePoiStateMap(state.poi_member_choices,pois,state.poi_option_pool||poiOptionPool));
         if(state.duration_days_locked!==undefined)setSDD(Math.max(0,Number(state.duration_days_locked)||0));
-        if(state.flight_dates&&typeof state.flight_dates==="object")setFD(function(prev){return Object.assign({},prev||{},state.flight_dates);});
+        if(state.flight_dates&&typeof state.flight_dates==="object")setFD(function(prev){return mergeSharedFlightDates(prev,state.flight_dates,wizStep===10);});
         if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
         if(state.stay_votes&&typeof state.stay_votes==="object")setStayVotes(state.stay_votes);
         if(state.stay_final_choices&&typeof state.stay_final_choices==="object")setSFC(state.stay_final_choices);
@@ -4753,5 +4764,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 

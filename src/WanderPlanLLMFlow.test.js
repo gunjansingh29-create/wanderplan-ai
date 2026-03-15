@@ -16,6 +16,7 @@ import {
   isCurrentVoteVoter,
   makeVoteUserId,
   mergeProfileIntoUser,
+  mergeSharedFlightDates,
   mergeVoteRows,
   normalizeDestinationVoteState,
   normalizePoiStateMap,
@@ -103,6 +104,21 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(inclusiveIsoDays("2026-06-01", "2026-06-10")).toBe(10);
     expect(availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-10" }, 10)).toBe(true);
     expect(availabilityWindowMatchesTripDays({ start: "2026-06-01", end: "2026-06-09" }, 10)).toBe(false);
+  });
+
+  test("mergeSharedFlightDates keeps typed city names while syncing locked dates", () => {
+    expect(
+      mergeSharedFlightDates(
+        { origin: "Detroit", arrive: "Auckland", depart: "2026-06-01", ret: "2026-06-10" },
+        { origin: "DTW", arrive: "AKL", depart: "2026-06-03", ret: "2026-06-12" },
+        true
+      )
+    ).toEqual({
+      origin: "Detroit",
+      arrive: "Auckland",
+      depart: "2026-06-03",
+      ret: "2026-06-12",
+    });
   });
 
   test("resolveWizardTripId falls back to newTrip id when currentTripId is missing", () => {
