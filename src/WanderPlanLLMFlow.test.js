@@ -5,6 +5,7 @@ import {
   availabilityWindowMatchesTripDays,
   buildCurrentVoteActor,
   buildDurationPlanSignature,
+  buildFlightRoutePlan,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
   canonicalMealVoteKey,
@@ -20,6 +21,7 @@ import {
   mergeProfileIntoUser,
   mergeSharedFlightDates,
   mergeVoteRows,
+  moveFlightRouteStop,
   normalizeDestinationVoteState,
   normalizePoiStateMap,
   normalizePersonalBucketItems,
@@ -182,16 +184,52 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
   test("mergeSharedFlightDates keeps typed city names while syncing locked dates", () => {
     expect(
       mergeSharedFlightDates(
-        { origin: "Detroit", arrive: "Auckland", depart: "2026-06-01", ret: "2026-06-10" },
-        { origin: "DTW", arrive: "AKL", depart: "2026-06-03", ret: "2026-06-12" },
+        { origin: "Detroit", arrive: "Auckland", final_airport: "Detroit", depart: "2026-06-01", ret: "2026-06-10" },
+        { origin: "DTW", arrive: "AKL", final_airport: "LAX", depart: "2026-06-03", ret: "2026-06-12" },
         true
       )
     ).toEqual({
       origin: "Detroit",
       arrive: "Auckland",
+      final_airport: "Detroit",
       depart: "2026-06-03",
       ret: "2026-06-12",
     });
+  });
+
+  test("buildFlightRoutePlan autofills destination dates from locked start and per-destination durations", () => {
+    expect(
+      buildFlightRoutePlan(
+        [{ name: "Auckland" }, { name: "Melbourne" }, { name: "Queenstown" }, { name: "Sydney" }],
+        { Auckland: 4, Melbourne: 3, Queenstown: 2, Sydney: 2 },
+        { start: "2026-03-22", end: "2026-04-01" },
+        []
+      )
+    ).toEqual([
+      { destination: "Auckland", airport: "Auckland", travel_date: "2026-03-22" },
+      { destination: "Melbourne", airport: "Melbourne", travel_date: "2026-03-26" },
+      { destination: "Queenstown", airport: "Queenstown", travel_date: "2026-03-29" },
+      { destination: "Sydney", airport: "Sydney", travel_date: "2026-03-31" },
+    ]);
+  });
+
+  test("moveFlightRouteStop reorders destinations and recalculates autofilled dates", () => {
+    const moved = moveFlightRouteStop(
+      [
+        { destination: "Auckland", airport: "AKL", travel_date: "2026-03-22" },
+        { destination: "Melbourne", airport: "MEL", travel_date: "2026-03-26" },
+        { destination: "Queenstown", airport: "ZQN", travel_date: "2026-03-29" },
+      ],
+      2,
+      -1,
+      { Auckland: 4, Queenstown: 2, Melbourne: 3 },
+      { start: "2026-03-22", end: "2026-04-01" }
+    );
+    expect(moved).toEqual([
+      { destination: "Auckland", airport: "AKL", travel_date: "2026-03-22" },
+      { destination: "Queenstown", airport: "ZQN", travel_date: "2026-03-26" },
+      { destination: "Melbourne", airport: "MEL", travel_date: "2026-03-28" },
+    ]);
   });
 
   test("resolveBudgetTier prefers trip member profile budget tier", () => {

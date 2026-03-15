@@ -576,8 +576,68 @@ function mergeSharedFlightDates(prevValue, nextValue, preserveLocationText){
   if(preserveLocationText){
     merged.origin=prev.origin!==undefined?prev.origin:merged.origin;
     merged.arrive=prev.arrive!==undefined?prev.arrive:merged.arrive;
+    merged.final_airport=prev.final_airport!==undefined?prev.final_airport:merged.final_airport;
   }
   return merged;
+}
+
+function addIsoDays(startIso, dayCount){
+  var start=String(startIso||"").slice(0,10);
+  var startMs=Date.parse(start+"T00:00:00Z");
+  if(!start||!Number.isFinite(startMs))return "";
+  var offset=Math.max(0,Number(dayCount)||0);
+  return new Date(startMs+(offset*86400000)).toISOString().slice(0,10);
+}
+
+function flightRoutePlanSignature(plan){
+  return JSON.stringify((Array.isArray(plan)?plan:[]).map(function(stop){
+    return {
+      destination:String(stop&&stop.destination||"").trim(),
+      airport:String(stop&&stop.airport||"").trim(),
+      travel_date:String(stop&&stop.travel_date||"").slice(0,10)
+    };
+  }));
+}
+
+function buildFlightRoutePlan(destinations, durationPerDestination, lockedWindow, savedPlan){
+  var list=(Array.isArray(destinations)?destinations:[]).map(function(dest){
+    return typeof dest==="string"?String(dest||"").trim():String(dest&&dest.name||dest&&dest.destination||"").trim();
+  }).filter(Boolean);
+  var existing={};
+  (Array.isArray(savedPlan)?savedPlan:[]).forEach(function(stop,idx){
+    var key=String(stop&&stop.destination||"").trim().toLowerCase()||("idx:"+idx);
+    existing[key]={
+      destination:String(stop&&stop.destination||"").trim(),
+      airport:String(stop&&stop.airport||stop&&stop.to_airport||"").trim(),
+      travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10)
+    };
+  });
+  var cursor=(lockedWindow&&typeof lockedWindow==="object")?String(lockedWindow.start||"").slice(0,10):"";
+  if(!cursor){
+    var firstSaved=(Array.isArray(savedPlan)?savedPlan:[])[0]||{};
+    cursor=String(firstSaved.travel_date||firstSaved.depart_date||"").slice(0,10);
+  }
+  return list.map(function(name){
+    var saved=existing[String(name||"").trim().toLowerCase()]||{};
+    var days=Math.max(1,Number((durationPerDestination&&durationPerDestination[name])||0)||1);
+    var stop={
+      destination:name,
+      airport:String(saved.airport||name).trim()||name,
+      travel_date:String(cursor||saved.travel_date||"").slice(0,10)
+    };
+    if(cursor)cursor=addIsoDays(cursor,days);
+    return stop;
+  });
+}
+
+function moveFlightRouteStop(plan, index, direction, durationPerDestination, lockedWindow){
+  var list=(Array.isArray(plan)?plan:[]).slice(0);
+  var from=Math.max(0,Math.min(list.length-1,Number(index)||0));
+  var to=from+(direction<0?-1:1);
+  if(from<0||from>=list.length||to<0||to>=list.length)return list;
+  var item=list.splice(from,1)[0];
+  list.splice(to,0,item);
+  return buildFlightRoutePlan(list.map(function(stop){return stop.destination;}),durationPerDestination,lockedWindow,list);
 }
 
 function resolveBudgetTier(profileOrMember, fallbackTier){
@@ -1308,7 +1368,7 @@ export default function WanderPlan(){
   var[poiOptionPool,setPOP]=useState({});
   var[poiAsk,setPA]=useState("");
   var[poiAskLoad,setPAL]=useState(false);
-  var[flightDates,setFD]=useState({origin:"",depart:"",arrive:"",ret:""});
+  var[flightDates,setFD]=useState({origin:"",depart:"",arrive:"",ret:"",final_airport:""});
   var[flightLegInputs,setFLI]=useState([]);
   var[flightLegs,setFLegs]=useState([]);
   var[flightSel,setFSel]=useState({});
@@ -1351,6 +1411,21 @@ export default function WanderPlan(){
   var[companionData,setCompanionData]=useState(null);
   var[companionLoad,setCompanionLoad]=useState(false);
   var[companionErr,setCompanionErr]=useState("");
+  var flightPlannerDests=(function(){
+    var tripCtx=(newTrip&&typeof newTrip==="object")?newTrip:{};
+    var tripDestInputs=(Array.isArray(tripCtx.dests)&&tripCtx.dests.length)
+      ? tripCtx.dests
+      : String(tripCtx.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
+    return tripDestInputs.map(function(v,idx){
+      var raw=String(v||"").trim();
+      if(!raw)return null;
+      var byId=bucket.find(function(b){return b.id===raw;});
+      if(byId)return byId;
+      var byName=bucket.find(function(b){return String(b&&b.name||"").trim().toLowerCase()===raw.toLowerCase();});
+      if(byName)return byName;
+      return {id:"flight-dest-"+idx,name:raw};
+    }).filter(Boolean);
+  }());
 
   useEffect(function(){(async function(){
     var inviteTokenInUrl="";
@@ -1869,6 +1944,9 @@ export default function WanderPlan(){
       if(st.duration_revision_signature!==undefined){
         setSDSig(String(st.duration_revision_signature||"").trim());
       }
+      if(st.duration_per_destination&&typeof st.duration_per_destination==="object"){
+        setDPD(st.duration_per_destination);
+      }
       if(st.shared_budget_tier!==undefined){
         setSBT(String(st.shared_budget_tier||"").trim().toLowerCase());
       }
@@ -1880,6 +1958,15 @@ export default function WanderPlan(){
             planningTripDays
           );
         });
+      }
+      if(Array.isArray(st.flight_route_plan)){
+        setFLI(st.flight_route_plan.map(function(stop){
+          return {
+            destination:String(stop&&stop.destination||"").trim(),
+            airport:String(stop&&stop.airport||stop&&stop.to_airport||"").trim(),
+            travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10)
+          };
+        }));
       }
       setDMV(normalizeDestinationVoteState(st.dest_member_votes));
       setPV(normalizePoiStateMap(st.poi_votes,pois,st.poi_option_pool));
@@ -1958,6 +2045,7 @@ export default function WanderPlan(){
         if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(normalizePoiStateMap(state.poi_member_choices,pois,state.poi_option_pool||poiOptionPool));
         if(state.duration_days_locked!==undefined)setSDD(Math.max(0,Number(state.duration_days_locked)||0));
         if(state.duration_revision_signature!==undefined)setSDSig(String(state.duration_revision_signature||"").trim());
+        if(state.duration_per_destination&&typeof state.duration_per_destination==="object")setDPD(state.duration_per_destination);
         if(state.shared_budget_tier!==undefined)setSBT(String(state.shared_budget_tier||"").trim().toLowerCase());
         if(state.flight_dates&&typeof state.flight_dates==="object"){
           var returnedTripDays=Math.max(0,Number(state.duration_days_locked!==undefined?state.duration_days_locked:sharedDurationDays)||0);
@@ -1967,6 +2055,15 @@ export default function WanderPlan(){
               returnedTripDays
             );
           });
+        }
+        if(Array.isArray(state.flight_route_plan)){
+          setFLI(state.flight_route_plan.map(function(stop){
+            return {
+              destination:String(stop&&stop.destination||"").trim(),
+              airport:String(stop&&stop.airport||stop&&stop.to_airport||"").trim(),
+              travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10)
+            };
+          }));
         }
         if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
         if(state.stay_votes&&typeof state.stay_votes==="object")setStayVotes(state.stay_votes);
@@ -2142,6 +2239,42 @@ export default function WanderPlan(){
     var t=setInterval(run,1500);
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,wizStep,currentTripId,newTrip&&newTrip.id,flightDates.depart,flightDates.ret]);
+  useEffect(function(){
+    if(!loaded||sc!=="wizard"||wizStep!==10)return;
+    var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")
+      ? availabilityData.locked_window
+      : ((flightDates.depart&&flightDates.ret)?{start:String(flightDates.depart||"").slice(0,10),end:String(flightDates.ret||"").slice(0,10)}:null);
+    var normalized=buildFlightRoutePlan(flightPlannerDests,durPerDest,lockedWindow,flightLegInputs);
+    if(flightRoutePlanSignature(flightLegInputs)!==flightRoutePlanSignature(normalized)){
+      setFLI(normalized);
+    }
+    if(lockedWindow){
+      var nextDepart=String(lockedWindow.start||"").slice(0,10);
+      var nextRet=String(lockedWindow.end||"").slice(0,10);
+      if(String(flightDates.depart||"").slice(0,10)!==nextDepart||String(flightDates.ret||"").slice(0,10)!==nextRet||flightDates.final_airport===undefined){
+        setFD(function(prev){
+          return Object.assign({},prev||{},{
+            depart:nextDepart,
+            ret:nextRet,
+            final_airport:String((prev&&prev.final_airport)||prev&&prev.origin||"").trim()
+          });
+        });
+      }
+    }
+  },[
+    loaded,
+    sc,
+    wizStep,
+    flightRoutePlanSignature(flightLegInputs),
+    JSON.stringify((flightPlannerDests||[]).map(function(d){return d&&d.name||d;})),
+    JSON.stringify(durPerDest||{}),
+    availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start,
+    availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.end,
+    flightDates.depart,
+    flightDates.ret,
+    flightDates.origin,
+    flightDates.final_airport
+  ]);
   useEffect(function(){
     var grouped={};
     (Array.isArray(stays)?stays:[]).forEach(function(stay,idx){
@@ -3468,28 +3601,66 @@ export default function WanderPlan(){
       }catch(e){}
       return String(fallbackCode||"").trim().toUpperCase();
     }
-    function flightLegInputsForDests(){
-      var needed=Math.max(0,dests.length-1);
-      var next=(flightLegInputs||[]).slice(0,needed);
-      while(next.length<needed)next.push({to_airport:"",depart_date:""});
-      return next;
+    function currentLockedFlightWindow(){
+      var raw=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
+      if(raw)return raw;
+      if(flightDates.depart&&flightDates.ret)return {start:String(flightDates.depart||"").slice(0,10),end:String(flightDates.ret||"").slice(0,10)};
+      return null;
     }
-    async function buildMultiCitySegments(firstArrival){
+    function normalizedFlightRoutePlan(planOverride){
+      return buildFlightRoutePlan(flightPlannerDests,durPerDest,currentLockedFlightWindow(),planOverride!==undefined?planOverride:flightLegInputs);
+    }
+    function persistFlightRoute(nextDates,nextPlan){
+      var normalizedPlan=normalizedFlightRoutePlan(nextPlan);
+      var nextFlightDates=Object.assign({},flightDates||{},nextDates||{});
+      var locked=currentLockedFlightWindow();
+      if(locked&&locked.start)nextFlightDates.depart=String(locked.start||"").slice(0,10);
+      if(locked&&locked.end)nextFlightDates.ret=String(locked.end||"").slice(0,10);
+      setFD(nextFlightDates);
+      setFLI(normalizedPlan);
+      saveTripPlanningState({state:{
+        flight_dates:{
+          origin:String(nextFlightDates.origin||"").trim(),
+          final_airport:String(nextFlightDates.final_airport||"").trim(),
+          depart:String(nextFlightDates.depart||"").slice(0,10),
+          ret:String(nextFlightDates.ret||"").slice(0,10)
+        },
+        flight_route_plan:normalizedPlan
+      }}).catch(function(){});
+      return {plan:normalizedPlan,dates:nextFlightDates};
+    }
+    async function buildFlightSegments(routePlan,originInput,finalAirportInput){
       var segments=[];
-      var prev=firstArrival;
-      var extra=flightLegInputsForDests();
-      for(var i=0;i<extra.length;i++){
-        var seg=extra[i]||{};
-        var toCode=await resolveAirportCode(seg.to_airport,"");
-        var depDate=String(seg.depart_date||"").slice(0,10);
-        if(!toCode||toCode.length!==3){
-          throw new Error("Enter a city or airport for leg "+(i+2)+".");
+      var plan=normalizedFlightRoutePlan(routePlan);
+      if(plan.length===0)throw new Error("Add at least one destination before searching flights.");
+      var originCode=await resolveAirportCode(originInput,"");
+      if(!originCode||originCode.length!==3)throw new Error("Could not match the starting city to an airport.");
+      var prevCode=originCode;
+      for(var i=0;i<plan.length;i++){
+        var stop=plan[i]||{};
+        var airportLabel=String(stop.airport||stop.destination||"").trim();
+        var nextCode=await resolveAirportCode(airportLabel,"");
+        var travelDate=String(stop.travel_date||"").slice(0,10);
+        if(!nextCode||nextCode.length!==3){
+          throw new Error((airportLabel?('Could not match "'+airportLabel+'" to an airport for stop '+(i+1)+'.'):('Enter a city or airport for stop '+(i+1)+'.')));
         }
-        if(!depDate){
-          throw new Error("Enter depart date for leg "+(i+2)+".");
+        if(!travelDate){
+          throw new Error("Enter a travel date for "+String(stop.destination||("stop "+(i+1)))+".");
         }
-        segments.push({from_airport:prev,to_airport:toCode,depart_date:depDate});
-        prev=toCode;
+        if(prevCode!==nextCode){
+          segments.push({from_airport:prevCode,to_airport:nextCode,depart_date:travelDate});
+        }
+        prevCode=nextCode;
+      }
+      var finalInput=String(finalAirportInput||originInput||"").trim();
+      var finalCode=await resolveAirportCode(finalInput,originCode);
+      if(!finalCode||finalCode.length!==3){
+        throw new Error((finalInput?('Could not match "'+finalInput+'" to an airport for the final return leg.'):("Enter a final return city or airport.")));
+      }
+      var finalDate=(currentLockedFlightWindow()&&String(currentLockedFlightWindow().end||"").slice(0,10))||String(flightDates.ret||"").slice(0,10);
+      if(finalCode!==prevCode){
+        if(!finalDate)throw new Error("Enter the final return date.");
+        segments.push({from_airport:prevCode,to_airport:finalCode,depart_date:finalDate});
       }
       return segments;
     }
@@ -3498,12 +3669,12 @@ export default function WanderPlan(){
       setFC(false);
       setFBL([]);
       var originInput=String(flightDates.origin||"").trim();
-      var firstArrivalInput=String(flightDates.arrive||"").trim();
+      var finalAirportInput=String(flightDates.final_airport||flightDates.origin||"").trim();
       var departDate=String(flightDates.depart||"").slice(0,10);
       var returnDate=String(flightDates.ret||"").slice(0,10);
       if(!(authToken&&currentTripId)){setFErr("Sign in and create/save the trip first.");return;}
       if(originInput.length<2){setFErr("Enter your starting city or airport.");return;}
-      if(firstArrivalInput.length<2){setFErr("Enter your arrival city or airport.");return;}
+      if(finalAirportInput.length<2){setFErr("Enter your final return city or airport.");return;}
       if(!departDate){setFErr("Select a departure date.");return;}
       if(!returnDate){setFErr("Select a return date.");return;}
       setFLoad(true);
@@ -3511,17 +3682,18 @@ export default function WanderPlan(){
       setFLegs([]);
       setFSel({});
       try{
+        var routePlan=normalizedFlightRoutePlan();
         var origin=await resolveAirportCode(originInput,"");
-        var firstArrival=await resolveAirportCode(firstArrivalInput,"");
+        var firstArrival=await resolveAirportCode(String((routePlan[0]&&routePlan[0].airport)||"",),"");
         if(!origin||origin.length!==3){setFLoad(false);setFDone(false);setFErr("Could not match the starting city to an airport.");return;}
-        if(!firstArrival||firstArrival.length!==3){setFLoad(false);setFDone(false);setFErr("Could not match the arrival city to an airport.");return;}
-        var segments=await buildMultiCitySegments(firstArrival);
+        if(!firstArrival||firstArrival.length!==3){setFLoad(false);setFDone(false);setFErr("Could not match the first destination city to an airport.");return;}
+        var segments=await buildFlightSegments(routePlan,originInput,finalAirportInput);
         var r=await apiJson("/trips/"+currentTripId+"/flights/search",{method:"POST",body:{
           origin:origin,
           destination:firstArrival,
           depart_date:departDate,
           return_date:returnDate,
-          round_trip:true,
+          round_trip:false,
           cabin_class:"economy",
           multi_city_segments:segments
         }},authToken);
@@ -3559,10 +3731,10 @@ export default function WanderPlan(){
         logWizAction("record_selection",{key:"flights.selected",value:legSelections});
         saveTripPlanningState({state:{flight_dates:{
           origin:flightDates.origin||"",
-          arrive:flightDates.arrive||"",
+          final_airport:flightDates.final_airport||"",
           depart:String(flightDates.depart||"").slice(0,10),
           ret:String(flightDates.ret||"").slice(0,10)
-        }}});
+        },flight_route_plan:normalizedFlightRoutePlan()}});
         links.forEach(function(link){
           try{window.open(link.url,"_blank","noopener,noreferrer");}catch(e){}
         });
@@ -4530,33 +4702,64 @@ export default function WanderPlan(){
     }())}
 
     {wizStep===10&&(function(){
-      var extraInputs=flightLegInputsForDests();
+      var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
+      var routePlan=normalizedFlightRoutePlan();
       var allPicked=(flightLegs||[]).length>0&&(flightLegs||[]).every(function(leg){return !!flightSel[leg.leg_id];});
-      function updFlight(k,v){setFD(function(p){var n=Object.assign({},p);n[k]=v;return n;});}
-      function updExtra(idx,key,val){
+      function updFlight(k,v,commit){
+        setFD(function(p){
+          var n=Object.assign({},p);
+          n[k]=v;
+          if(k==="origin"&&!String(n.final_airport||"").trim())n.final_airport=v;
+          if(commit){
+            persistFlightRoute(n,routePlan);
+          }
+          return n;
+        });
+      }
+      function updRouteStop(idx,key,val,commit){
         setFLI(function(prev){
-          var arr=(prev||[]).slice(0);
-          while(arr.length<extraInputs.length)arr.push({to_airport:"",depart_date:""});
+          var arr=normalizedFlightRoutePlan(prev).slice(0);
           var row=Object.assign({},arr[idx]||{});
           row[key]=val;
           arr[idx]=row;
+          if(commit)persistFlightRoute(flightDates,arr);
           return arr;
         });
       }
-      var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
+      function moveRouteStop(idx,direction){
+        var moved=moveFlightRouteStop(routePlan,idx,direction,durPerDest,lockedWindow);
+        persistFlightRoute(flightDates,moved);
+      }
       return(<div>
         {ab("Flight Agent","Search and confirm flights only after the organizer has locked the exact trip dates.")}
         {lockedWindow&&<div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}><p style={{fontSize:12,color:C.tealL}}>Locked trip dates: {lockedWindow.start} to {lockedWindow.end}</p></div>}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
-          <input value={flightDates.origin||""} onChange={function(e){updFlight("origin",e.target.value);}} placeholder="Starting city or airport (e.g. Detroit)" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={flightDates.arrive||""} onChange={function(e){updFlight("arrive",e.target.value);}} placeholder={"Arrival city or airport ("+(dests[0]&&dests[0].name?dests[0].name:"leg 1")+")"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={flightDates.depart||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updFlight("depart",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={flightDates.ret||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updFlight("ret",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+        <div style={{marginBottom:10,padding:"12px 14px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+          <p style={{fontSize:12,color:C.tx2,marginBottom:6}}>Set the starting airport and final return airport. Destination cities are inserted underneath, auto-dated from the locked trip window, and can be reordered or overridden by any traveler.</p>
         </div>
-        {extraInputs.map(function(seg,idx){return(<div key={idx} style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:8}}>
-          <input value={(flightLegInputs[idx]&&flightLegInputs[idx].to_airport)||""} onChange={function(e){updExtra(idx,"to_airport",e.target.value);}} placeholder={"Leg "+(idx+2)+" arrival city or airport ("+(dests[idx+1]&&dests[idx+1].name?dests[idx+1].name:"")+")"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={(flightLegInputs[idx]&&flightLegInputs[idx].depart_date)||""} onClick={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onFocus={function(e){try{if(e&&e.currentTarget&&typeof e.currentTarget.showPicker==="function")e.currentTarget.showPicker();}catch(_){}}} onChange={function(e){updExtra(idx,"depart_date",e.target.value);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-        </div>);})}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
+          <input value={flightDates.origin||""} onChange={function(e){updFlight("origin",e.target.value,false);}} onBlur={function(e){updFlight("origin",e.target.value,true);}} placeholder="Starting city or airport (e.g. Detroit)" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <input value={flightDates.final_airport||""} onChange={function(e){updFlight("final_airport",e.target.value,false);}} onBlur={function(e){updFlight("final_airport",e.target.value,true);}} placeholder="Final return city or airport" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <input value={flightDates.depart||""} readOnly type="date" style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:C.tx2}}/>
+          <input value={flightDates.ret||""} readOnly type="date" style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:C.tx2}}/>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:10}}>
+          {routePlan.map(function(stop,idx){
+            return(<div key={stop.destination+"-"+idx} style={{display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(0,1fr) auto",gap:8,alignItems:"center"}}>
+              <div style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border}}>
+                <p style={{fontSize:11,color:C.tx3,marginBottom:4}}>Destination {idx+1}</p>
+                <p style={{fontSize:13,fontWeight:700,color:"#fff"}}>{stop.destination}</p>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}}>
+                <input value={stop.airport||""} onChange={function(e){updRouteStop(idx,"airport",e.target.value,false);}} onBlur={function(e){updRouteStop(idx,"airport",e.target.value,true);}} placeholder={stop.destination+" city or airport"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+                <input value={stop.travel_date||""} onClick={tryShowDatePicker} onFocus={tryShowDatePicker} onChange={function(e){updRouteStop(idx,"travel_date",e.target.value,false);}} onBlur={function(e){updRouteStop(idx,"travel_date",e.target.value,true);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={function(){moveRouteStop(idx,-1);}} disabled={idx===0} style={{width:34,height:34,borderRadius:8,border:"1px solid "+C.border,background:idx===0?C.surface:C.bg,color:idx===0?C.tx3:"#fff",cursor:idx===0?"default":"pointer"}}>↑</button>
+                <button onClick={function(){moveRouteStop(idx,1);}} disabled={idx===routePlan.length-1} style={{width:34,height:34,borderRadius:8,border:"1px solid "+C.border,background:idx===routePlan.length-1?C.surface:C.bg,color:idx===routePlan.length-1?C.tx3:"#fff",cursor:idx===routePlan.length-1?"default":"pointer"}}>↓</button>
+              </div>
+            </div>);
+          })}
+        </div>
         <button onClick={searchFlights} disabled={flightLoad} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:flightLoad?C.border:C.teal,color:flightLoad?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:flightLoad?"default":"pointer"}}>{flightLoad?"Searching flights...":"Search Flight Options"}</button>
         {flightErr&&<p style={{fontSize:12,color:C.red,marginTop:8}}>{flightErr}</p>}
         {flightDone&&flightLegs.length>0&&(<div style={{marginTop:10}}>
@@ -5155,5 +5358,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFlightRoutePlan, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 
