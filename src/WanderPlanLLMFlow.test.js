@@ -16,6 +16,7 @@ import {
   inclusiveIsoDays,
   isCurrentVoteVoter,
   makeVoteUserId,
+  mergeAvailabilityDraft,
   mergeProfileIntoUser,
   mergeSharedFlightDates,
   mergeVoteRows,
@@ -157,6 +158,25 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         11
       )
     ).toEqual({ start: "", end: "" });
+  });
+
+  test("mergeAvailabilityDraft preserves in-progress manual date edits during polling", () => {
+    expect(
+      mergeAvailabilityDraft(
+        { start: "2026-04-01", end: "" },
+        { start: "", end: "" },
+        11,
+        false
+      )
+    ).toEqual({ start: "2026-04-01", end: "" });
+    expect(
+      mergeAvailabilityDraft(
+        { start: "2026-04-01", end: "2026-04-11" },
+        { start: "2026-05-01", end: "2026-05-11" },
+        11,
+        true
+      )
+    ).toEqual({ start: "2026-05-01", end: "2026-05-11" });
   });
 
   test("mergeSharedFlightDates keeps typed city names while syncing locked dates", () => {

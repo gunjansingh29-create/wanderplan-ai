@@ -553,6 +553,14 @@ function resolveAvailabilityDraftWindow(overlapData, currentUserId, flightDatesV
   return {start:"",end:""};
 }
 
+function mergeAvailabilityDraft(prevDraft, resolvedDraft, tripDays, hasLockedWindow){
+  var prev=(prevDraft&&typeof prevDraft==="object")?prevDraft:{start:"",end:""};
+  var next=(resolvedDraft&&typeof resolvedDraft==="object")?resolvedDraft:{start:"",end:""};
+  if(hasLockedWindow&&availabilityWindowMatchesTripDays(next,tripDays))return next;
+  if(String(prev.start||"").trim()||String(prev.end||"").trim())return prev;
+  return next;
+}
+
 function tryShowDatePicker(event){
   try{
     if(event&&event.currentTarget&&typeof event.currentTarget.showPicker==="function"){
@@ -2122,7 +2130,10 @@ export default function WanderPlan(){
         var requiredTripDays=Math.max(1,Number(res.required_trip_days||sharedDurationDays||inclusiveIsoDays(flightDates.depart,flightDates.ret)||Number(tr.days)||10));
         var sanitized=sanitizeAvailabilityOverlapData(res,requiredTripDays);
         setAData(sanitized);
-        setADraft(resolveAvailabilityDraftWindow(sanitized,String(userIdFromToken(authToken)||"").trim(),flightDates,requiredTripDays));
+        var resolvedDraft=resolveAvailabilityDraftWindow(sanitized,String(userIdFromToken(authToken)||"").trim(),flightDates,requiredTripDays);
+        setADraft(function(prev){
+          return mergeAvailabilityDraft(prev,resolvedDraft,requiredTripDays,!!sanitized.locked_window);
+        });
       }).catch(function(e){
         setAErr(String(e&&e.message||"Could not load availability"));
       });
@@ -5144,5 +5155,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 
