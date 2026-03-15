@@ -509,6 +509,20 @@ function resolveTripBudgetTier(sharedTier, userTier){
   return String(sharedTier||userTier||"moderate").trim().toLowerCase()||"moderate";
 }
 
+function buildDurationPlanSignature(destNames,totalDays){
+  var names=(Array.isArray(destNames)?destNames:[]).map(function(name){return String(name||"").trim().toLowerCase();}).filter(Boolean);
+  return names.join("|")+"::"+String(Math.max(0,Number(totalDays)||0));
+}
+
+function shouldResetTravelPlanForDurationChange(prevSignature,nextSignature,prevDays,nextDays){
+  var prevSig=String(prevSignature||"").trim();
+  var nextSig=String(nextSignature||"").trim();
+  if(prevSig&&nextSig&&prevSig!==nextSig)return true;
+  var prevNum=Math.max(0,Number(prevDays)||0);
+  var nextNum=Math.max(0,Number(nextDays)||0);
+  return prevNum>0&&nextNum>0&&prevNum!==nextNum;
+}
+
 function resolveWizardTripId(currentTripIdValue,newTripValue,tripValue){
   var preferred=String(currentTripIdValue||"").trim();
   if(preferred)return preferred;
@@ -1228,6 +1242,7 @@ export default function WanderPlan(){
   var[consensusMsg,setCSM]=useState("");
   var[durPerDest,setDPD]=useState({});
   var[sharedDurationDays,setSDD]=useState(0);
+  var[sharedDurationSignature,setSDSig]=useState("");
   var[availabilityDraft,setADraft]=useState({start:"",end:""});
   var[availabilityData,setAData]=useState(null);
   var[availabilityErr,setAErr]=useState("");
@@ -1766,6 +1781,9 @@ export default function WanderPlan(){
       if(st.duration_days_locked!==undefined){
         setSDD(Math.max(0,Number(st.duration_days_locked)||0));
       }
+      if(st.duration_revision_signature!==undefined){
+        setSDSig(String(st.duration_revision_signature||"").trim());
+      }
       if(st.shared_budget_tier!==undefined){
         setSBT(String(st.shared_budget_tier||"").trim().toLowerCase());
       }
@@ -1849,6 +1867,7 @@ export default function WanderPlan(){
         if(state.poi_votes&&typeof state.poi_votes==="object")setPV(normalizePoiStateMap(state.poi_votes,pois,state.poi_option_pool||poiOptionPool));
         if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(normalizePoiStateMap(state.poi_member_choices,pois,state.poi_option_pool||poiOptionPool));
         if(state.duration_days_locked!==undefined)setSDD(Math.max(0,Number(state.duration_days_locked)||0));
+        if(state.duration_revision_signature!==undefined)setSDSig(String(state.duration_revision_signature||"").trim());
         if(state.shared_budget_tier!==undefined)setSBT(String(state.shared_budget_tier||"").trim().toLowerCase());
         if(state.flight_dates&&typeof state.flight_dates==="object")setFD(function(prev){return mergeSharedFlightDates(prev,state.flight_dates,wizStep===10);});
         if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
@@ -4098,16 +4117,43 @@ export default function WanderPlan(){
       var feasible=totalCalc<=21;
       var tooLong=totalCalc>14;
       function approveDurationAndContinue(){
+        var nextSignature=buildDurationPlanSignature(destNames,totalCalc);
+        var shouldResetTravel=shouldResetTravelPlanForDurationChange(sharedDurationSignature,nextSignature,sharedDurationDays,totalCalc);
+        var nextFlightDates={
+          origin:flightDates.origin||"",
+          arrive:flightDates.arrive||"",
+          depart:shouldResetTravel?"":String(flightDates.depart||"").slice(0,10),
+          ret:shouldResetTravel?"":String(flightDates.ret||"").slice(0,10)
+        };
         setSDD(totalCalc);
+        setSDSig(nextSignature);
+        if(shouldResetTravel){
+          setAData(function(prev){
+            var next=Object.assign({},(prev&&typeof prev==="object")?prev:{});
+            delete next.locked_window;
+            next.is_locked=false;
+            next.overlapping_windows=[];
+            next.closest_windows=[];
+            return next;
+          });
+          setADraft({start:"",end:""});
+          setAErr("");
+          setFD(function(prev){return Object.assign({},prev||{},nextFlightDates);});
+          setFLI([]);
+          setFLegs([]);
+          setFSel({});
+          setFErr("");
+          setFDone(false);
+          setFC(false);
+          setFBL([]);
+          setCSM("Duration changed. Availability and flight timing need revision.");
+        }
         saveTripPlanningState({state:{
           duration_days_locked:totalCalc,
+          duration_revision_signature:nextSignature,
           duration_per_destination:durPerDest,
-          flight_dates:{
-            origin:flightDates.origin||"",
-            arrive:flightDates.arrive||"",
-            depart:String(flightDates.depart||"").slice(0,10),
-            ret:String(flightDates.ret||"").slice(0,10)
-          }
+          availability_locked_window:shouldResetTravel?null:((availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null),
+          flight_dates:nextFlightDates
         }}).finally(function(){adv();});
       }
 
@@ -4893,5 +4939,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 

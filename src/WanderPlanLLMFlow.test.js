@@ -4,6 +4,7 @@ import {
   accountCacheKey,
   availabilityWindowMatchesTripDays,
   buildCurrentVoteActor,
+  buildDurationPlanSignature,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
   canonicalMealVoteKey,
@@ -30,6 +31,7 @@ import {
   resolveBudgetTier,
   resolveTripBudgetTier,
   resolveWizardTripId,
+  shouldResetTravelPlanForDurationChange,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
   summarizeMealVotes,
@@ -136,6 +138,17 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
   test("resolveTripBudgetTier prefers organizer-selected shared budget tier", () => {
     expect(resolveTripBudgetTier("premium", "budget")).toBe("premium");
     expect(resolveTripBudgetTier("", "luxury")).toBe("luxury");
+  });
+
+  test("duration plan signature changes when destinations or total days change", () => {
+    expect(buildDurationPlanSignature(["Tokyo", "Kyoto"], 10)).toBe("tokyo|kyoto::10");
+    expect(buildDurationPlanSignature(["Tokyo", "Osaka", "Kyoto"], 12)).toBe("tokyo|osaka|kyoto::12");
+  });
+
+  test("shouldResetTravelPlanForDurationChange resets stale availability and flights", () => {
+    expect(shouldResetTravelPlanForDurationChange("tokyo|kyoto::10", "tokyo|osaka|kyoto::12", 10, 12)).toBe(true);
+    expect(shouldResetTravelPlanForDurationChange("", "", 10, 12)).toBe(true);
+    expect(shouldResetTravelPlanForDurationChange("tokyo|kyoto::10", "tokyo|kyoto::10", 10, 10)).toBe(false);
   });
 
   test("resolveWizardTripId falls back to newTrip id when currentTripId is missing", () => {
