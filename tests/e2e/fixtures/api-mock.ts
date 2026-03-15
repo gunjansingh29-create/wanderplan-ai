@@ -113,15 +113,72 @@ const MOCK_CALENDAR_SYNC = {
 export async function setupApiMocks(page: Page): Promise<void> {
   const fulfill = (route: Route, body: unknown, status = 200) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const mockTrip = JSON.parse(JSON.stringify(MOCK_TRIP));
+  const companionPayload = () => ({
+    companion: {
+      trip: {
+        id: mockTrip.id,
+        owner_id: mockTrip.owner_id,
+        name: mockTrip.name,
+        status: mockTrip.status,
+        duration_days: mockTrip.duration_days,
+      },
+      locked_window: { start: '2025-06-15', end: '2025-06-21' },
+      current_step: 14,
+      members: [
+        {
+          user_id: MOCK_USER.id,
+          role: 'owner',
+          status: 'accepted',
+          display_name: MOCK_USER.name,
+          email: MOCK_USER.email,
+        },
+      ],
+      today: {
+        day_number: 1,
+        date: '2025-06-15',
+        title: 'Arrival Day',
+        approved: true,
+        items: [
+          { activity_id: 'act-1', time_slot: '09:00-10:00', title: 'Land in Tokyo', category: 'flight', location: 'Haneda Airport' },
+          { activity_id: 'act-2', time_slot: '13:00-14:00', title: 'Check in at hotel', category: 'checkin', location: 'Shinjuku' },
+        ],
+      },
+      upcoming: [
+        {
+          day_number: 2,
+          date: '2025-06-16',
+          title: 'Culture Day',
+          approved: true,
+          items: [
+            { activity_id: 'act-3', time_slot: '10:00-11:00', title: 'Senso-ji Temple', category: 'culture', location: 'Asakusa' },
+          ],
+        },
+      ],
+      days: [],
+      stats: { day_count: 7, approved_days: 7, item_count: 14 },
+    },
+  });
 
   // Auth
   await page.route(`${API}/auth/register`, r => fulfill(r, { accessToken: MOCK_TOKEN, refreshToken: 'refresh', expiresIn: 86400, user: MOCK_USER }, 201));
   await page.route(`${API}/auth/login`,    r => fulfill(r, { accessToken: MOCK_TOKEN, refreshToken: 'refresh', expiresIn: 86400, user: MOCK_USER }));
+  await page.route(`${API}/me/profile`,    r => fulfill(r, { profile: { display_name: MOCK_USER.name, travel_styles: ['solo'], interests: { culture: true, food: true }, budget_tier: 'moderate', dietary: [] } }));
+  await page.route(`${API}/me/bucket-list`, r => fulfill(r, { items: [] }));
+  await page.route(`${API}/crew/peer-profiles`, r => fulfill(r, { peers: [] }));
+  await page.route(`${API}/crew/invites/sent`, r => fulfill(r, { invites: [] }));
+  await page.route(`${API}/me/trips`, r => fulfill(r, { trips: [mockTrip] }));
 
   // Trips
-  await page.route(`${API}/trips`,                          r => r.request().method() === 'POST' ? fulfill(r, { trip: MOCK_TRIP }, 201) : r.continue());
-  await page.route(`${API}/trips/${MOCK_TRIP.id}`,          r => fulfill(r, { trip: MOCK_TRIP }));
+  await page.route(`${API}/trips`,                          r => r.request().method() === 'POST' ? fulfill(r, { trip: mockTrip }, 201) : r.continue());
+  await page.route(`${API}/trips/${MOCK_TRIP.id}`,          r => fulfill(r, { trip: mockTrip }));
   await page.route(`${API}/trips/${MOCK_TRIP.id}/members`,  r => r.request().method() === 'POST' ? fulfill(r, { user_id: 'new-member', role: 'member', status: 'pending' }, 201) : r.continue());
+  await page.route(`${API}/trips/${MOCK_TRIP.id}/companion`, r => {
+    if (mockTrip.status !== 'active' && mockTrip.status !== 'completed') {
+      return fulfill(r, { detail: 'Trip is not active yet' }, 409);
+    }
+    return fulfill(r, companionPayload());
+  });
 
   // Wildcard: member accept
   await page.route(`**/${MOCK_TRIP.id}/members/**`,         r => fulfill(r, { user_id: 'member', status: 'accepted' }));
@@ -154,6 +211,36 @@ export async function setupApiMocks(page: Page): Promise<void> {
   await page.route(`**/${MOCK_TRIP.id}/budget/breakdown`,   r => fulfill(r, { budget: MOCK_BUDGET }));
   await page.route(`**/${MOCK_TRIP.id}/budget/increase`,    r => fulfill(r, { budget: { ...MOCK_BUDGET, daily_target: 200, total_budget: 1400, remaining: 1400, breakdown: { flights: 420, accommodation: 420, dining: 280, activities: 140, transport: 70, misc: 70 } } }));
 
+  // Airport search (city-to-IATA typeahead)
+  await page.route(`${API}/airports/search**`, async route => {
+    const url = new URL(route.request().url());
+    const q = (url.searchParams.get('q') ?? '').toLowerCase().trim();
+    const AIRPORTS_DB = [
+      { iata: 'LAX', name: 'Los Angeles International', city: 'Los Angeles', country: 'US' },
+      { iata: 'ONT', name: 'Ontario International', city: 'Ontario / Los Angeles', country: 'US' },
+      { iata: 'BUR', name: 'Hollywood Burbank Airport', city: 'Burbank', country: 'US' },
+      { iata: 'NRT', name: 'Narita International Airport', city: 'Tokyo', country: 'JP' },
+      { iata: 'HND', name: 'Haneda Airport', city: 'Tokyo', country: 'JP' },
+      { iata: 'KIX', name: 'Kansai International Airport', city: 'Osaka / Kyoto', country: 'JP' },
+      { iata: 'JTR', name: 'Santorini National Airport', city: 'Santorini', country: 'GR' },
+      { iata: 'ATH', name: 'Athens International Airport', city: 'Athens', country: 'GR' },
+      { iata: 'JFK', name: 'John F. Kennedy International', city: 'New York', country: 'US' },
+      { iata: 'SFO', name: 'San Francisco International', city: 'San Francisco', country: 'US' },
+      { iata: 'LHR', name: 'Heathrow Airport', city: 'London', country: 'GB' },
+      { iata: 'CDG', name: 'Charles de Gaulle Airport', city: 'Paris', country: 'FR' },
+      { iata: 'DPS', name: 'Ngurah Rai International Airport', city: 'Bali / Denpasar', country: 'ID' },
+      { iata: 'LIM', name: 'Jorge Chávez International Airport', city: 'Lima', country: 'PE' },
+    ];
+    const matches = q.length >= 2
+      ? AIRPORTS_DB.filter(a =>
+          a.city.toLowerCase().includes(q) ||
+          a.name.toLowerCase().includes(q) ||
+          a.iata.toLowerCase() === q
+        ).slice(0, 5)
+      : [];
+    await fulfill(route, { airports: matches, source: 'mock' });
+  });
+
   // Flights
   await page.route(`**/${MOCK_TRIP.id}/flights/search`, r => fulfill(r, {
     flights: MOCK_FLIGHTS,
@@ -179,7 +266,10 @@ export async function setupApiMocks(page: Page): Promise<void> {
 
   // Itinerary
   await page.route(`**/${MOCK_TRIP.id}/itinerary`,         r => fulfill(r, { itinerary: { days: [] } }));
-  await page.route(`**/${MOCK_TRIP.id}/itinerary/approve`, r => fulfill(r, { approved: true }));
+  await page.route(`**/${MOCK_TRIP.id}/itinerary/approve`, r => {
+    mockTrip.status = 'active';
+    return fulfill(r, { approved: true, trip: mockTrip });
+  });
 
   // Calendar sync
   await page.route(`**/${MOCK_TRIP.id}/itinerary/calendar-sync`, r => fulfill(r, MOCK_CALENDAR_SYNC));
@@ -189,6 +279,52 @@ export async function setupApiMocks(page: Page): Promise<void> {
 
   // Storyboard
   await page.route(`**/${MOCK_TRIP.id}/storyboard/**`, r => fulfill(r, { storyboard: { platform: 'instagram', content: 'Amazing trip! #travel #japan #wanderplan' } }));
+}
+
+/** Install a multi-city flight mock (two outbound legs + return). */
+export async function setupMultiCityFlightMock(page: Page, tripId: string): Promise<void> {
+  const MULTI_CITY_FLIGHTS = [
+    // Leg 1: LAX → NRT
+    { flight_id: 'MC-001', leg_id: 'leg-1-LAX-NRT-2025-06-15',
+      airline: 'Japan Airlines', departure_airport: 'LAX', arrival_airport: 'NRT',
+      departure_time: '2025-06-15T10:30:00Z', arrival_time: '2025-06-16T14:45:00Z',
+      price_usd: 248, stops: 0, duration_minutes: 660, cabin_class: 'Economy', source: 'amadeus', selected: false },
+    { flight_id: 'MC-002', leg_id: 'leg-1-LAX-NRT-2025-06-15',
+      airline: 'ANA', departure_airport: 'LAX', arrival_airport: 'NRT',
+      departure_time: '2025-06-15T23:00:00Z', arrival_time: '2025-06-17T04:15:00Z',
+      price_usd: 220, stops: 0, duration_minutes: 720, cabin_class: 'Economy', source: 'amadeus', selected: false },
+    // Leg 2: NRT → KIX
+    { flight_id: 'MC-003', leg_id: 'leg-2-NRT-KIX-2025-06-20',
+      airline: 'ANA', departure_airport: 'NRT', arrival_airport: 'KIX',
+      departure_time: '2025-06-20T09:00:00Z', arrival_time: '2025-06-20T10:25:00Z',
+      price_usd: 85, stops: 0, duration_minutes: 85, cabin_class: 'Economy', source: 'amadeus', selected: false },
+    { flight_id: 'MC-004', leg_id: 'leg-2-NRT-KIX-2025-06-20',
+      airline: 'Japan Airlines', departure_airport: 'NRT', arrival_airport: 'KIX',
+      departure_time: '2025-06-20T14:30:00Z', arrival_time: '2025-06-20T15:55:00Z',
+      price_usd: 92, stops: 0, duration_minutes: 85, cabin_class: 'Economy', source: 'amadeus', selected: false },
+    // Return: KIX → LAX
+    { flight_id: 'MC-005', leg_id: 'leg-3-KIX-LAX-2025-06-28',
+      airline: 'Japan Airlines', departure_airport: 'KIX', arrival_airport: 'LAX',
+      departure_time: '2025-06-28T11:00:00Z', arrival_time: '2025-06-28T06:30:00Z',
+      price_usd: 265, stops: 0, duration_minutes: 600, cabin_class: 'Economy', source: 'amadeus', selected: false },
+  ];
+  await page.route(`**/${tripId}/flights/search`, route =>
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        flights: MULTI_CITY_FLIGHTS,
+        legs: [
+          { leg_id: 'leg-1-LAX-NRT-2025-06-15', from_airport: 'LAX', to_airport: 'NRT',
+            depart_date: '2025-06-15', options: MULTI_CITY_FLIGHTS.filter(f => f.leg_id === 'leg-1-LAX-NRT-2025-06-15') },
+          { leg_id: 'leg-2-NRT-KIX-2025-06-20', from_airport: 'NRT', to_airport: 'KIX',
+            depart_date: '2025-06-20', options: MULTI_CITY_FLIGHTS.filter(f => f.leg_id === 'leg-2-NRT-KIX-2025-06-20') },
+          { leg_id: 'leg-3-KIX-LAX-2025-06-28', from_airport: 'KIX', to_airport: 'LAX',
+            depart_date: '2025-06-28', options: MULTI_CITY_FLIGHTS.filter(f => f.leg_id === 'leg-3-KIX-LAX-2025-06-28') },
+        ],
+        search_params: { max_price: 315, source: 'amadeus', total_options: MULTI_CITY_FLIGHTS.length, segments: 3 },
+      }),
+    })
+  );
 }
 
 /** Install a variant mock where flight search returns no results first, then results on retry. */

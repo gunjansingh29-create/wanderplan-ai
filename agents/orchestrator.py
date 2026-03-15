@@ -576,6 +576,24 @@ async def _require_trip_member(conn: asyncpg.Connection, trip_id: str, user_id: 
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+async def _require_accepted_trip_member(conn: asyncpg.Connection, trip_id: str, user_id: str) -> None:
+    member = await conn.fetchrow(
+        """
+        SELECT role, status
+        FROM trip_members
+        WHERE trip_id = $1 AND user_id = $2
+        """,
+        trip_id,
+        user_id,
+    )
+    if not member:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    role = str(member["role"] or "").lower()
+    status = str(member["status"] or "pending").lower()
+    if role != "owner" and status != "accepted":
+        raise HTTPException(status_code=403, detail="Only accepted trip members can access this trip")
+
+
 async def _require_trip_owner(conn: asyncpg.Connection, trip_id: str, user_id: str) -> None:
     trip = await conn.fetchrow("SELECT owner_id FROM trips WHERE id = $1", trip_id)
     if not trip:
@@ -5642,7 +5660,30 @@ async def approve_itinerary(trip_id: str, body: ItineraryApproveRequest, user_id
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
         await conn.execute("UPDATE itinerary_days SET approved = $1 WHERE trip_id = $2", body.approved, trip_id)
-    return {"approved": body.approved}
+        trip = await conn.fetchrow(
+            """
+            UPDATE trips
+            SET status = CASE
+                WHEN $2::boolean = true THEN 'active'
+                WHEN COALESCE(status, '') IN ('', 'draft', 'saved', 'invited', 'active') THEN 'planning'
+                ELSE status
+            END
+            WHERE id = $1
+            RETURNING id, owner_id, name, status, duration_days
+            """,
+            trip_id,
+            body.approved,
+        )
+    return {
+        "approved": body.approved,
+        "trip": {
+            "id": str(trip["id"]),
+            "owner_id": str(trip["owner_id"]),
+            "name": str(trip["name"] or ""),
+            "status": str(trip["status"] or "planning"),
+            "duration_days": int(trip["duration_days"] or 0),
+        },
+    }
 
 
 @app.post("/trips/{trip_id}/itinerary/calendar-sync")
@@ -5744,6 +5785,154 @@ async def get_itinerary(trip_id: str, user_id: str = Depends(get_current_user_id
                 }
             )
     return {"itinerary": {"days": days}}
+
+
+@app.get("/trips/{trip_id}/companion")
+async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        await _require_accepted_trip_member(conn, trip_id, user_id)
+
+        trip = await conn.fetchrow(
+            "SELECT id, owner_id, name, status, duration_days FROM trips WHERE id = $1",
+            trip_id,
+        )
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+
+        trip_status = str(trip["status"] or "planning").lower()
+        if trip_status not in {"active", "completed"}:
+            raise HTTPException(status_code=409, detail="Trip is not active yet")
+
+        members = await conn.fetch(
+            """
+            SELECT
+              tm.user_id,
+              tm.role,
+              tm.status,
+              u.name,
+              u.email,
+              up.display_name
+            FROM trip_members tm
+            JOIN users u ON u.id = tm.user_id
+            LEFT JOIN user_profiles up ON up.user_id = u.id
+            WHERE trip_id = $1
+            ORDER BY tm.joined_at NULLS FIRST
+            """,
+            trip_id,
+        )
+        planning_row = await conn.fetchrow(
+            "SELECT current_step, state FROM trip_planning_states WHERE trip_id = $1 ORDER BY updated_at DESC LIMIT 1",
+            trip_id,
+        )
+        day_rows = await conn.fetch(
+            """
+            SELECT id, day_number, date, title, approved
+            FROM itinerary_days
+            WHERE trip_id = $1
+            ORDER BY day_number ASC
+            """,
+            trip_id,
+        )
+
+        planning_state = _json_obj((planning_row["state"] if planning_row else {}) or {})
+        locked_window = planning_state.get("availability_locked_window") if isinstance(planning_state, dict) else None
+
+        day_items: list[dict[str, Any]] = []
+        for day in day_rows:
+            activity_rows = await conn.fetch(
+                """
+                SELECT id, time_slot, title, category, location_name
+                FROM itinerary_activities
+                WHERE day_id = $1
+                ORDER BY time_slot ASC, created_at ASC
+                """,
+                day["id"],
+            )
+            items = [
+                {
+                    "activity_id": str(a["id"]),
+                    "time_slot": str(a["time_slot"] or ""),
+                    "title": str(a["title"] or ""),
+                    "category": str(a["category"] or "activity"),
+                    "location": str(a["location_name"] or ""),
+                }
+                for a in activity_rows
+            ]
+            day_items.append(
+                {
+                    "day_number": int(day["day_number"] or 0),
+                    "date": day["date"].isoformat() if day["date"] else None,
+                    "title": str(day["title"] or ""),
+                    "approved": bool(day["approved"]),
+                    "items": items,
+                }
+            )
+
+    accepted_members = []
+    for idx, m in enumerate(members):
+        role = str(m["role"] or "member").lower()
+        status = str(m["status"] or "pending").lower()
+        if role != "owner" and status != "accepted":
+            continue
+        display_name = str(m["display_name"] or m["name"] or m["email"] or f"Member {idx + 1}")
+        accepted_members.append(
+            {
+                "user_id": str(m["user_id"]),
+                "role": role,
+                "status": "accepted" if role == "owner" else status,
+                "display_name": display_name,
+                "email": str(m["email"] or ""),
+            }
+        )
+
+    locked_start = _safe_iso_date((locked_window or {}).get("start")) if isinstance(locked_window, dict) else None
+    locked_end = _safe_iso_date((locked_window or {}).get("end")) if isinstance(locked_window, dict) else None
+
+    today = date.today()
+    current_index = 0
+    if day_items:
+        dated = []
+        for idx, day in enumerate(day_items):
+            raw = _safe_iso_date(day.get("date"))
+            if raw:
+                dated.append((idx, raw))
+        if dated:
+            on_or_after = [idx for idx, raw in dated if raw >= today]
+            current_index = on_or_after[0] if on_or_after else dated[-1][0]
+
+    current_day = day_items[current_index] if day_items else None
+    upcoming_days = day_items[current_index + 1 : current_index + 3] if day_items else []
+    total_items = sum(len(day.get("items") or []) for day in day_items)
+    approved_days = sum(1 for day in day_items if day.get("approved"))
+
+    return {
+        "companion": {
+            "trip": {
+                "id": str(trip["id"]),
+                "owner_id": str(trip["owner_id"]),
+                "name": str(trip["name"] or ""),
+                "status": trip_status,
+                "duration_days": int(trip["duration_days"] or 0),
+            },
+            "locked_window": {
+                "start": locked_start.isoformat() if locked_start else None,
+                "end": locked_end.isoformat() if locked_end else None,
+            },
+            "current_step": int((planning_row["current_step"] if planning_row else 0) or 0),
+            "members": accepted_members,
+            "days": day_items,
+            "today": current_day,
+            "upcoming": upcoming_days,
+            "stats": {
+                "day_count": len(day_items),
+                "approved_days": approved_days,
+                "item_count": total_items,
+            },
+        }
+    }
 
 
 _MEAL_SLOTS = ("Breakfast", "Lunch", "Dinner")

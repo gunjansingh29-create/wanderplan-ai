@@ -199,6 +199,22 @@ function readInviteTokenFromUrl(){
   return "";
 }
 
+function formatCompanionDate(raw){
+  var text=String(raw||"").trim();
+  if(!text)return "";
+  try{
+    return new Date(text+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"});
+  }catch(e){}
+  return text;
+}
+
+function formatCompanionWindow(win){
+  var start=formatCompanionDate(win&&win.start);
+  var end=formatCompanionDate(win&&win.end);
+  if(start&&end)return start+" - "+end;
+  return start||end||"Dates TBD";
+}
+
 async function apiJson(path, options, token){
   var opts=Object.assign({},options||{});
   var hdrs=Object.assign({},opts.headers||{});
@@ -1266,6 +1282,9 @@ export default function WanderPlan(){
   var[itin,setItin]=useState([]);
   var[itinLoad,setIL]=useState(false);
   var[itinDone,setID]=useState(false);
+  var[companionData,setCompanionData]=useState(null);
+  var[companionLoad,setCompanionLoad]=useState(false);
+  var[companionErr,setCompanionErr]=useState("");
 
   useEffect(function(){(async function(){
     var inviteTokenInUrl="";
@@ -1989,11 +2008,29 @@ export default function WanderPlan(){
     return function(){clearInterval(t);};
   },[loaded,authToken,sc]);
   useEffect(function(){
-    if(!loaded||!authToken||!(sc==="dash"||sc==="wizard"||sc==="trip_detail"))return;
+    if(!loaded||!authToken||!(sc==="dash"||sc==="wizard"||sc==="trip_detail"||sc==="companion"))return;
     refreshTripsFromBackend();
     var t=setInterval(function(){refreshTripsFromBackend();},7000);
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,user.email]);
+  useEffect(function(){
+    var tid=String((viewTrip&&viewTrip.id)||currentTripId||"").trim();
+    if(!loaded||!authToken||sc!=="companion"||!tid||!isUuidLike(tid))return;
+    var alive=true;
+    setCompanionLoad(true);
+    setCompanionErr("");
+    apiJson("/trips/"+tid+"/companion",{method:"GET"},authToken).then(function(res){
+      if(!alive)return;
+      setCompanionData((res&&res.companion)||null);
+      setCompanionLoad(false);
+      refreshCurrentTripSharedState(authToken,tid).catch(function(){});
+    }).catch(function(e){
+      if(!alive)return;
+      setCompanionLoad(false);
+      setCompanionErr(String(e&&e.message||"Could not load live companion"));
+    });
+    return function(){alive=false;};
+  },[loaded,authToken,sc,viewTrip&&viewTrip.id,currentTripId]);
   useEffect(function(){
     var activeTripId=resolveWizardTripId(currentTripId,newTrip);
     if(!loaded||!authToken||sc!=="wizard"||!activeTripId||!isUuidLike(activeTripId))return;
@@ -2620,7 +2657,7 @@ export default function WanderPlan(){
 
   var acc=crew.filter(function(m){return m.status==="accepted";});
   var pendingCrewCount=crew.filter(function(m){return m.status==="pending"||m.status==="invited";}).length;
-  var inDash=sc==="dash"||sc==="profile"||sc==="crew"||sc==="bucket"||sc==="analytics"||sc==="new_trip"||sc==="wizard"||sc==="trip_detail";
+  var inDash=sc==="dash"||sc==="profile"||sc==="crew"||sc==="bucket"||sc==="analytics"||sc==="new_trip"||sc==="wizard"||sc==="trip_detail"||sc==="companion";
   var isPhone=vpW<=480;
   var isNarrow=vpW<=768;
   var pagePad=isNarrow?12:24;
@@ -2688,7 +2725,7 @@ export default function WanderPlan(){
     <div style={{maxWidth:900,margin:"0 auto",display:"flex",alignItems:"center",padding:"10px "+pagePad+"px",gap:10,flexWrap:isNarrow?"wrap":"nowrap"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginRight:"auto"}}><div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>W</div><span style={{fontSize:15,fontWeight:700}}>WanderPlan</span></div>
       <nav style={{display:"flex",gap:2,overflowX:isNarrow?"auto":"visible",maxWidth:isNarrow?"100%":"none",WebkitOverflowScrolling:"touch",flex:isNarrow?"1 1 100%":"0 1 auto"}}>
-        {[{id:"dash",l:"Trips"},{id:"bucket",l:"Bucket List"},{id:"crew",l:"Crew"},{id:"profile",l:"Profile"},{id:"analytics",l:"Stats"}].map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:isPhone?"6px 10px":"6px 14px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.l}</button>);})}
+        {[{id:"dash",l:"Trips"},{id:"bucket",l:"Bucket List"},{id:"crew",l:"Crew"},{id:"profile",l:"Profile"},{id:"analytics",l:"Stats"}].map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash")||(sc==="companion"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:isPhone?"6px 10px":"6px 14px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.l}</button>);})}
       </nav>
       <button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{padding:isPhone?"7px 10px":"7px 16px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontWeight:600,fontSize:12,cursor:"pointer",marginLeft:4,whiteSpace:"nowrap"}}>{isPhone?"+ Trip":"+ New Trip"}</button>
       <div style={{marginLeft:4}}><Avi ini={user.name?user.name.charAt(0).toUpperCase():"?"} color={C.gold} size={28}/></div>
@@ -2811,7 +2848,8 @@ export default function WanderPlan(){
           <div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>CREW</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:8,background:C.bg,borderRadius:10,padding:"8px 12px"}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={28}/><div><p style={{fontSize:13,fontWeight:600}}>{user.name||"You"}</p><p style={{fontSize:11,color:C.tx3}}>Organizer</p></div></div>{(tr.members||[]).map(function(m){return(<div key={m.id} style={{display:"flex",alignItems:"center",gap:8,background:C.bg,borderRadius:10,padding:"8px 12px"}}><Avi ini={m.ini} color={m.color} size={28}/><div><p style={{fontSize:13,fontWeight:600}}>{m.ini}</p><p style={{fontSize:11,color:C.tx3}}>Member</p></div></div>);})}</div></div>
           {(tr.status==="planning"||tr.status==="active")&&(<div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>WIZARD PROGRESS</p><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s2,i){var done=i<(tr.step||0);var act=i===(tr.step||0);return(<div key={i} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",background:act?C.gold:done?C.teal+"25":C.bg,color:act?C.bg:done?C.teal:C.tx3,border:act?"none":"1px solid "+C.border}}>{done?"Y":(i+1)}</div>);})}</div><p style={{fontSize:12,color:C.tx3,marginTop:6}}>Step {(tr.step||0)+1} of {WIZ.length}: {WIZ[tr.step||0]||""}</p></div>)}
           <div style={{display:"flex",gap:10}}>
-            {(tr.status==="planning"||tr.status==="active")&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(tr.step||0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Continue Planning</button>}
+            {tr.status==="planning"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(tr.step||0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Continue Planning</button>}
+            {tr.status==="active"&&isUuidLike(tr.id)&&<button onClick={function(){setCTID(tr.id||"");setVT(tr);setCompanionErr("");setCompanionData(null);go("companion");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.grn+","+C.teal+")",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><span style={{width:8,height:8,borderRadius:999,background:"#fff",animation:"pulse 1.5s infinite"}}/>Open Live Companion</button>}
             {tr.status==="invited"&&(<>
               <button onClick={function(){
                 if(!authToken||!tr.id)return;
@@ -2839,6 +2877,98 @@ export default function WanderPlan(){
             {tr.status==="completed"&&<button style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:"transparent",color:C.tx2,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>View Itinerary</button>}
             <button onClick={function(){setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
           </div>
+        </div>
+      </div></Fade>
+    </div>);
+  }())}
+
+  {sc==="companion"&&viewTrip&&(function(){
+    var tr=viewTrip||{};
+    var comp=companionData||{};
+    var today=comp.today||null;
+    var upcoming=Array.isArray(comp.upcoming)?comp.upcoming:[];
+    var members=Array.isArray(comp.members)&&comp.members.length>0?comp.members:(Array.isArray(tr.members)?tr.members:[]);
+    var lockedWindow=comp.locked_window||{};
+    var tripTitle=(comp.trip&&comp.trip.name)||tr.name||"Trip";
+    return(<div style={{maxWidth:720}}>
+      <Fade delay={50}><button onClick={function(){go("trip_detail");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13,marginBottom:16}}>Back to {tr.name||"trip"}</button></Fade>
+      <Fade delay={100}><div style={{background:C.surface,borderRadius:18,border:"1px solid "+C.border,overflow:"hidden",marginBottom:18}}>
+        <div style={{padding:"24px 28px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:14}}>
+            <div>
+              <h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>Live Companion</h1>
+              <p style={{fontSize:14,color:C.tx2}}>{tripTitle}</p>
+            </div>
+            <button onClick={function(){
+              var tid=String((tr&&tr.id)||currentTripId||"").trim();
+              if(!(authToken&&tid))return;
+              setCompanionLoad(true);
+              setCompanionErr("");
+              apiJson("/trips/"+tid+"/companion",{method:"GET"},authToken).then(function(res){
+                setCompanionData((res&&res.companion)||null);
+                setCompanionLoad(false);
+              }).catch(function(e){
+                setCompanionLoad(false);
+                setCompanionErr(String(e&&e.message||"Could not refresh live companion"));
+              });
+            }} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:12}}>
+            {[{l:"Trip Window",v:formatCompanionWindow(lockedWindow)},{l:"Destinations",v:(Array.isArray(tr.dests)?tr.dests.join(" + "):(tr.destNames||""))||"TBD"},{l:"Travelers",v:String(members.length||1)+" active"}].map(function(item){return(<div key={item.l} style={{background:C.bg,borderRadius:12,padding:"12px 14px"}}><p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{item.l}</p><p style={{fontSize:14,fontWeight:600}}>{item.v}</p></div>);})}
+          </div>
+        </div>
+      </div></Fade>
+      {companionErr&&<Fade delay={120}><div style={{marginBottom:14,padding:"12px 14px",borderRadius:12,background:C.redBg,border:"1px solid "+C.red+"20"}}><p style={{fontSize:13,color:C.red}}>{companionErr}</p></div></Fade>}
+      {companionLoad&&<Fade delay={120}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}><p style={{fontSize:14,color:C.tx2}}>Loading live trip context...</p></div></Fade>}
+      {!companionLoad&&today&&(<Fade delay={140}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,gap:10}}>
+          <div>
+            <p style={{fontSize:12,fontWeight:700,color:C.tealL,marginBottom:4}}>TODAY'S PLAN</p>
+            <h2 style={{fontSize:20,fontWeight:700}}>{today.title||("Day "+(today.day_number||1))}</h2>
+          </div>
+          <div style={{padding:"6px 10px",borderRadius:999,background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700}}>{formatCompanionDate(today.date)||("Day "+(today.day_number||1))}</div>
+        </div>
+        {(today.items||[]).length>0?(<div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {(today.items||[]).map(function(item,idx){return(<div key={idx} style={{display:"grid",gridTemplateColumns:"72px 1fr",gap:12,padding:"10px 0",borderTop:idx===0?"1px solid "+C.border:"1px solid "+C.border}}>
+            <div style={{fontSize:12,color:C.tx3}}>{String(item.time_slot||"").split("-")[0]||"--:--"}</div>
+            <div><p style={{fontSize:14,fontWeight:600,marginBottom:2}}>{item.title||"Activity"}</p><p style={{fontSize:12,color:C.tx2}}>{item.location||item.category||"Planned item"}</p></div>
+          </div>);})}
+        </div>):(<p style={{fontSize:13,color:C.tx3}}>No itinerary items are available for today yet.</p>)}
+      </div></Fade>)}
+      {!companionLoad&&upcoming.length>0&&(<Fade delay={170}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
+        <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:10}}>UPCOMING</p>
+        <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(2,1fr)",gap:10}}>
+          {upcoming.map(function(day,idx){return(<div key={idx} style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:"1px solid "+C.border}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
+              <p style={{fontSize:14,fontWeight:700}}>{day.title||("Day "+(day.day_number||idx+1))}</p>
+              <span style={{fontSize:11,color:C.tx3}}>{formatCompanionDate(day.date)||("Day "+(day.day_number||idx+1))}</span>
+            </div>
+            <p style={{fontSize:12,color:C.tx2}}>{(day.items||[]).slice(0,2).map(function(item){return item.title;}).filter(Boolean).join(" • ")||"More itinerary items coming up"}</p>
+          </div>);})}
+        </div>
+      </div></Fade>)}
+      <Fade delay={190}><div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1.1fr .9fr",gap:14}}>
+        <div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
+          <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:10}}>CREW</p>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {members.map(function(m,idx){
+              var dn=String(m.display_name||m.name||m.ini||("Traveler "+(idx+1)));
+              var role=String(m.role||"member");
+              return(<div key={String(m.user_id||m.id||idx)} style={{display:"flex",alignItems:"center",gap:10,background:C.bg,borderRadius:12,padding:"10px 12px"}}>
+                <Avi ini={iniFromName(dn)} color={role==="owner"?C.gold:CREW_COLORS[idx%CREW_COLORS.length]} size={28} name={dn}/>
+                <div style={{flex:1}}><p style={{fontSize:13,fontWeight:600}}>{dn}</p><p style={{fontSize:11,color:C.tx3}}>{role==="owner"?"Organizer":"Traveler"}</p></div>
+              </div>);
+            })}
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
+          <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:10}}>TRIP SNAPSHOT</p>
+          {[
+            {l:"Status",v:String((comp.trip&&comp.trip.status)||tr.status||"active")},
+            {l:"Approved days",v:String(comp.stats&&comp.stats.approved_days||0)},
+            {l:"Planned items",v:String(comp.stats&&comp.stats.item_count||0)},
+            {l:"Wizard step",v:String((comp.current_step||0)+1)}
+          ].map(function(row){return(<div key={row.l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid "+C.border,fontSize:13}}><span style={{color:C.tx3}}>{row.l}</span><span style={{fontWeight:600}}>{row.v}</span></div>);})}
         </div>
       </div></Fade>
     </div>);
@@ -3432,7 +3562,29 @@ export default function WanderPlan(){
     }
     function approveItineraryThenAdvance(){
       if(authToken&&currentTripId){
-        apiJson("/trips/"+currentTripId+"/itinerary/approve",{method:"POST",body:{approved:true}},authToken).catch(function(){}).then(function(){adv();});
+        apiJson("/trips/"+currentTripId+"/itinerary/approve",{method:"POST",body:{approved:true}},authToken).then(function(res){
+          var nextStatus=String(res&&res.trip&&res.trip.status||"").trim().toLowerCase();
+          if(nextStatus){
+            setTrips(function(prev){
+              return (prev||[]).map(function(t){
+                if(!t||String(t.id||"")!==String(currentTripId||""))return t;
+                return Object.assign({},t,{status:nextStatus,trip_status:nextStatus});
+              });
+            });
+            setNT(function(prev){
+              if(!prev||String(prev.id||"")!==String(currentTripId||""))return prev;
+              return Object.assign({},prev,{status:nextStatus,trip_status:nextStatus});
+            });
+            setVT(function(prev){
+              if(!prev||String(prev.id||"")!==String(currentTripId||""))return prev;
+              return Object.assign({},prev,{status:nextStatus,trip_status:nextStatus});
+            });
+          }
+          return Promise.allSettled([
+            refreshCurrentTripSharedState(authToken,currentTripId),
+            refreshTripsFromBackend(authToken)
+          ]);
+        }).catch(function(){}).then(function(){adv();});
       }else{
         adv();
       }

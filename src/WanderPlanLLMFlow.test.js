@@ -850,6 +850,182 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
   });
 });
 
+describe("WanderPlanLLMFlow companion entry", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+  });
+
+  test("active trip detail opens live companion with shared trip payload", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Alice Active",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({ peers: [] });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({ invites: [] });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              owner_id: "active-user",
+              name: "Active Tokyo Sprint",
+              status: "active",
+              duration_days: 7,
+              my_status: "accepted",
+              my_role: "owner",
+              destinations: ["Tokyo", "Kyoto"],
+              members: [
+                {
+                  user_id: "active-user",
+                  role: "owner",
+                  status: "accepted",
+                  name: "Alice Active",
+                  email: "alice@test.com",
+                  profile: { display_name: "Alice Active", budget_tier: "moderate" },
+                },
+              ],
+            },
+          ],
+        });
+      }
+      if (path === "/trips/11111111-1111-4111-8111-111111111111" && method === "GET") {
+        return jsonResponse({
+          trip: {
+            id: "11111111-1111-4111-8111-111111111111",
+            owner_id: "active-user",
+            name: "Active Tokyo Sprint",
+            status: "active",
+            duration_days: 7,
+            members: [],
+          },
+        });
+      }
+      if (path === "/trips/11111111-1111-4111-8111-111111111111/companion" && method === "GET") {
+        return jsonResponse({
+          companion: {
+            trip: {
+              id: "11111111-1111-4111-8111-111111111111",
+              owner_id: "active-user",
+              name: "Active Tokyo Sprint",
+              status: "active",
+              duration_days: 7,
+            },
+            locked_window: { start: "2026-06-01", end: "2026-06-07" },
+            current_step: 14,
+            members: [
+              {
+                user_id: "active-user",
+                role: "owner",
+                status: "accepted",
+                display_name: "Alice Active",
+                email: "alice@test.com",
+              },
+            ],
+            today: {
+              day_number: 1,
+              date: "2026-06-01",
+              title: "Arrival Day",
+              approved: true,
+              items: [
+                {
+                  activity_id: "a-1",
+                  time_slot: "09:00-10:00",
+                  title: "Land in Tokyo",
+                  category: "flight",
+                  location: "Haneda Airport",
+                },
+              ],
+            },
+            upcoming: [
+              {
+                day_number: 2,
+                date: "2026-06-02",
+                title: "Culture Day",
+                approved: true,
+                items: [
+                  {
+                    activity_id: "a-2",
+                    time_slot: "10:00-11:30",
+                    title: "Senso-ji Temple",
+                    category: "culture",
+                    location: "Asakusa",
+                  },
+                ],
+              },
+            ],
+            stats: { day_count: 7, approved_days: 7, item_count: 12 },
+          },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:active-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:active-user",
+      JSON.stringify({
+        name: "Alice Active",
+        email: "alice@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(await screen.findByText("Active Tokyo Sprint"));
+    await waitFor(() =>
+      expect(screen.queryByText("Open Live Companion")).not.toBeNull()
+    );
+    expect(screen.queryByText("Continue Planning")).toBeNull();
+
+    fireEvent.click(screen.getByText("Open Live Companion"));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Live Companion")).not.toBeNull()
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Land in Tokyo")).not.toBeNull()
+    );
+    expect(screen.queryByText("Culture Day")).not.toBeNull();
+  });
+});
+
 describe("WanderPlanLLMFlow Step 3 interest consensus", () => {
   test("counts only current user + accepted/joined members", () => {
     const members = [

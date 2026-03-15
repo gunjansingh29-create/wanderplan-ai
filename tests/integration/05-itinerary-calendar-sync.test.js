@@ -141,7 +141,13 @@ describe('05 — Itinerary Approval → Calendar Sync (30 events)', () => {
       .send({ approved: true })
       .expect(200);
 
-    expect(res.body).toMatchObject({ approved: true });
+    expect(res.body).toMatchObject({
+      approved: true,
+      trip: expect.objectContaining({
+        id: trip.id,
+        status: 'active',
+      }),
+    });
   });
 
   test('All itinerary_days are marked approved=true after approval', async () => {
@@ -151,6 +157,15 @@ describe('05 — Itinerary Approval → Calendar Sync (30 events)', () => {
     );
     expect(rows).toHaveLength(TRIP_DAYS);
     rows.forEach(r => expect(r.approved).toBe(true));
+  });
+
+  test('Trip status becomes active after itinerary approval', async () => {
+    const rows = await dbQuery(
+      `SELECT status FROM trips WHERE id = $1`,
+      [trip.id]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('active');
   });
 
   // ── Step 3: Trigger calendar sync ────────────────────────────────────────
