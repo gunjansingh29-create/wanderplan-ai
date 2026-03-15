@@ -498,6 +498,13 @@ function mergeSharedFlightDates(prevValue, nextValue, preserveLocationText){
   return merged;
 }
 
+function resolveBudgetTier(profileOrMember, fallbackTier){
+  var src=(profileOrMember&&typeof profileOrMember==="object")?profileOrMember:{};
+  var profile=(src.profile&&typeof src.profile==="object")?src.profile:src;
+  var tier=String(profile.budget_tier||src.budget||fallbackTier||"moderate").trim().toLowerCase();
+  return tier||"moderate";
+}
+
 function resolveWizardTripId(currentTripIdValue,newTripValue,tripValue){
   var preferred=String(currentTripIdValue||"").trim();
   if(preferred)return preferred;
@@ -1212,6 +1219,7 @@ export default function WanderPlan(){
   var[flightBookLinks,setFBL]=useState([]);
   var[budgetSaveLoad,setBSL]=useState(false);
   var[budgetSaveErr,setBSE]=useState("");
+  var[sharedBudgetTier,setSBT]=useState("");
   var[consensusMsg,setCSM]=useState("");
   var[durPerDest,setDPD]=useState({});
   var[sharedDurationDays,setSDD]=useState(0);
@@ -1302,16 +1310,11 @@ export default function WanderPlan(){
   useEffect(function(){
     if(!loaded||!authToken||!profileHydrated)return;
     var t=setTimeout(function(){
-      apiJson("/me/profile",{method:"PUT",body:{
-        display_name:user.name||"",
-        travel_styles:user.styles||[],
-        interests:user.interests||{},
-        budget_tier:user.budget||"moderate",
-        dietary:user.dietary||[]
-      }},authToken).catch(function(){});
+      var activeTripId=String(resolveWizardTripId(currentTripId,newTrip,viewTrip)||String(viewTrip&&viewTrip.id||"")).trim();
+      persistProfileNow(user,activeTripId).catch(function(){});
     },700);
     return function(){clearTimeout(t);};
-  },[user,authToken,loaded,profileHydrated]);
+  },[user,authToken,loaded,profileHydrated,currentTripId,newTrip,viewTrip&&viewTrip.id]);
 
   function go(s){setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
   function back(){if(!hist.length)return;setFade(true);setTimeout(function(){setSc(hist[hist.length-1]);setHist(function(h){return h.slice(0,-1);});setFade(false);},200);}
@@ -1749,6 +1752,9 @@ export default function WanderPlan(){
       if(st.duration_days_locked!==undefined){
         setSDD(Math.max(0,Number(st.duration_days_locked)||0));
       }
+      if(st.shared_budget_tier!==undefined){
+        setSBT(String(st.shared_budget_tier||"").trim().toLowerCase());
+      }
       if(st.flight_dates&&typeof st.flight_dates==="object"){
         setFD(function(prev){return mergeSharedFlightDates(prev,st.flight_dates,wizStep===10);});
       }
@@ -1829,6 +1835,7 @@ export default function WanderPlan(){
         if(state.poi_votes&&typeof state.poi_votes==="object")setPV(normalizePoiStateMap(state.poi_votes,pois,state.poi_option_pool||poiOptionPool));
         if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(normalizePoiStateMap(state.poi_member_choices,pois,state.poi_option_pool||poiOptionPool));
         if(state.duration_days_locked!==undefined)setSDD(Math.max(0,Number(state.duration_days_locked)||0));
+        if(state.shared_budget_tier!==undefined)setSBT(String(state.shared_budget_tier||"").trim().toLowerCase());
         if(state.flight_dates&&typeof state.flight_dates==="object")setFD(function(prev){return mergeSharedFlightDates(prev,state.flight_dates,wizStep===10);});
         if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
         if(state.stay_votes&&typeof state.stay_votes==="object")setStayVotes(state.stay_votes);
@@ -3153,8 +3160,11 @@ export default function WanderPlan(){
     function saveBudgetThenAdvance(){
       setBSE("");
       if(!(authToken&&currentTripId)){adv();return;}
+      var chosenTier=String(sharedBudgetTier||user.budget||"moderate").trim().toLowerCase()||"moderate";
       setBSL(true);
-      apiJson("/trips/"+currentTripId+"/budget",{method:"POST",body:{daily_budget:budgetDailyValue(user.budget),currency:"USD"}},authToken).then(function(){
+      saveTripPlanningState({state:{shared_budget_tier:chosenTier}}).catch(function(){return null;}).then(function(){
+        return apiJson("/trips/"+currentTripId+"/budget",{method:"POST",body:{daily_budget:budgetDailyValue(chosenTier),currency:"USD"}},authToken);
+      }).then(function(){
         setBSL(false);adv();
       }).catch(function(e){
         setBSL(false);
@@ -3657,7 +3667,8 @@ export default function WanderPlan(){
           if(yesLocal.length)parts.push("likes "+yesLocal.slice(0,4).join(", "));
           if(noLocal.length)parts.push("avoids "+noLocal.slice(0,4).join(", "));
           if(dy.length)parts.push("dietary "+dy.join(", "));
-          if(prof.budget_tier)parts.push("budget "+prof.budget_tier);
+          var profileBudget=String(prof&&prof.budget_tier||"").trim().toLowerCase();
+          if(profileBudget)parts.push("budget "+profileBudget);
           var nm=m.name||m.email||"Crew";
           summaries.push(nm+(parts.length?": "+parts.join("; "):""));
         });
@@ -3950,11 +3961,65 @@ export default function WanderPlan(){
     }())}
 
     {wizStep===7&&(<div>
-      {ab("Budget Agent","Group budget preferences side-by-side:")}
-      <div style={{display:"flex",gap:6,marginBottom:14}}><div style={{flex:1,background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center"}}><p style={{fontSize:11,color:C.tx3}}>You</p><p style={{fontSize:14,fontWeight:600,color:C.goldT}}>{user.budget||"moderate"}</p></div>{tm.filter(function(m){return tripJoined[m.id];}).map(function(m){return(<div key={m.id} style={{flex:1,background:C.bg,borderRadius:10,padding:"10px 12px",textAlign:"center"}}><p style={{fontSize:11,color:C.tx3}}>{m.ini}</p><p style={{fontSize:14,fontWeight:600,color:C.sky}}>moderate</p></div>);})}</div>
-      <div style={{padding:"12px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20",marginBottom:8}}><p style={{fontSize:13,color:C.tealL}}>Recommended: <strong>Mid-range ($150-250/day)</strong></p><p style={{fontSize:12,color:C.tx2,marginTop:4}}>Shared allocation: Stays 40% / Food 25% / Activities 20% / Transport 10% / Buffer 5%</p><p style={{fontSize:12,color:C.tx3,marginTop:4}}>Flights are personal and selected later by each traveler.</p></div>
+      {(function(){
+        var joinedMembers=tm.filter(function(m){
+          var st=mapTripMemberStatus(m&&(m.trip_status||m.status));
+          return st==="accepted"||tripJoined[m.id];
+        });
+        var budgetProfiles=[{
+          key:"self",
+          label:user.name||"You",
+          ini:iniFromName(user.name||user.email||"You"),
+          color:C.gold,
+          tier:String(user.budget||"moderate").trim().toLowerCase()||"moderate",
+          mine:true
+        }].concat(joinedMembers.map(function(m){
+          var tier=resolveBudgetTier(m,user.budget||"moderate");
+          return {
+            key:m.id,
+            label:m.name||m.email||"Traveler",
+            ini:m.ini||iniFromName(m.name||m.email||"Traveler"),
+            color:m.color||C.sky,
+            tier:tier,
+            mine:false
+          };
+        }));
+        var chosenTier=String(sharedBudgetTier||user.budget||"moderate").trim().toLowerCase()||"moderate";
+        function chooseSharedBudgetTier(tier){
+          var nextTier=String(tier||"moderate").trim().toLowerCase()||"moderate";
+          setSBT(nextTier);
+          saveTripPlanningState({state:{shared_budget_tier:nextTier}}).catch(function(){});
+        }
+        var chosenBudgetDef=(BUDGETS.find(function(b){return b.id===chosenTier;})||BUDGETS[1]||BUDGETS[0]);
+        return(<>
+          {ab("Budget Agent","Traveler budget profiles are shown below. Organizer picks the shared profile to use for trip budgeting.")}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:14}}>
+            {budgetProfiles.map(function(item){
+              var active=item.tier===chosenTier;
+              return(<button key={item.key} onClick={function(){if(organizerMode)chooseSharedBudgetTier(item.tier);}} disabled={!organizerMode} style={{textAlign:"left",padding:"12px 14px",borderRadius:12,border:"1.5px solid "+(active?C.gold+"55":C.border),background:active?C.goldDim:C.bg,cursor:organizerMode?"pointer":"default",opacity:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  <Avi ini={item.ini} color={item.color} size={24} name={item.label}/>
+                  <div style={{minWidth:0}}>
+                    <p style={{fontSize:12,fontWeight:700,color:active?C.goldT:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{item.label}</p>
+                    <p style={{fontSize:10,color:C.tx3}}>{item.mine?"your profile":"traveler profile"}</p>
+                  </div>
+                </div>
+                <p style={{fontSize:13,fontWeight:700,color:active?C.goldT:C.tx2,textTransform:"capitalize"}}>{item.tier}</p>
+              </button>);
+            })}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:6,marginBottom:12}}>
+            {BUDGETS.map(function(b){
+              var active=b.id===chosenTier;
+              return(<button key={b.id} onClick={function(){if(organizerMode)chooseSharedBudgetTier(b.id);}} disabled={!organizerMode} style={{padding:"10px 8px",borderRadius:10,border:"1.5px solid "+(active?C.gold+"55":C.border),background:active?C.goldDim:C.bg,color:active?C.goldT:C.tx2,fontSize:12,fontWeight:700,cursor:organizerMode?"pointer":"default"}}>{b.l}</button>);
+            })}
+          </div>
+          <div style={{padding:"12px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20",marginBottom:8}}><p style={{fontSize:13,color:C.tealL}}>Shared budget selected: <strong>{chosenBudgetDef.l} ({chosenBudgetDef.r})</strong></p><p style={{fontSize:12,color:C.tx2,marginTop:4}}>Shared allocation: Stays 40% / Food 25% / Activities 20% / Transport 10% / Buffer 5%</p><p style={{fontSize:12,color:C.tx3,marginTop:4}}>Flights are personal and selected later by each traveler.</p></div>
+          {!organizerMode&&<p style={{fontSize:12,color:C.tx3,marginBottom:8}}>Organizer chooses the shared trip budget after reviewing everyone’s profile preferences.</p>}
+        </>);
+      }())}
       <div style={{display:"flex",flexDirection:"column",gap:4}}>{[{l:"Stays",p:40,c:C.teal},{l:"Food",p:25,c:C.coral},{l:"Activities",p:20,c:C.grn},{l:"Transport",p:10,c:C.sky},{l:"Buffer",p:5,c:C.wrn}].map(function(b){return(<div key={b.l} style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:12,color:C.tx3,width:70}}>{b.l}</span><div style={{flex:1,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:b.p+"%",background:b.c,borderRadius:999}}/></div><span style={{fontSize:11,color:C.tx3,width:30}}>{b.p}%</span></div>);})}</div>
-      <button onClick={saveBudgetThenAdvance} disabled={budgetSaveLoad} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:budgetSaveLoad?C.border:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:budgetSaveLoad?"default":"pointer"}}>{budgetSaveLoad?"Saving budget...":"Approve Budget"}</button>
+      <button onClick={saveBudgetThenAdvance} disabled={budgetSaveLoad||!organizerMode} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:(budgetSaveLoad||!organizerMode)?C.border:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:(budgetSaveLoad||!organizerMode)?"default":"pointer"}}>{budgetSaveLoad?"Saving budget...":(organizerMode?"Approve Budget":"Waiting for organizer")}</button>
       {budgetSaveErr&&<p style={{fontSize:12,color:C.red,marginTop:8}}>{budgetSaveErr}</p>}
     </div>)}
 
@@ -4764,5 +4829,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveBudgetTier, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 

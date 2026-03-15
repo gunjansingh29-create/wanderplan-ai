@@ -27,6 +27,7 @@ import {
   readStayVoteRow,
   voteKeyAliasesFor,
   readVoteForVoter,
+  resolveBudgetTier,
   resolveWizardTripId,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
@@ -119,6 +120,16 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       depart: "2026-06-03",
       ret: "2026-06-12",
     });
+  });
+
+  test("resolveBudgetTier prefers trip member profile budget tier", () => {
+    expect(
+      resolveBudgetTier(
+        { profile: { budget_tier: "premium" }, budget: "budget" },
+        "moderate"
+      )
+    ).toBe("premium");
+    expect(resolveBudgetTier({}, "luxury")).toBe("luxury");
   });
 
   test("resolveWizardTripId falls back to newTrip id when currentTripId is missing", () => {
