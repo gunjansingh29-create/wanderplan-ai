@@ -505,6 +505,10 @@ function resolveBudgetTier(profileOrMember, fallbackTier){
   return tier||"moderate";
 }
 
+function resolveTripBudgetTier(sharedTier, userTier){
+  return String(sharedTier||userTier||"moderate").trim().toLowerCase()||"moderate";
+}
+
 function resolveWizardTripId(currentTripIdValue,newTripValue,tripValue){
   var preferred=String(currentTripIdValue||"").trim();
   if(preferred)return preferred;
@@ -1180,6 +1184,7 @@ export default function WanderPlan(){
   var[tripFilter,setTF]=useState("all");
   var[viewTrip,setVT]=useState(null);
   var[wizStep,setWS]=useState(0);
+  var[profileDebug,setProfileDebug]=useState({lastGet:null,lastPut:null,lastPutResult:null,tripProfiles:null});
   var[blChat,setBC]=useState([{from:"agent",text:"Tell me a place you dream of visiting! Be as vague or specific as you like."}]);
   var[blIn,setBLI]=useState("");
   var[blLoad,setBLL]=useState(false);
@@ -1541,6 +1546,7 @@ export default function WanderPlan(){
     try{
       var prof=await apiJson("/me/profile",{method:"GET"},token);
       if(prof&&prof.profile){
+        setProfileDebug(function(prev){return Object.assign({},prev||{},{lastGet:{profile:prof.profile,emailHint:emailHint,nameHint:nameHint}});});
         setUser(mergeProfileIntoUser(seededUser,prof.profile,emailHint,nameHint));
       }
     }catch(e){}
@@ -1693,6 +1699,14 @@ export default function WanderPlan(){
         });
       }
       if(sharedNames.length>0||tripStatus||tripName||(sharedMembers&&sharedMembers.length>=0)){
+        setProfileDebug(function(prev){
+          return Object.assign({},prev||{},{
+            tripProfiles:{
+              tripId:tid,
+              members:(sharedMembers&&sharedMembers.length>0)?sharedMembers:(Array.isArray(tripRes&&tripRes.trip&&tripRes.trip.members)?tripRes.trip.members:[])
+            }
+          });
+        });
         setTrips(function(prev){
           return (prev||[]).map(function(t){
             if(!t||String(t.id||"")!==tid)return t;
@@ -1867,10 +1881,16 @@ export default function WanderPlan(){
   function persistProfileNow(nextUser,tripId){
     var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip)).trim();
     if(!authToken)return Promise.resolve(null);
-    return apiJson("/me/profile",{method:"PUT",body:profilePayloadFor(nextUser)},authToken).then(function(r){
+    var payload=profilePayloadFor(nextUser);
+    setProfileDebug(function(prev){return Object.assign({},prev||{},{lastPut:{tripId:tid||"",payload:payload,user:Object.assign({},nextUser||{})}});});
+    return apiJson("/me/profile",{method:"PUT",body:payload},authToken).then(function(r){
+      setProfileDebug(function(prev){return Object.assign({},prev||{},{lastPutResult:r||{ok:false}});});
       if(tid&&isUuidLike(tid))refreshCurrentTripSharedState(authToken,tid).catch(function(){});
       return r;
-    }).catch(function(){return null;});
+    }).catch(function(){
+      setProfileDebug(function(prev){return Object.assign({},prev||{},{lastPutResult:{ok:false,error:"save_failed"}});});
+      return null;
+    });
   }
   function setWizardStepShared(nextStep){
     var n=Math.min(Math.max(0,Number(nextStep)||0),Math.max(WIZ.length-1,0));
@@ -2807,6 +2827,49 @@ export default function WanderPlan(){
 
   {sc==="profile"&&(<div style={{maxWidth:520}}>
     <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:24}}>My Profile</h1></Fade>
+    <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+      <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+        {showVoteDebug?"Hide Debug":"Show Debug"}
+      </button>
+    </div>
+    {showVoteDebug&&(<div style={{marginBottom:16,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+      <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Profile Debug</p>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
+        {[
+          {l:"Profile hydrated",v:String(!!profileHydrated)},
+          {l:"Auth user id",v:String(userIdFromToken(authToken)||"(none)")},
+          {l:"Active trip id",v:String(resolveWizardTripId(currentTripId,newTrip,viewTrip)||"(none)")},
+          {l:"Current email",v:String(user.email||"(none)")}
+        ].map(function(item){
+          return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
+            <p style={{fontSize:11,color:"#fff",wordBreak:"break-word"}}>{item.v}</p>
+          </div>);
+        })}
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+          <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Local user state</p>
+          <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(user||{},null,2)}</pre>
+        </div>
+        <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+          <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Last GET /me/profile</p>
+          <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(profileDebug&&profileDebug.lastGet||null,null,2)}</pre>
+        </div>
+        <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+          <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Last PUT /me/profile payload</p>
+          <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(profileDebug&&profileDebug.lastPut||null,null,2)}</pre>
+        </div>
+        <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+          <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Last PUT /me/profile result</p>
+          <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(profileDebug&&profileDebug.lastPutResult||null,null,2)}</pre>
+        </div>
+        <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+          <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Active trip member profiles</p>
+          <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:220,overflowY:"auto"}}>{JSON.stringify(profileDebug&&profileDebug.tripProfiles||null,null,2)}</pre>
+        </div>
+      </div>
+    </div>)}
     <Fade delay={100}><div style={{background:C.surface,borderRadius:14,padding:18,border:"1px solid "+C.border,marginBottom:16}}><p style={{fontSize:11,fontWeight:600,color:C.tx3,marginBottom:8}}>NAME</p><input value={user.name||""} onChange={function(e){upU("name",e.target.value);}} style={{width:"100%",padding:"11px 14px",borderRadius:10,background:C.bg,border:"1.5px solid "+C.border,fontSize:14,color:"#fff"}}/></div></Fade>
     <Fade delay={150}><div style={{background:C.surface,borderRadius:14,padding:18,border:"1px solid "+C.border,marginBottom:16}}><p style={{fontSize:11,fontWeight:600,color:C.tx3,marginBottom:8}}>TRAVEL STYLE</p><div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>{STYLES.map(function(ts){var sel=(user.styles||[]).indexOf(ts.id)>=0;return(<button key={ts.id} onClick={function(){var cur=user.styles||[];upU("styles",cur.indexOf(ts.id)>=0?cur.filter(function(x){return x!==ts.id;}):cur.concat([ts.id]));}} style={{padding:"12px 8px",borderRadius:10,cursor:"pointer",background:sel?C.goldDim:C.bg,border:"2px solid "+(sel?C.gold+"50":C.border),color:sel?C.goldT:C.tx2,fontSize:13,fontWeight:sel?600:400}}>{ts.l}</button>);})}</div></div></Fade>
     <Fade delay={200}><div style={{background:C.surface,borderRadius:14,padding:18,border:"1px solid "+C.border,marginBottom:16}}><p style={{fontSize:11,fontWeight:600,color:C.tx3,marginBottom:8}}>INTERESTS</p>{CATS.map(function(cat,i){var v=(user.interests||{})[cat.id];return(<div key={cat.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:i<CATS.length-1?"1px solid "+C.border:"none"}}><span style={{flex:1,fontSize:13,color:C.tx2}}>{cat.q}</span><div style={{display:"flex",gap:4}}>{[{l:"Y",v:true,c:C.grn},{l:"N",v:false,c:C.red}].map(function(o){var a=v===o.v;return(<button key={o.l} onClick={function(){var n=Object.assign({},user.interests||{});n[cat.id]=o.v;upU("interests",n);}} style={{width:28,height:28,borderRadius:6,border:a?"2px solid "+o.c:"1.5px solid "+C.border,background:a?o.c+"12":"transparent",color:a?o.c:C.tx3,fontWeight:600,fontSize:11,cursor:"pointer"}}>{o.l}</button>);})}</div></div>);})}</div></Fade>
@@ -2960,6 +3023,7 @@ export default function WanderPlan(){
   {sc==="wizard"&&(function(){
     var tr=newTrip;var pct=((wizStep+1)/WIZ.length)*100;
     var tm=(tr.members||[]);var jc=0;var invitedCount=0;var selectedCount=0;
+    var effectiveTripBudgetTier=resolveTripBudgetTier(sharedBudgetTier,user.budget);
     tm.forEach(function(m){
       var st=mapTripMemberStatus(m&&(m.trip_status||m.status));
       if(st==="accepted"||tripJoined[m.id]){jc++;return;}
@@ -3769,7 +3833,7 @@ export default function WanderPlan(){
         {!poiDone&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent searches {dests.length} destination{dests.length>1?"s":""} based on group interests and budget.</p><button onClick={function(){
           setPL(true);
           setPS({});
-          askPOI(dests,user.interests||{},user.budget,user.dietary,poiGroupPrefs).then(function(res){
+          askPOI(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs).then(function(res){
             if(res&&res.length){setPois(res);setPL(false);setPD(true);return;}
             if(authToken&&currentTripId){
               apiJson("/trips/"+currentTripId+"/pois?limit=30",{method:"GET"},authToken).then(function(r){
@@ -4378,12 +4442,12 @@ export default function WanderPlan(){
         setSL(true);
         setSD(false);
         try{
-          var res=await askStays(dests,user.budget,totalN,grpSize);
-          var norm=normalizeStays(res,dests,user.budget,totalN);
+          var res=await askStays(dests,effectiveTripBudgetTier,totalN,grpSize);
+          var norm=normalizeStays(res,dests,effectiveTripBudgetTier,totalN);
           var clearedStayLocks={};Object.keys(stayFinalChoices||{}).forEach(function(k){clearedStayLocks[k]="";});
           if(norm.length===0){
-            var fbRows=await askStaysBackend(currentTripId,dests,user.budget,totalN,authToken);
-            norm=normalizeStays(fbRows,dests,user.budget,totalN);
+            var fbRows=await askStaysBackend(currentTripId,dests,effectiveTripBudgetTier,totalN,authToken);
+            norm=normalizeStays(fbRows,dests,effectiveTripBudgetTier,totalN);
             if(norm.length>0){
               setSChat(function(p){return p.concat([{from:"agent",text:"Live stay search fallback used. Review and select one per destination."}]);});
             }
@@ -4399,8 +4463,8 @@ export default function WanderPlan(){
             setSChat(function(p){return p.concat([{from:"agent",text:"I need more detail. Try: 'boutique hotels with pool in Kyoto under $180'."}]);});
           }
         }catch(e){
-          var fallbackRows=await askStaysBackend(currentTripId,dests,user.budget,totalN,authToken);
-          var fallbackNorm=normalizeStays(fallbackRows,dests,user.budget,totalN);
+          var fallbackRows=await askStaysBackend(currentTripId,dests,effectiveTripBudgetTier,totalN,authToken);
+          var fallbackNorm=normalizeStays(fallbackRows,dests,effectiveTripBudgetTier,totalN);
           var clearedStayLocksFallback={};Object.keys(stayFinalChoices||{}).forEach(function(k){clearedStayLocksFallback[k]="";});
           setStays(fallbackNorm);
           setSFC({});
@@ -4422,11 +4486,11 @@ export default function WanderPlan(){
         setSChat(function(p){return p.concat([{from:"user",text:msg}]);});
         var destStr=dests.map(function(d){return d.name;}).join(", ")||"your destinations";
         var currentPicked=pickedStays.map(function(s){return s.name+" ($"+s.ratePerNight+"/n) in "+s.destination;}).join("; ");
-        var sys="You are WanderPlan Accommodation Agent. User wants to modify stays. Current: "+(currentPicked||"none")+". Destinations: "+destStr+". Budget: "+user.budget+".\n\nIf user wants new options: {\"type\":\"options\",\"stays\":[{\"name\":\"Hotel\",\"destination\":\"City\",\"type\":\"Hotel\",\"rating\":4.5,\"ratePerNight\":120,\"totalNights\":3,\"amenities\":[\"WiFi\"],\"bookingSource\":\"Booking.com\",\"whyThisOne\":\"Reason\",\"cancellation\":\"Free\"}]}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nONLY JSON.";
+        var sys="You are WanderPlan Accommodation Agent. User wants to modify stays. Current: "+(currentPicked||"none")+". Destinations: "+destStr+". Budget: "+effectiveTripBudgetTier+".\n\nIf user wants new options: {\"type\":\"options\",\"stays\":[{\"name\":\"Hotel\",\"destination\":\"City\",\"type\":\"Hotel\",\"rating\":4.5,\"ratePerNight\":120,\"totalNights\":3,\"amenities\":[\"WiFi\"],\"bookingSource\":\"Booking.com\",\"whyThisOne\":\"Reason\",\"cancellation\":\"Free\"}]}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nONLY JSON.";
         callLLM(sys,msg,1000).then(function(res){
           setSAL(false);
           if(res&&res.type==="options"&&res.stays&&res.stays.length>0){
-            var norm=normalizeStays(res.stays,dests,user.budget,totalN);
+            var norm=normalizeStays(res.stays,dests,effectiveTripBudgetTier,totalN);
             setStays(function(prev){
               var next=(Array.isArray(prev)?prev:[]).concat(norm);
               var clearedStayLocksNext={};Object.keys(stayFinalChoices||{}).forEach(function(k){clearedStayLocksNext[k]="";});
@@ -4829,5 +4893,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveBudgetTier, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, availabilityWindowMatchesTripDays, buildCurrentVoteActor, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, findDuplicatePoiKeys, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 

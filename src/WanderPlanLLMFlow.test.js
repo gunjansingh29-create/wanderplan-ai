@@ -28,6 +28,7 @@ import {
   voteKeyAliasesFor,
   readVoteForVoter,
   resolveBudgetTier,
+  resolveTripBudgetTier,
   resolveWizardTripId,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
@@ -130,6 +131,11 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       )
     ).toBe("premium");
     expect(resolveBudgetTier({}, "luxury")).toBe("luxury");
+  });
+
+  test("resolveTripBudgetTier prefers organizer-selected shared budget tier", () => {
+    expect(resolveTripBudgetTier("premium", "budget")).toBe("premium");
+    expect(resolveTripBudgetTier("", "luxury")).toBe("luxury");
   });
 
   test("resolveWizardTripId falls back to newTrip id when currentTripId is missing", () => {
