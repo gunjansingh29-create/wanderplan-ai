@@ -4733,6 +4733,9 @@ export default function WanderPlan(){
       var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
       var routePlan=normalizedFlightRoutePlan();
       var displayedRoutePlan=displayedRoundTripRoutePlan(routePlan);
+      var resolvedFlightTripId=resolveWizardTripId(currentTripId,newTrip)||"(missing)";
+      var routePlanSig=flightRoutePlanSignature(routePlan);
+      var displayedRoutePlanSig=flightRoutePlanSignature(displayedRoutePlan);
       var allPicked=(flightLegs||[]).length>0&&(flightLegs||[]).every(function(leg){return !!flightSel[leg.leg_id];});
       function updFlight(k,v,commit){
         setFD(function(p){
@@ -4762,6 +4765,48 @@ export default function WanderPlan(){
       }
       return(<div>
         {ab("Flight Agent","Search and confirm flights only after the organizer has locked the exact trip dates.")}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+          <p style={{fontSize:11,color:C.tx3}}>Debug panel helps compare shared route-plan state, locked dates, and search inputs on this step.</p>
+          <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            {showVoteDebug?"Hide Debug":"Show Debug"}
+          </button>
+        </div>
+        {showVoteDebug&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+          <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Flight Debug</p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
+            {[
+              {l:"Resolved trip id",v:resolvedFlightTripId},
+              {l:"Locked window",v:JSON.stringify(lockedWindow||null)},
+              {l:"Flight dates",v:JSON.stringify(flightDates||{})},
+              {l:"Saved route signature",v:routePlanSig},
+              {l:"Displayed route signature",v:displayedRoutePlanSig},
+              {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"(none)"}
+            ].map(function(item){
+              return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
+                <p style={{fontSize:11,color:"#fff",wordBreak:"break-word"}}>{item.v}</p>
+              </div>);
+            })}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}>
+            <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw `flightLegInputs` state</p>
+              <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(flightLegInputs||[],null,2)}</pre>
+            </div>
+            <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Normalized route plan</p>
+              <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(routePlan||[],null,2)}</pre>
+            </div>
+            <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Displayed round-trip route plan</p>
+              <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(displayedRoutePlan||[],null,2)}</pre>
+            </div>
+            <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Duration per destination</p>
+              <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(durPerDest||{},null,2)}</pre>
+            </div>
+          </div>
+        </div>)}
         {lockedWindow&&<div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}><p style={{fontSize:12,color:C.tealL}}>Locked trip dates: {lockedWindow.start} to {lockedWindow.end}</p></div>}
         <div style={{marginBottom:10,padding:"12px 14px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
           <p style={{fontSize:12,color:C.tx2,marginBottom:6}}>Set the starting airport and final return airport. Destination cities are inserted underneath, auto-dated from the locked trip window, and can be reordered or overridden by any traveler.</p>
