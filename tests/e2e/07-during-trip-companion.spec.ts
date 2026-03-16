@@ -132,6 +132,44 @@ test.describe('07 - During-trip companion', () => {
                 ],
               },
             ],
+            current_item: {
+              activity_id: 'act-1',
+              time_slot: '09:00-10:00',
+              title: 'Land in Tokyo',
+              category: 'flight',
+              location: 'Haneda Airport',
+            },
+            next_item: {
+              activity_id: 'act-2',
+              time_slot: '13:00-14:00',
+              title: 'Check in at hotel',
+              category: 'checkin',
+              location: 'Shinjuku',
+            },
+            stays: [
+              {
+                destination: 'Tokyo',
+                name: 'Shinjuku Grand',
+                type: 'Hotel',
+                rate_per_night: 220,
+                total_nights: 3,
+                booking_source: 'WanderPlan Search',
+                why_this_one: 'Walkable to tonight’s plan.',
+              },
+            ],
+            today_meals: [
+              {
+                day: 1,
+                date: '2026-06-01',
+                destination: 'Tokyo',
+                type: 'Dinner',
+                time: '19:00',
+                name: 'Izakaya Hanabi',
+                cuisine: 'Japanese',
+                cost: 42,
+                note: 'Easy walk from the hotel.',
+              },
+            ],
             days: [],
             stats: { day_count: 7, approved_days: 7, item_count: 12 },
           },
@@ -153,8 +191,13 @@ test.describe('07 - During-trip companion', () => {
 
     await expect(page.getByText('Live Companion')).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("TODAY'S PLAN")).toBeVisible();
-    await expect(page.getByText('Land in Tokyo')).toBeVisible();
+    await expect(page.getByText('Land in Tokyo').first()).toBeVisible();
     await expect(page.getByText('Culture Day')).toBeVisible();
     await expect(page.getByText('Trip Window')).toBeVisible();
+    await expect(page.getByText('NOW / NEXT')).toBeVisible();
+    await expect(page.getByText('STAY SNAPSHOT')).toBeVisible();
+    await expect(page.getByText('Shinjuku Grand')).toBeVisible();
+    await expect(page.getByText('DINING TODAY')).toBeVisible();
+    await expect(page.getByText('Izakaya Hanabi')).toBeVisible();
   });
 });

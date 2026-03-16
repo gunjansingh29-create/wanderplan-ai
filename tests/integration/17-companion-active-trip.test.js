@@ -34,6 +34,24 @@ async function seedSimpleItinerary(tripId) {
         0,
       ]
     );
+    if (i === 0) {
+      await dbQuery(
+        `INSERT INTO itinerary_activities
+           (day_id, time_slot, title, description, category, location_name, lat, lng, cost_estimate)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          dayRow.id,
+          '13:00-14:00',
+          'Check in at hotel',
+          'Companion endpoint integration seed',
+          'checkin',
+          'Shinjuku',
+          35.69,
+          139.70,
+          0,
+        ]
+      );
+    }
   }
 }
 
@@ -61,6 +79,36 @@ describe('17 - active trip companion payload', () => {
             start: '2026-06-01',
             end: '2026-06-02',
           },
+          stay_options: [
+            {
+              name: 'Tokyo Central Hotel',
+              destination: 'Tokyo',
+              type: 'Hotel',
+              ratePerNight: 190,
+              totalNights: 1,
+              bookingSource: 'WanderPlan Search',
+              whyThisOne: 'Close to today\'s arrival.',
+            },
+          ],
+          stay_final_choices: {
+            Tokyo: 'stay:tokyo-central-hotel-tokyo-hotel',
+          },
+          meal_plan: [
+            {
+              day: 1,
+              date: '2026-06-01',
+              destination: 'Tokyo',
+              meals: [
+                {
+                  type: 'Dinner',
+                  time: '19:00',
+                  name: 'Izakaya Hanabi',
+                  cuisine: 'Japanese',
+                  cost: 42,
+                },
+              ],
+            },
+          ],
         }),
         '00000000-0000-0000-0000-000000000001',
       ]
@@ -99,7 +147,21 @@ describe('17 - active trip companion payload', () => {
     expect(res.body.companion.stats).toMatchObject({
       day_count: 2,
       approved_days: 2,
-      item_count: 2,
+      item_count: 3,
+    });
+    expect(res.body.companion.current_item).toMatchObject({
+      title: 'Land in Tokyo',
+    });
+    expect(res.body.companion.next_item).toMatchObject({
+      title: 'Check in at hotel',
+    });
+    expect(res.body.companion.stays[0]).toMatchObject({
+      destination: 'Tokyo',
+      name: 'Tokyo Central Hotel',
+    });
+    expect(res.body.companion.today_meals[0]).toMatchObject({
+      type: 'Dinner',
+      name: 'Izakaya Hanabi',
     });
   });
 

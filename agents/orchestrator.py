@@ -5933,6 +5933,12 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
     upcoming_days = day_items[current_index + 1 : current_index + 3] if day_items else []
     total_items = sum(len(day.get("items") or []) for day in day_items)
     approved_days = sum(1 for day in day_items if day.get("approved"))
+    current_item, next_item = _companion_current_and_next(current_day)
+    stay_snapshot = _companion_selected_stays(planning_state if isinstance(planning_state, dict) else {})
+    dining_snapshot = _companion_today_meals(
+        planning_state if isinstance(planning_state, dict) else {},
+        int(current_day["day_number"]) if isinstance(current_day, dict) and current_day.get("day_number") else None,
+    )
 
     return {
         "companion": {
@@ -5952,6 +5958,10 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
             "days": day_items,
             "today": current_day,
             "upcoming": upcoming_days,
+            "current_item": current_item,
+            "next_item": next_item,
+            "stays": stay_snapshot,
+            "today_meals": dining_snapshot,
             "stats": {
                 "day_count": len(day_items),
                 "approved_days": approved_days,
@@ -5996,6 +6006,137 @@ def _slot_times(slot: Any) -> tuple[Optional[time], Optional[time]]:
         return (_safe_time_hhmm(text), None)
     start_raw, end_raw = text.split("-", 1)
     return (_safe_time_hhmm(start_raw), _safe_time_hhmm(end_raw))
+
+
+def _canonical_stay_choice_key(stay: Any, idx: int) -> str:
+    row = stay if isinstance(stay, dict) else {}
+    raw = f"{row.get('name', '')} {row.get('destination', '')} {row.get('type', '')}".strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    if slug:
+        return f"stay:{slug}"
+    return f"stay:index-{idx}"
+
+
+def _companion_selected_stays(planning_state: dict[str, Any]) -> list[dict[str, Any]]:
+    stay_options = planning_state.get("stay_options")
+    if not isinstance(stay_options, list):
+        return []
+    stay_final_choices = planning_state.get("stay_final_choices")
+    stay_locks = stay_final_choices if isinstance(stay_final_choices, dict) else {}
+    grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for idx, raw in enumerate(stay_options):
+        if not isinstance(raw, dict):
+            continue
+        dest = str(raw.get("destination") or "Other").strip() or "Other"
+        grouped.setdefault(dest, []).append((idx, raw))
+    picked: list[dict[str, Any]] = []
+    for dest in sorted(grouped.keys()):
+        rows = grouped.get(dest) or []
+        locked_key = str(stay_locks.get(dest) or "").strip()
+        chosen: Optional[dict[str, Any]] = None
+        for idx, row in rows:
+            if locked_key and _canonical_stay_choice_key(row, idx) == locked_key:
+                chosen = row
+                break
+        if chosen is None and rows:
+            chosen = rows[0][1]
+        if chosen is None:
+            continue
+        picked.append(
+            {
+                "destination": dest,
+                "name": str(chosen.get("name") or "").strip(),
+                "type": str(chosen.get("type") or "Stay").strip(),
+                "rate_per_night": float(chosen.get("ratePerNight") or 0) if chosen.get("ratePerNight") is not None else 0,
+                "total_nights": int(chosen.get("totalNights") or 0) if chosen.get("totalNights") is not None else 0,
+                "booking_source": str(chosen.get("bookingSource") or "").strip(),
+                "why_this_one": str(chosen.get("whyThisOne") or "").strip(),
+            }
+        )
+    return picked
+
+
+def _resolve_meal_option(meal: dict[str, Any]) -> dict[str, Any]:
+    row = dict(meal or {})
+    options = row.get("options")
+    selected_idx = int(row.get("selectedOption") or 0) if str(row.get("selectedOption") or "").strip() else 0
+    if isinstance(options, list) and 0 <= selected_idx < len(options) and isinstance(options[selected_idx], dict):
+        opt = options[selected_idx]
+        merged = dict(row)
+        merged.update(opt)
+        merged["selectedOption"] = selected_idx
+        return merged
+    return row
+
+
+def _companion_today_meals(planning_state: dict[str, Any], current_day_number: Optional[int]) -> list[dict[str, Any]]:
+    meal_plan = planning_state.get("meal_plan")
+    if not isinstance(meal_plan, list) or not meal_plan:
+        return []
+    selected_day = None
+    if current_day_number is not None:
+        for row in meal_plan:
+            if not isinstance(row, dict):
+                continue
+            try:
+                if int(row.get("day") or 0) == int(current_day_number):
+                    selected_day = row
+                    break
+            except Exception:
+                continue
+    if selected_day is None:
+        selected_day = next((row for row in meal_plan if isinstance(row, dict)), None)
+    if not isinstance(selected_day, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for meal in selected_day.get("meals") or []:
+        if not isinstance(meal, dict):
+            continue
+        chosen = _resolve_meal_option(meal)
+        out.append(
+            {
+                "day": int(selected_day.get("day") or 0),
+                "date": str(selected_day.get("date") or "").strip() or None,
+                "destination": str(selected_day.get("destination") or "").strip(),
+                "type": str(chosen.get("type") or "Meal").strip(),
+                "time": str(chosen.get("time") or _MEAL_DEFAULT_TIME.get(str(chosen.get("type") or ""), "")).strip(),
+                "name": str(chosen.get("name") or "").strip(),
+                "cuisine": str(chosen.get("cuisine") or "").strip(),
+                "cost": float(chosen.get("cost") or 0) if chosen.get("cost") is not None else 0,
+                "note": str(chosen.get("note") or "").strip(),
+            }
+        )
+    return out
+
+
+def _companion_current_and_next(day_payload: Optional[dict[str, Any]]) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+    if not isinstance(day_payload, dict):
+        return (None, None)
+    items = [dict(item) for item in (day_payload.get("items") or []) if isinstance(item, dict)]
+    if not items:
+        return (None, None)
+    day_date = _safe_iso_date(day_payload.get("date"))
+    now_local = datetime.now()
+    if day_date != now_local.date():
+        return (items[0], items[1] if len(items) > 1 else None)
+    now_t = now_local.time()
+    current_idx = 0
+    for idx, item in enumerate(items):
+        start_t, end_t = _slot_times(item.get("time_slot"))
+        if start_t and end_t:
+            if start_t <= now_t <= end_t:
+                current_idx = idx
+                break
+            if now_t < start_t:
+                current_idx = idx
+                break
+        elif start_t:
+            if now_t <= start_t:
+                current_idx = idx
+                break
+        elif idx == 0:
+            current_idx = 0
+    return (items[current_idx], items[current_idx + 1] if current_idx + 1 < len(items) else None)
 
 
 def _minutes_of_day(t: Optional[time]) -> Optional[int]:

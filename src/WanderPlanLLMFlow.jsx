@@ -3250,6 +3250,10 @@ export default function WanderPlan(){
     var comp=companionData||{};
     var today=comp.today||null;
     var upcoming=Array.isArray(comp.upcoming)?comp.upcoming:[];
+    var currentItem=comp.current_item||null;
+    var nextItem=comp.next_item||null;
+    var staySnapshot=Array.isArray(comp.stays)?comp.stays:[];
+    var diningSnapshot=Array.isArray(comp.today_meals)?comp.today_meals:[];
     var members=Array.isArray(comp.members)&&comp.members.length>0?comp.members:(Array.isArray(tr.members)?tr.members:[]);
     var lockedWindow=comp.locked_window||{};
     var tripTitle=(comp.trip&&comp.trip.name)||tr.name||"Trip";
@@ -3283,6 +3287,21 @@ export default function WanderPlan(){
       </div></Fade>
       {companionErr&&<Fade delay={120}><div style={{marginBottom:14,padding:"12px 14px",borderRadius:12,background:C.redBg,border:"1px solid "+C.red+"20"}}><p style={{fontSize:13,color:C.red}}>{companionErr}</p></div></Fade>}
       {companionLoad&&<Fade delay={120}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}><p style={{fontSize:14,color:C.tx2}}>Loading live trip context...</p></div></Fade>}
+      {!companionLoad&&(currentItem||nextItem)&&(<Fade delay={130}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
+        <p style={{fontSize:12,fontWeight:700,color:C.grn,marginBottom:10}}>NOW / NEXT</p>
+        <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(2,1fr)",gap:10}}>
+          {[{label:"Now",item:currentItem},{label:"Next",item:nextItem}].map(function(block){
+            return(<div key={block.label} style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:"1px solid "+C.border,minHeight:92}}>
+              <p style={{fontSize:11,color:C.tx3,marginBottom:6}}>{block.label}</p>
+              {block.item?(<>
+                <p style={{fontSize:12,color:C.tealL,marginBottom:4}}>{String(block.item.time_slot||"").split("-")[0]||"--:--"}</p>
+                <p style={{fontSize:14,fontWeight:700,marginBottom:4}}>{block.item.title||"Planned item"}</p>
+                <p style={{fontSize:12,color:C.tx2}}>{block.item.location||block.item.category||"Trip plan"}</p>
+              </>):(<p style={{fontSize:12,color:C.tx3}}>No item queued.</p>)}
+            </div>);
+          })}
+        </div>
+      </div></Fade>)}
       {!companionLoad&&today&&(<Fade delay={140}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,gap:10}}>
           <div>
@@ -3324,14 +3343,46 @@ export default function WanderPlan(){
             })}
           </div>
         </div>
-        <div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
-          <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:10}}>TRIP SNAPSHOT</p>
-          {[
-            {l:"Status",v:String((comp.trip&&comp.trip.status)||tr.status||"active")},
-            {l:"Approved days",v:String(comp.stats&&comp.stats.approved_days||0)},
-            {l:"Planned items",v:String(comp.stats&&comp.stats.item_count||0)},
-            {l:"Wizard step",v:String((comp.current_step||0)+1)}
-          ].map(function(row){return(<div key={row.l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid "+C.border,fontSize:13}}><span style={{color:C.tx3}}>{row.l}</span><span style={{fontWeight:600}}>{row.v}</span></div>);})}
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
+            <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:10}}>STAY SNAPSHOT</p>
+            {staySnapshot.length>0?(<div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {staySnapshot.map(function(stay,idx){
+                return(<div key={stay.destination+"-"+idx} style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:"1px solid "+C.border}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:10,marginBottom:4}}>
+                    <p style={{fontSize:14,fontWeight:700}}>{stay.name||stay.destination||"Stay"}</p>
+                    {stay.rate_per_night? <span style={{fontSize:12,color:C.goldT,fontWeight:700}}>${Math.round(stay.rate_per_night)}/night</span> : null}
+                  </div>
+                  <p style={{fontSize:12,color:C.tx2,marginBottom:4}}>{stay.destination}{stay.type?(" • "+stay.type):""}</p>
+                  {stay.why_this_one&&<p style={{fontSize:11,color:C.tx3}}>{stay.why_this_one}</p>}
+                </div>);
+              })}
+            </div>):(<p style={{fontSize:12,color:C.tx3}}>No stay snapshot available yet.</p>)}
+          </div>
+          <div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
+            <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:10}}>DINING TODAY</p>
+            {diningSnapshot.length>0?(<div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {diningSnapshot.map(function(meal,idx){
+                return(<div key={(meal.type||"Meal")+"-"+idx} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"10px 0",borderTop:idx===0?"1px solid "+C.border:"1px solid "+C.border}}>
+                  <div>
+                    <p style={{fontSize:12,color:C.tealL,marginBottom:3}}>{meal.time||meal.type||"Meal"}</p>
+                    <p style={{fontSize:14,fontWeight:700,marginBottom:2}}>{meal.name||"Dining plan"}</p>
+                    <p style={{fontSize:12,color:C.tx2}}>{meal.destination||meal.cuisine||meal.type||"Meal"}</p>
+                  </div>
+                  {meal.cost? <span style={{fontSize:12,color:C.goldT,fontWeight:700}}>${Math.round(meal.cost)}</span> : null}
+                </div>);
+              })}
+            </div>):(<p style={{fontSize:12,color:C.tx3}}>No dining snapshot available yet.</p>)}
+          </div>
+          <div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
+            <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:10}}>TRIP SNAPSHOT</p>
+            {[
+              {l:"Status",v:String((comp.trip&&comp.trip.status)||tr.status||"active")},
+              {l:"Approved days",v:String(comp.stats&&comp.stats.approved_days||0)},
+              {l:"Planned items",v:String(comp.stats&&comp.stats.item_count||0)},
+              {l:"Wizard step",v:String((comp.current_step||0)+1)}
+            ].map(function(row){return(<div key={row.l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid "+C.border,fontSize:13}}><span style={{color:C.tx3}}>{row.l}</span><span style={{fontWeight:600}}>{row.v}</span></div>);})}
+          </div>
         </div>
       </div></Fade>
     </div>);

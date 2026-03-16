@@ -1167,6 +1167,44 @@ describe("WanderPlanLLMFlow companion entry", () => {
                 ],
               },
             ],
+            current_item: {
+              activity_id: "a-1",
+              time_slot: "09:00-10:00",
+              title: "Land in Tokyo",
+              category: "flight",
+              location: "Haneda Airport",
+            },
+            next_item: {
+              activity_id: "a-2",
+              time_slot: "13:00-14:00",
+              title: "Check in at hotel",
+              category: "checkin",
+              location: "Shinjuku",
+            },
+            stays: [
+              {
+                destination: "Tokyo",
+                name: "Shinjuku Grand",
+                type: "Hotel",
+                rate_per_night: 220,
+                total_nights: 3,
+                booking_source: "WanderPlan Search",
+                why_this_one: "Central for your first days in Tokyo.",
+              },
+            ],
+            today_meals: [
+              {
+                day: 1,
+                date: "2026-06-01",
+                destination: "Tokyo",
+                type: "Dinner",
+                time: "19:00",
+                name: "Izakaya Hanabi",
+                cuisine: "Japanese",
+                cost: 42,
+                note: "Easy walk from the hotel.",
+              },
+            ],
             stats: { day_count: 7, approved_days: 7, item_count: 12 },
           },
         });
@@ -1202,9 +1240,14 @@ describe("WanderPlanLLMFlow companion entry", () => {
       expect(screen.queryByText("Live Companion")).not.toBeNull()
     );
     await waitFor(() =>
-      expect(screen.queryByText("Land in Tokyo")).not.toBeNull()
+      expect(screen.queryAllByText("Land in Tokyo").length).toBeGreaterThan(0)
     );
     expect(screen.queryByText("Culture Day")).not.toBeNull();
+    expect(screen.queryByText("NOW / NEXT")).not.toBeNull();
+    expect(screen.queryByText("STAY SNAPSHOT")).not.toBeNull();
+    expect(screen.queryByText("Shinjuku Grand")).not.toBeNull();
+    expect(screen.queryByText("DINING TODAY")).not.toBeNull();
+    expect(screen.queryByText("Izakaya Hanabi")).not.toBeNull();
   });
 });
 
