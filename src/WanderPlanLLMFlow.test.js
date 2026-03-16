@@ -1244,10 +1244,18 @@ describe("WanderPlanLLMFlow companion entry", () => {
     );
     expect(screen.queryByText("Culture Day")).not.toBeNull();
     expect(screen.queryByText("NOW / NEXT")).not.toBeNull();
+    expect(screen.queryByText("QUICK ACTIONS")).not.toBeNull();
+    expect(screen.queryByText("Open Itinerary")).not.toBeNull();
     expect(screen.queryByText("STAY SNAPSHOT")).not.toBeNull();
     expect(screen.queryByText("Shinjuku Grand")).not.toBeNull();
     expect(screen.queryByText("DINING TODAY")).not.toBeNull();
     expect(screen.queryByText("Izakaya Hanabi")).not.toBeNull();
+
+    fireEvent.click(screen.getByText("Open Itinerary"));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Itinerary")).not.toBeNull()
+    );
   });
 });
 

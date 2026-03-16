@@ -195,9 +195,14 @@ test.describe('07 - During-trip companion', () => {
     await expect(page.getByText('Culture Day')).toBeVisible();
     await expect(page.getByText('Trip Window')).toBeVisible();
     await expect(page.getByText('NOW / NEXT')).toBeVisible();
+    await expect(page.getByText('QUICK ACTIONS')).toBeVisible();
+    await expect(page.getByText('Open Itinerary')).toBeVisible();
     await expect(page.getByText('STAY SNAPSHOT')).toBeVisible();
     await expect(page.getByText('Shinjuku Grand')).toBeVisible();
     await expect(page.getByText('DINING TODAY')).toBeVisible();
     await expect(page.getByText('Izakaya Hanabi')).toBeVisible();
+
+    await page.getByText('Open Itinerary').click();
+    await expect(page.getByText('Itinerary')).toBeVisible();
   });
 });

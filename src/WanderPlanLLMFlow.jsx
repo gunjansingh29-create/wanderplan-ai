@@ -3257,6 +3257,27 @@ export default function WanderPlan(){
     var members=Array.isArray(comp.members)&&comp.members.length>0?comp.members:(Array.isArray(tr.members)?tr.members:[]);
     var lockedWindow=comp.locked_window||{};
     var tripTitle=(comp.trip&&comp.trip.name)||tr.name||"Trip";
+    var companionActions=[
+      {label:"Open Flights",step:10,color:C.sky},
+      {label:"Open Stays",step:11,color:C.goldT},
+      {label:"Open Dining",step:12,color:C.coral},
+      {label:"Open Itinerary",step:13,color:C.tealL}
+    ];
+    function openCompanionWizardStep(stepIndex){
+      var tid=String((tr&&tr.id)||currentTripId||"").trim();
+      var fallbackDests=(Array.isArray(tr.dests)&&tr.dests.length)?tr.dests:String(tr.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
+      setCTID(tid);
+      setVT(tr);
+      setNT(function(prev){
+        var base=(prev&&typeof prev==="object")?prev:{};
+        var nextTrip=Object.assign({},base,tr,{step:stepIndex});
+        if(!(Array.isArray(nextTrip.dests)&&nextTrip.dests.length))nextTrip.dests=fallbackDests;
+        if(!Array.isArray(nextTrip.members))nextTrip.members=Array.isArray(tr.members)?tr.members:[];
+        return nextTrip;
+      });
+      setWS(stepIndex);
+      go("wizard");
+    }
     return(<div style={{maxWidth:720}}>
       <Fade delay={50}><button onClick={function(){go("trip_detail");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13,marginBottom:16}}>Back to {tr.name||"trip"}</button></Fade>
       <Fade delay={100}><div style={{background:C.surface,borderRadius:18,border:"1px solid "+C.border,overflow:"hidden",marginBottom:18}}>
@@ -3283,6 +3304,21 @@ export default function WanderPlan(){
           <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:12}}>
             {[{l:"Trip Window",v:formatCompanionWindow(lockedWindow)},{l:"Destinations",v:(Array.isArray(tr.dests)?tr.dests.join(" + "):(tr.destNames||""))||"TBD"},{l:"Travelers",v:String(members.length||1)+" active"}].map(function(item){return(<div key={item.l} style={{background:C.bg,borderRadius:12,padding:"12px 14px"}}><p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{item.l}</p><p style={{fontSize:14,fontWeight:600}}>{item.v}</p></div>);})}
           </div>
+        </div>
+      </div></Fade>
+      <Fade delay={115}><div style={{background:C.surface,borderRadius:16,padding:"18px 22px",border:"1px solid "+C.border,marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:12}}>
+          <div>
+            <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:4}}>QUICK ACTIONS</p>
+            <p style={{fontSize:12,color:C.tx3}}>Jump straight into the live trip steps without losing context.</p>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+          {companionActions.map(function(action){
+            return(<button key={action.label} onClick={function(){openCompanionWizardStep(action.step);}} style={{padding:"12px 10px",borderRadius:12,border:"1px solid "+action.color+"35",background:action.color+"12",color:action.color,fontSize:12,fontWeight:700,cursor:"pointer",minHeight:46}}>
+              {action.label}
+            </button>);
+          })}
         </div>
       </div></Fade>
       {companionErr&&<Fade delay={120}><div style={{marginBottom:14,padding:"12px 14px",borderRadius:12,background:C.redBg,border:"1px solid "+C.red+"20"}}><p style={{fontSize:13,color:C.red}}>{companionErr}</p></div></Fade>}
