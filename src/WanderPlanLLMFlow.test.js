@@ -5,6 +5,7 @@ import {
   availabilityWindowMatchesTripDays,
   buildCurrentVoteActor,
   buildDurationPlanSignature,
+  buildFallbackItinerary,
   buildFlightRoutePlan,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
@@ -14,6 +15,7 @@ import {
   dedupeVoteVoters,
   emptyUserState,
   findDuplicatePoiKeys,
+  fillMissingDurationPerDestination,
   inclusiveIsoDays,
   isCurrentVoteVoter,
   makeVoteUserId,
@@ -268,6 +270,41 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       { destination: "Sydney", airport: "SYD", travel_date: "2026-03-31" },
       { destination: "Auckland", airport: "AKL", travel_date: "2026-04-01", is_return_stop: true },
     ]);
+  });
+
+  test("fillMissingDurationPerDestination recovers a full duration map from total trip days", () => {
+    expect(
+      fillMissingDurationPerDestination(
+        ["Auckland", "Melbourne", "Queenstown", "Sydney"],
+        {},
+        11
+      )
+    ).toEqual({
+      Auckland: 2,
+      Melbourne: 2,
+      Queenstown: 2,
+      Sydney: 1,
+    });
+  });
+
+  test("buildFallbackItinerary creates a non-empty itinerary when LLM output is unavailable", () => {
+    const rows = buildFallbackItinerary(
+      [{ name: "Auckland" }, { name: "Melbourne" }],
+      [{ name: "Sky Tower", destination: "Auckland", cost: 35 }],
+      [{ name: "Harbour Hotel", destination: "Auckland" }],
+      [{ name: "Depot", destination: "Auckland", type: "Dinner", cost: 42 }],
+      6,
+      "2026-03-22",
+      { Auckland: 2, Melbourne: 2 }
+    );
+    expect(rows).toHaveLength(6);
+    expect(rows[0]).toMatchObject({
+      day: 1,
+      date: "2026-03-22",
+      destination: "Auckland",
+    });
+    expect(rows.some((day) => day.destination === "Melbourne")).toBe(true);
+    expect(rows.every((day) => Array.isArray(day.items) && day.items.length > 0)).toBe(true);
   });
 
   test("resolveBudgetTier prefers trip member profile budget tier", () => {

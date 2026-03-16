@@ -661,6 +661,45 @@ function roundTripFlightRoutePlan(plan, finalDateIso){
   return base;
 }
 
+function fillMissingDurationPerDestination(destinations, durationPerDestination, totalTripDays){
+  var list=(Array.isArray(destinations)?destinations:[]).map(function(dest){
+    return typeof dest==="string"?String(dest||"").trim():String(dest&&dest.name||dest&&dest.destination||"").trim();
+  }).filter(Boolean);
+  var existing=(durationPerDestination&&typeof durationPerDestination==="object")?durationPerDestination:{};
+  var next={};
+  var seen={};
+  list.forEach(function(name){
+    var key=String(name||"").trim();
+    if(!key||seen[key])return;
+    seen[key]=1;
+    var raw=Number(existing[key]);
+    if(Number.isFinite(raw)&&raw>0)next[key]=Math.max(1,Math.round(raw));
+  });
+  if(list.length===0)return next;
+  var missing=list.filter(function(name){return next[name]===undefined;});
+  if(missing.length===0)return next;
+  var totalDays=Math.max(0,Number(totalTripDays)||0);
+  var targetStayDays=Math.max(list.length,totalDays>0?(totalDays-Math.max(0,list.length-1)-1):list.length);
+  var assigned=list.reduce(function(sum,name){
+    return sum+(next[name]!==undefined?Math.max(1,Number(next[name])||1):0);
+  },0);
+  missing.forEach(function(name){
+    next[name]=1;
+  });
+  assigned=list.reduce(function(sum,name){
+    return sum+Math.max(1,Number(next[name])||1);
+  },0);
+  var delta=targetStayDays-assigned;
+  var cursor=0;
+  while(delta>0&&list.length>0){
+    var name=list[cursor%list.length];
+    next[name]=Math.max(1,Number(next[name])||1)+1;
+    delta-=1;
+    cursor+=1;
+  }
+  return next;
+}
+
 function resolveBudgetTier(profileOrMember, fallbackTier){
   var src=(profileOrMember&&typeof profileOrMember==="object")?profileOrMember:{};
   var profile=(src.profile&&typeof src.profile==="object")?src.profile:src;
@@ -1325,6 +1364,109 @@ async function askItinerary(destinations, acceptedPOIs, pickedStays, approvedMea
   return Array.isArray(res) ? res : [];
 }
 
+function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, totalTripDays, startDateIso, durationPerDestination){
+  var destList=(Array.isArray(destinations)?destinations:[]).map(function(d){
+    return typeof d==="string"?String(d||"").trim():String(d&&d.name||d&&d.destination||"").trim();
+  }).filter(Boolean);
+  if(destList.length===0)destList=["Trip"];
+  var tripDays=Math.max(1,Number(totalTripDays)||destList.length||1);
+  var resolvedDurations=fillMissingDurationPerDestination(destList,durationPerDestination,tripDays);
+  var startDate=String(startDateIso||"").trim().slice(0,10);
+  var hasIsoStart=/^\d{4}-\d{2}-\d{2}$/.test(startDate);
+  var poisByDest={};
+  (Array.isArray(acceptedPOIs)?acceptedPOIs:[]).forEach(function(p){
+    var key=String(p&&p.destination||destList[0]||"Trip").trim()||"Trip";
+    if(!poisByDest[key])poisByDest[key]=[];
+    poisByDest[key].push(p);
+  });
+  var staysByDest={};
+  (Array.isArray(pickedStays)?pickedStays:[]).forEach(function(stay){
+    var key=String(stay&&stay.destination||destList[0]||"Trip").trim()||"Trip";
+    if(!staysByDest[key])staysByDest[key]=[];
+    staysByDest[key].push(stay);
+  });
+  var mealsByDest={};
+  (Array.isArray(approvedMeals)?approvedMeals:[]).forEach(function(meal){
+    var key=String(meal&&meal.destination||destList[0]||"Trip").trim()||"Trip";
+    if(!mealsByDest[key])mealsByDest[key]=[];
+    mealsByDest[key].push(meal);
+  });
+  var poiCursor={};
+  var mealCursor={};
+  function nextPoi(dest){
+    var list=poisByDest[dest]||[];
+    if(list.length===0)return null;
+    var idx=Number(poiCursor[dest]||0)%list.length;
+    poiCursor[dest]=idx+1;
+    return list[idx];
+  }
+  function nextMeal(dest, fallbackType){
+    var list=mealsByDest[dest]||[];
+    if(list.length===0)return null;
+    var preferred=list.find(function(meal,idx){
+      if(String(meal&&meal.type||"").toLowerCase()!==String(fallbackType||"").toLowerCase())return false;
+      if((mealCursor[dest]||0)>idx)return false;
+      mealCursor[dest]=idx+1;
+      return true;
+    });
+    if(preferred)return preferred;
+    var idx=Number(mealCursor[dest]||0)%list.length;
+    mealCursor[dest]=idx+1;
+    return list[idx];
+  }
+  var planDays=[];
+  destList.forEach(function(dest,idx){
+    var stayDays=Math.max(1,Number(resolvedDurations[dest])||1);
+    if(idx>0)planDays.push({destination:dest,kind:"travel"});
+    for(var i=0;i<stayDays;i++)planDays.push({destination:dest,kind:"stay",stayIndex:i});
+  });
+  planDays.push({destination:destList[destList.length-1],kind:"buffer"});
+  while(planDays.length<tripDays){
+    planDays.push({destination:destList[destList.length-1],kind:"buffer"});
+  }
+  if(planDays.length>tripDays)planDays=planDays.slice(0,tripDays);
+  return planDays.map(function(entry,idx){
+    var dayNum=idx+1;
+    var dest=entry.destination||destList[0]||"Trip";
+    var stay=(staysByDest[dest]&&staysByDest[dest][0])||null;
+    var breakfast=nextMeal(dest,"breakfast");
+    var lunch=nextMeal(dest,"lunch");
+    var dinner=nextMeal(dest,"dinner");
+    var act1=nextPoi(dest);
+    var act2=nextPoi(dest);
+    var items=[];
+    if(entry.kind==="travel"){
+      items.push({time:"09:00",type:"checkout",title:"Check out and depart previous city",cost:0});
+      items.push({time:"11:30",type:"travel",title:"Travel to "+dest,cost:0});
+      items.push({time:"15:00",type:"checkin",title:"Check in"+(stay&&stay.name?(" at "+stay.name):""),cost:0});
+      items.push({time:"18:30",type:"meal",title:(dinner&&dinner.name)||("Dinner in "+dest),cost:Number(dinner&&dinner.cost||30)||30});
+    }else if(entry.kind==="buffer"){
+      items.push({time:"09:00",type:"meal",title:(breakfast&&breakfast.name)||("Breakfast in "+dest),cost:Number(breakfast&&breakfast.cost||20)||20});
+      items.push({time:"11:00",type:"rest",title:"Flexible time, shopping, or rest",cost:0});
+      items.push({time:"14:00",type:"activity",title:(act1&&act1.name)||("Last walk around "+dest),cost:Number(act1&&act1.cost||0)||0});
+      items.push({time:"19:00",type:"meal",title:(dinner&&dinner.name)||("Farewell dinner in "+dest),cost:Number(dinner&&dinner.cost||40)||40});
+    }else{
+      if(dayNum===1){
+        items.push({time:"09:00",type:"flight",title:"Arrive in "+dest,cost:0});
+        items.push({time:"11:00",type:"checkin",title:"Check in"+(stay&&stay.name?(" at "+stay.name):""),cost:0});
+      }else{
+        items.push({time:"08:30",type:"meal",title:(breakfast&&breakfast.name)||("Breakfast in "+dest),cost:Number(breakfast&&breakfast.cost||18)||18});
+      }
+      items.push({time:"10:00",type:"activity",title:(act1&&act1.name)||("Explore "+dest),cost:Number(act1&&act1.cost||0)||0});
+      items.push({time:"13:00",type:"meal",title:(lunch&&lunch.name)||("Lunch in "+dest),cost:Number(lunch&&lunch.cost||25)||25});
+      items.push({time:"15:30",type:(act2?"activity":"rest"),title:(act2&&act2.name)||("Free time in "+dest),cost:Number(act2&&act2.cost||0)||0});
+      items.push({time:"19:00",type:"meal",title:(dinner&&dinner.name)||("Dinner in "+dest),cost:Number(dinner&&dinner.cost||35)||35});
+    }
+    return {
+      day:dayNum,
+      date:hasIsoStart?addIsoDays(startDate,idx):("Day "+dayNum),
+      destination:dest,
+      theme:entry.kind==="travel"?"Travel day":(entry.kind==="buffer"?"Flexible day":"Explore "+dest),
+      items:items
+    };
+  });
+}
+
 
 export default function WanderPlan(){
   var[sc,setSc]=useState("landing");
@@ -1447,6 +1589,11 @@ export default function WanderPlan(){
       return {id:"flight-dest-"+idx,name:raw};
     }).filter(Boolean);
   }());
+  var effectiveDurPerDest=fillMissingDurationPerDestination(
+    flightPlannerDests,
+    durPerDest,
+    sharedDurationDays||inclusiveIsoDays(flightDates.depart,flightDates.ret)
+  );
 
   useEffect(function(){(async function(){
     var inviteTokenInUrl="";
@@ -2267,7 +2414,7 @@ export default function WanderPlan(){
     var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")
       ? availabilityData.locked_window
       : ((flightDates.depart&&flightDates.ret)?{start:String(flightDates.depart||"").slice(0,10),end:String(flightDates.ret||"").slice(0,10)}:null);
-    var normalized=buildFlightRoutePlan(flightPlannerDests,durPerDest,lockedWindow,flightLegInputs);
+    var normalized=buildFlightRoutePlan(flightPlannerDests,effectiveDurPerDest,lockedWindow,flightLegInputs);
     if(flightRoutePlanSignature(flightLegInputs)!==flightRoutePlanSignature(normalized)){
       setFLI(normalized);
     }
@@ -2290,7 +2437,7 @@ export default function WanderPlan(){
     wizStep,
     flightRoutePlanSignature(flightLegInputs),
     JSON.stringify((flightPlannerDests||[]).map(function(d){return d&&d.name||d;})),
-    JSON.stringify(durPerDest||{}),
+    JSON.stringify(effectiveDurPerDest||{}),
     availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start,
     availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.end,
     flightDates.depart,
@@ -3631,7 +3778,7 @@ export default function WanderPlan(){
       return null;
     }
     function normalizedFlightRoutePlan(planOverride){
-      return buildFlightRoutePlan(flightPlannerDests,durPerDest,currentLockedFlightWindow(),planOverride!==undefined?planOverride:flightLegInputs);
+      return buildFlightRoutePlan(flightPlannerDests,effectiveDurPerDest,currentLockedFlightWindow(),planOverride!==undefined?planOverride:flightLegInputs);
     }
     function displayedRoundTripRoutePlan(planOverride){
       var normalized=normalizedFlightRoutePlan(planOverride);
@@ -3773,6 +3920,19 @@ export default function WanderPlan(){
       });
     }
     function buildItineraryWithBackend(accPois,pStays,appMeals,totalDays,grpSize){
+      var itineraryDurations=fillMissingDurationPerDestination(
+        dests,
+        durPerDest,
+        totalDays
+      );
+      function finalizeItineraryResult(res){
+        var rows=(Array.isArray(res)&&res.length>0)
+          ? res
+          : buildFallbackItinerary(dests,accPois,pStays,appMeals,totalDays,flightDates.depart,itineraryDurations);
+        setItin(rows);
+        setIL(false);
+        setID(true);
+      }
       setIL(true);
       if(authToken&&currentTripId){
         apiJson("/trips/"+currentTripId+"/itinerary",{method:"GET"},authToken).then(function(r){
@@ -3800,24 +3960,12 @@ export default function WanderPlan(){
             setID(true);
             return;
           }
-          return askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(function(res){
-            setItin(res&&res.length?res:[]);
-            setIL(false);
-            setID(true);
-          });
+          return askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(finalizeItineraryResult);
         }).catch(function(){
-          askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(function(res){
-            setItin(res&&res.length?res:[]);
-            setIL(false);
-            setID(true);
-          });
+          askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(finalizeItineraryResult);
         });
       }else{
-        askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(function(res){
-          setItin(res&&res.length?res:[]);
-          setIL(false);
-          setID(true);
-        });
+        askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(finalizeItineraryResult);
       }
     }
     function approveItineraryThenAdvance(){
@@ -4525,6 +4673,7 @@ export default function WanderPlan(){
       var travelDays=Math.max(1,destNames.length-1);
       var totalCalc=0;
       destNames.forEach(function(dn){var dd=durPerDest[dn];var poisCount=(poisByDest[dn]||[]).length;var auto=Math.max(1,Math.ceil(poisCount/2));var days=dd!==undefined?dd:auto;totalCalc+=days;});
+      var resolvedDurations=fillMissingDurationPerDestination(destNames,durPerDest,totalCalc);
       totalCalc+=travelDays+1;
       var feasible=totalCalc<=21;
       var tooLong=totalCalc>14;
@@ -4563,7 +4712,7 @@ export default function WanderPlan(){
         saveTripPlanningState({state:{
           duration_days_locked:totalCalc,
           duration_revision_signature:nextSignature,
-          duration_per_destination:durPerDest,
+          duration_per_destination:resolvedDurations,
           availability_locked_window:shouldResetTravel?null:((availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null),
           flight_dates:nextFlightDates
         }}).finally(function(){adv();});
@@ -4760,7 +4909,7 @@ export default function WanderPlan(){
         });
       }
       function moveRouteStop(idx,direction){
-        var moved=moveFlightRouteStop(routePlan,idx,direction,durPerDest,lockedWindow);
+        var moved=moveFlightRouteStop(routePlan,idx,direction,effectiveDurPerDest,lockedWindow);
         persistFlightRoute(flightDates,moved);
       }
       return(<div>
@@ -4803,7 +4952,7 @@ export default function WanderPlan(){
             </div>
             <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
               <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Duration per destination</p>
-              <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(durPerDest||{},null,2)}</pre>
+              <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(effectiveDurPerDest||{},null,2)}</pre>
             </div>
           </div>
         </div>)}
@@ -5437,5 +5586,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFlightRoutePlan, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 
