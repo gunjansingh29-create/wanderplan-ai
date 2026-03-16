@@ -594,7 +594,8 @@ function flightRoutePlanSignature(plan){
     return {
       destination:String(stop&&stop.destination||"").trim(),
       airport:String(stop&&stop.airport||"").trim(),
-      travel_date:String(stop&&stop.travel_date||"").slice(0,10)
+      travel_date:String(stop&&stop.travel_date||"").slice(0,10),
+      manual_date:!!(stop&&stop.manual_date)
     };
   }));
 }
@@ -609,7 +610,8 @@ function buildFlightRoutePlan(destinations, durationPerDestination, lockedWindow
     existing[key]={
       destination:String(stop&&stop.destination||"").trim(),
       airport:String(stop&&stop.airport||stop&&stop.to_airport||"").trim(),
-      travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10)
+      travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10),
+      manual_date:!!(stop&&stop.manual_date)
     };
   });
   var cursor=(lockedWindow&&typeof lockedWindow==="object")?String(lockedWindow.start||"").slice(0,10):"";
@@ -620,12 +622,16 @@ function buildFlightRoutePlan(destinations, durationPerDestination, lockedWindow
   return list.map(function(name){
     var saved=existing[String(name||"").trim().toLowerCase()]||{};
     var days=Math.max(1,Number((durationPerDestination&&durationPerDestination[name])||0)||1);
+    var autoDate=String(cursor||"").slice(0,10);
+    var savedDate=String(saved.travel_date||"").slice(0,10);
+    var finalDate=String((saved.manual_date&&savedDate)?savedDate:(autoDate||savedDate||"")).slice(0,10);
     var stop={
       destination:name,
       airport:String(saved.airport||name).trim()||name,
-      travel_date:String(cursor||saved.travel_date||"").slice(0,10)
+      travel_date:finalDate
     };
-    if(cursor)cursor=addIsoDays(cursor,days);
+    if(saved.manual_date&&savedDate)stop.manual_date=true;
+    if(finalDate)cursor=addIsoDays(finalDate,days);
     return stop;
   });
 }
@@ -638,6 +644,21 @@ function moveFlightRouteStop(plan, index, direction, durationPerDestination, loc
   var item=list.splice(from,1)[0];
   list.splice(to,0,item);
   return buildFlightRoutePlan(list.map(function(stop){return stop.destination;}),durationPerDestination,lockedWindow,list);
+}
+
+function roundTripFlightRoutePlan(plan, finalDateIso){
+  var base=(Array.isArray(plan)?plan:[]).map(function(stop){
+    return Object.assign({},stop||{});
+  });
+  if(base.length<=1)return base;
+  var first=base[0]||{};
+  base.push({
+    destination:String(first.destination||"").trim(),
+    airport:String(first.airport||first.destination||"").trim(),
+    travel_date:String(finalDateIso||"").slice(0,10),
+    is_return_stop:true
+  });
+  return base;
 }
 
 function resolveBudgetTier(profileOrMember, fallbackTier){
@@ -1964,7 +1985,8 @@ export default function WanderPlan(){
           return {
             destination:String(stop&&stop.destination||"").trim(),
             airport:String(stop&&stop.airport||stop&&stop.to_airport||"").trim(),
-            travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10)
+            travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10),
+            manual_date:!!(stop&&stop.manual_date)
           };
         }));
       }
@@ -2061,7 +2083,8 @@ export default function WanderPlan(){
             return {
               destination:String(stop&&stop.destination||"").trim(),
               airport:String(stop&&stop.airport||stop&&stop.to_airport||"").trim(),
-              travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10)
+              travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10),
+              manual_date:!!(stop&&stop.manual_date)
             };
           }));
         }
@@ -3610,6 +3633,11 @@ export default function WanderPlan(){
     function normalizedFlightRoutePlan(planOverride){
       return buildFlightRoutePlan(flightPlannerDests,durPerDest,currentLockedFlightWindow(),planOverride!==undefined?planOverride:flightLegInputs);
     }
+    function displayedRoundTripRoutePlan(planOverride){
+      var normalized=normalizedFlightRoutePlan(planOverride);
+      var finalDate=(currentLockedFlightWindow()&&String(currentLockedFlightWindow().end||"").slice(0,10))||String(flightDates.ret||"").slice(0,10);
+      return roundTripFlightRoutePlan(normalized,finalDate);
+    }
     function persistFlightRoute(nextDates,nextPlan){
       var normalizedPlan=normalizedFlightRoutePlan(nextPlan);
       var nextFlightDates=Object.assign({},flightDates||{},nextDates||{});
@@ -3631,7 +3659,7 @@ export default function WanderPlan(){
     }
     async function buildFlightSegments(routePlan,originInput,finalAirportInput){
       var segments=[];
-      var plan=normalizedFlightRoutePlan(routePlan);
+      var plan=displayedRoundTripRoutePlan(routePlan);
       if(plan.length===0)throw new Error("Add at least one destination before searching flights.");
       var originCode=await resolveAirportCode(originInput,"");
       if(!originCode||originCode.length!==3)throw new Error("Could not match the starting city to an airport.");
@@ -4704,6 +4732,7 @@ export default function WanderPlan(){
     {wizStep===10&&(function(){
       var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
       var routePlan=normalizedFlightRoutePlan();
+      var displayedRoutePlan=displayedRoundTripRoutePlan(routePlan);
       var allPicked=(flightLegs||[]).length>0&&(flightLegs||[]).every(function(leg){return !!flightSel[leg.leg_id];});
       function updFlight(k,v,commit){
         setFD(function(p){
@@ -4721,6 +4750,7 @@ export default function WanderPlan(){
           var arr=normalizedFlightRoutePlan(prev).slice(0);
           var row=Object.assign({},arr[idx]||{});
           row[key]=val;
+          if(key==="travel_date")row.manual_date=!!String(val||"").slice(0,10);
           arr[idx]=row;
           if(commit)persistFlightRoute(flightDates,arr);
           return arr;
@@ -4735,6 +4765,7 @@ export default function WanderPlan(){
         {lockedWindow&&<div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}><p style={{fontSize:12,color:C.tealL}}>Locked trip dates: {lockedWindow.start} to {lockedWindow.end}</p></div>}
         <div style={{marginBottom:10,padding:"12px 14px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
           <p style={{fontSize:12,color:C.tx2,marginBottom:6}}>Set the starting airport and final return airport. Destination cities are inserted underneath, auto-dated from the locked trip window, and can be reordered or overridden by any traveler.</p>
+          <p style={{fontSize:11,color:C.tx3}}>Round-trip routing automatically returns through Destination 1 before the final leg home.</p>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
           <input value={flightDates.origin||""} onChange={function(e){updFlight("origin",e.target.value,false);}} onBlur={function(e){updFlight("origin",e.target.value,true);}} placeholder="Starting city or airport (e.g. Detroit)" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
@@ -4743,19 +4774,22 @@ export default function WanderPlan(){
           <input value={flightDates.ret||""} readOnly type="date" style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:C.tx2}}/>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:10}}>
-          {routePlan.map(function(stop,idx){
-            return(<div key={stop.destination+"-"+idx} style={{display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(0,1fr) auto",gap:8,alignItems:"center"}}>
+          {displayedRoutePlan.map(function(stop,idx){
+            var isReturnStop=!!stop.is_return_stop;
+            var canMoveUp=!isReturnStop&&idx>0;
+            var canMoveDown=!isReturnStop&&idx<routePlan.length-1;
+            return(<div key={stop.destination+"-"+idx+(isReturnStop?"-return":"")} style={{display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(0,1fr) auto",gap:8,alignItems:"center"}}>
               <div style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border}}>
-                <p style={{fontSize:11,color:C.tx3,marginBottom:4}}>Destination {idx+1}</p>
+                <p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{isReturnStop?"Return through destination 1":"Destination "+(idx+1)}</p>
                 <p style={{fontSize:13,fontWeight:700,color:"#fff"}}>{stop.destination}</p>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}}>
-                <input value={stop.airport||""} onChange={function(e){updRouteStop(idx,"airport",e.target.value,false);}} onBlur={function(e){updRouteStop(idx,"airport",e.target.value,true);}} placeholder={stop.destination+" city or airport"} style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-                <input value={stop.travel_date||""} onClick={tryShowDatePicker} onFocus={tryShowDatePicker} onChange={function(e){updRouteStop(idx,"travel_date",e.target.value,false);}} onBlur={function(e){updRouteStop(idx,"travel_date",e.target.value,true);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
+                <input value={stop.airport||""} readOnly={isReturnStop} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"airport",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"airport",e.target.value,true);}} placeholder={stop.destination+" city or airport"} style={{padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
+                <input value={stop.travel_date||""} readOnly={isReturnStop} onClick={isReturnStop?undefined:tryShowDatePicker} onFocus={isReturnStop?undefined:tryShowDatePicker} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,true);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
               </div>
               <div style={{display:"flex",gap:6}}>
-                <button onClick={function(){moveRouteStop(idx,-1);}} disabled={idx===0} style={{width:34,height:34,borderRadius:8,border:"1px solid "+C.border,background:idx===0?C.surface:C.bg,color:idx===0?C.tx3:"#fff",cursor:idx===0?"default":"pointer"}}>↑</button>
-                <button onClick={function(){moveRouteStop(idx,1);}} disabled={idx===routePlan.length-1} style={{width:34,height:34,borderRadius:8,border:"1px solid "+C.border,background:idx===routePlan.length-1?C.surface:C.bg,color:idx===routePlan.length-1?C.tx3:"#fff",cursor:idx===routePlan.length-1?"default":"pointer"}}>↓</button>
+                <button onClick={function(){moveRouteStop(idx,-1);}} disabled={!canMoveUp} style={{width:34,height:34,borderRadius:8,border:"1px solid "+C.border,background:!canMoveUp?C.surface:C.bg,color:!canMoveUp?C.tx3:"#fff",cursor:!canMoveUp?"default":"pointer"}}>Up</button>
+                <button onClick={function(){moveRouteStop(idx,1);}} disabled={!canMoveDown} style={{width:34,height:34,borderRadius:8,border:"1px solid "+C.border,background:!canMoveDown?C.surface:C.bg,color:!canMoveDown?C.tx3:"#fff",cursor:!canMoveDown?"default":"pointer"}}>Dn</button>
               </div>
             </div>);
           })}
@@ -5358,5 +5392,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFlightRoutePlan, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFlightRoutePlan, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 

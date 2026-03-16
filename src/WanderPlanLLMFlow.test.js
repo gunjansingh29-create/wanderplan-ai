@@ -35,6 +35,7 @@ import {
   resolveBudgetTier,
   resolveTripBudgetTier,
   resolveWizardTripId,
+  roundTripFlightRoutePlan,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
   sanitizeFlightDatesForTrip,
@@ -229,6 +230,43 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       { destination: "Auckland", airport: "AKL", travel_date: "2026-03-22" },
       { destination: "Queenstown", airport: "ZQN", travel_date: "2026-03-26" },
       { destination: "Melbourne", airport: "MEL", travel_date: "2026-03-28" },
+    ]);
+  });
+
+  test("buildFlightRoutePlan preserves a manual destination date override and shifts later stops", () => {
+    expect(
+      buildFlightRoutePlan(
+        [{ name: "Auckland" }, { name: "Melbourne" }, { name: "Queenstown" }],
+        { Auckland: 4, Melbourne: 3, Queenstown: 2 },
+        { start: "2026-03-22", end: "2026-04-01" },
+        [
+          { destination: "Auckland", airport: "AKL", travel_date: "2026-03-22" },
+          { destination: "Melbourne", airport: "MEL", travel_date: "2026-03-27", manual_date: true },
+          { destination: "Queenstown", airport: "ZQN", travel_date: "2026-03-29" },
+        ]
+      )
+    ).toEqual([
+      { destination: "Auckland", airport: "AKL", travel_date: "2026-03-22" },
+      { destination: "Melbourne", airport: "MEL", travel_date: "2026-03-27", manual_date: true },
+      { destination: "Queenstown", airport: "ZQN", travel_date: "2026-03-30" },
+    ]);
+  });
+
+  test("roundTripFlightRoutePlan appends the first destination as the return-through stop", () => {
+    expect(
+      roundTripFlightRoutePlan(
+        [
+          { destination: "Auckland", airport: "AKL", travel_date: "2026-03-22" },
+          { destination: "Melbourne", airport: "MEL", travel_date: "2026-03-26" },
+          { destination: "Sydney", airport: "SYD", travel_date: "2026-03-31" },
+        ],
+        "2026-04-01"
+      )
+    ).toEqual([
+      { destination: "Auckland", airport: "AKL", travel_date: "2026-03-22" },
+      { destination: "Melbourne", airport: "MEL", travel_date: "2026-03-26" },
+      { destination: "Sydney", airport: "SYD", travel_date: "2026-03-31" },
+      { destination: "Auckland", airport: "AKL", travel_date: "2026-04-01", is_return_stop: true },
     ]);
   });
 
