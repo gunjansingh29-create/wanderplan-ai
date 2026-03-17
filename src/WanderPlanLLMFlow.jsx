@@ -1719,6 +1719,7 @@ export default function WanderPlan(){
   var[stayLoad,setSL]=useState(false);
   var[stayDone,setSD]=useState(false);
   var[stayPick,setStayPick]=useState({});
+  var[stayPreview,setStayPreview]=useState(null);
   var[stayAsk,setSA]=useState("");
   var[stayAskLoad,setSAL]=useState(false);
   var[stayChat,setSChat]=useState([]);
@@ -6108,9 +6109,9 @@ export default function WanderPlan(){
             return(<div key={destName} style={{marginBottom:16}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL}}/><span style={{fontSize:14,fontWeight:700}}>{destName}</span><span style={{fontSize:12,color:C.tx3}}>{opts.length} options</span><span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:lockedEntry?C.goldDim:(resolvedEntry?C.grnBg:C.wrnBg),color:lockedEntry?C.goldT:(resolvedEntry?C.grn:C.wrn),marginLeft:"auto"}}>{lockedEntry?"Locked":(resolvedEntry?("Ready "+destSummary.votedCount+"/"+voteMembers.length):("Voting "+destSummary.votedCount+"/"+voteMembers.length))}</span></div>
               {opts.map(function(entry){var s=entry.stay;var summary=summarizeStayVotes(stayVotes,s,entry.idx,voteMembers);var mine=readVoteForVoter(summary.row,currentVoteActor)==="up";var leader=entry.idx===leadingIdx;var isLocked=!!(lockedEntry&&lockedEntry.idx===entry.idx);var isResolved=!!(resolvedEntry&&resolvedEntry.idx===entry.idx);
-                return(<div key={entry.idx} style={{background:isLocked?C.goldDim:(leader?C.teal+"10":C.bg),borderRadius:12,padding:"12px 14px",marginBottom:6,border:"2px solid "+(isLocked?C.goldT:(isResolved?C.teal+"50":C.border)),transition:"all .2s"}}>
+                return(<div key={entry.idx} onClick={function(){setStayPreview({destination:destName,stay:s,summary:summary,isLocked:isLocked,isResolved:isResolved,leader:leader});}} style={{background:isLocked?C.goldDim:(leader?C.teal+"10":C.bg),borderRadius:12,padding:"12px 14px",marginBottom:6,border:"2px solid "+(isLocked?C.goldT:(isResolved?C.teal+"50":C.border)),transition:"all .2s",cursor:"pointer"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-                    <div><h4 style={{fontWeight:700,fontSize:14,color:isLocked?C.goldT:(leader?C.tealL:C.tx)}}>{s.name}</h4><div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,marginTop:2}}><span>{s.type}</span><span style={{color:C.wrn}}>{"*"+(s.rating||4.5)}</span>{s.neighborhood&&<span>{s.neighborhood}</span>}</div></div>
+                    <div><h4 style={{fontWeight:700,fontSize:14,color:isLocked?C.goldT:(leader?C.tealL:C.tx)}}>{s.name}</h4><div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,marginTop:2,flexWrap:"wrap"}}><span>{s.type}</span><span style={{color:C.wrn}}>{"*"+(s.rating||4.5)}</span>{s.neighborhood&&<span>{s.neighborhood}</span>}<span style={{color:C.sky}}>Click to preview</span></div></div>
                     <div style={{textAlign:"right"}}><span style={{fontWeight:700,fontSize:16,color:C.goldT}}>{"$"+(s.ratePerNight||0)}</span><p style={{fontSize:10,color:C.tx3}}>/night x {s.totalNights||"?"}</p></div>
                   </div>
                   {s.amenities&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:4}}>{s.amenities.map(function(a){return <span key={a} style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:"rgba(255,255,255,.04)",color:C.tx2}}>{a}</span>;})}</div>}
@@ -6130,11 +6131,68 @@ export default function WanderPlan(){
                       </div>);
                     })}
                   </div>
-                  {organizerMode&&<div style={{marginTop:10,display:"flex",justifyContent:"flex-end"}}><button onClick={function(){lockStayChoice(destName,entry);}} style={{padding:"8px 12px",borderRadius:8,border:"none",background:isLocked?C.gold:C.goldT,color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>{isLocked?"Locked by Organizer":"Lock This Stay"}</button></div>}
+                  {organizerMode&&<div style={{marginTop:10,display:"flex",justifyContent:"flex-end"}}><button onClick={function(e){e.stopPropagation();lockStayChoice(destName,entry);}} style={{padding:"8px 12px",borderRadius:8,border:"none",background:isLocked?C.gold:C.goldT,color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>{isLocked?"Locked by Organizer":"Lock This Stay"}</button></div>}
                 </div>);
               })}
             </div>);
           })}
+          {stayPreview&&stayPreview.stay&&(<div onClick={function(){setStayPreview(null);}} style={{position:"fixed",inset:0,zIndex:60,background:"rgba(4,6,12,.78)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+            <div onClick={function(e){e.stopPropagation();}} style={{width:"min(720px,100%)",maxHeight:"85vh",overflowY:"auto",borderRadius:18,background:C.surface,border:"1px solid "+C.border,padding:20,boxShadow:"0 24px 80px rgba(0,0,0,.45)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:12}}>
+                <div>
+                  <p style={{fontSize:11,fontWeight:700,color:C.tealL,marginBottom:6}}>{stayPreview.destination||stayPreview.stay.destination||"Stay Preview"}</p>
+                  <h3 style={{fontSize:24,fontWeight:800,marginBottom:6}}>{stayPreview.stay.name||"Selected stay"}</h3>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",fontSize:12,color:C.tx3}}>
+                    <span>{stayPreview.stay.type||"Hotel"}</span>
+                    <span style={{color:C.wrn}}>{"*"+(stayPreview.stay.rating||4.5)}</span>
+                    {stayPreview.stay.neighborhood&&<span>{stayPreview.stay.neighborhood}</span>}
+                    {stayPreview.stay.bookingSource&&<span style={{color:C.sky}}>{stayPreview.stay.bookingSource}</span>}
+                  </div>
+                </div>
+                <button onClick={function(){setStayPreview(null);}} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:700,cursor:"pointer"}}>Close</button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1.1fr .9fr",gap:12,marginBottom:12}}>
+                <div style={{padding:"14px 16px",borderRadius:14,background:C.bg,border:"1px solid "+C.border}}>
+                  <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>Why it fits</p>
+                  <p style={{fontSize:13,color:C.tx2,lineHeight:1.6}}>{stayPreview.stay.whyThisOne||"Good fit for your destination, duration, and budget."}</p>
+                </div>
+                <div style={{padding:"14px 16px",borderRadius:14,background:C.bg,border:"1px solid "+C.border}}>
+                  <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>Cost snapshot</p>
+                  <p style={{fontSize:22,fontWeight:800,color:C.goldT,marginBottom:4}}>{"$"+Math.round(Number(stayPreview.stay.ratePerNight||0)||0)}<span style={{fontSize:12,color:C.tx3,fontWeight:600}}> / night</span></p>
+                  <p style={{fontSize:12,color:C.tx2,marginBottom:4}}>{"$"+Math.round((Number(stayPreview.stay.ratePerNight||0)||0)*(Number(stayPreview.stay.totalNights||0)||0))} total stay estimate</p>
+                  <p style={{fontSize:12,color:C.tx3}}>{stayPreview.stay.totalNights||"?"} nights</p>
+                </div>
+              </div>
+              {Array.isArray(stayPreview.stay.amenities)&&stayPreview.stay.amenities.length>0&&(<div style={{marginBottom:12}}>
+                <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>Features</p>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {stayPreview.stay.amenities.map(function(a){return <span key={a} style={{fontSize:12,padding:"6px 10px",borderRadius:999,background:C.teal+"12",color:C.tealL,border:"1px solid "+C.teal+"30"}}>{a}</span>;})}
+                </div>
+              </div>)}
+              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 1fr",gap:12,marginBottom:12}}>
+                <div style={{padding:"14px 16px",borderRadius:14,background:C.bg,border:"1px solid "+C.border}}>
+                  <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>Booking details</p>
+                  <div style={{display:"flex",flexDirection:"column",gap:6,fontSize:12,color:C.tx2}}>
+                    <span>{"Source: "+(stayPreview.stay.bookingSource||"Direct / OTA")}</span>
+                    <span>{"Cancellation: "+(stayPreview.stay.cancellation||"Policy not provided")}</span>
+                    <span>{"Destination: "+(stayPreview.destination||stayPreview.stay.destination||"Trip stop")}</span>
+                  </div>
+                </div>
+                <div style={{padding:"14px 16px",borderRadius:14,background:C.bg,border:"1px solid "+C.border}}>
+                  <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>Group status</p>
+                  <div style={{display:"flex",flexDirection:"column",gap:6,fontSize:12,color:C.tx2}}>
+                    <span>{"Votes: "+String((stayPreview.summary&&stayPreview.summary.up)||0)+" / "+String(voteMembers.length)}</span>
+                    <span>{stayPreview.isLocked?"Organizer locked this stay":(stayPreview.isResolved?"This stay currently wins the vote":"Still in voting")}</span>
+                    <span>{stayPreview.leader?"Currently leading in this destination":"Not leading right now"}</span>
+                  </div>
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <p style={{fontSize:12,color:C.tx3}}>Preview stays before voting so the crew can compare hotel features, pricing, and policies clearly.</p>
+                <button onClick={function(){setStayPreview(null);}} style={{padding:"10px 14px",borderRadius:10,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>Back to stays</button>
+              </div>
+            </div>
+          </div>)}
           <div style={{background:C.bg,borderRadius:12,border:"1px solid "+C.border,overflow:"hidden",marginTop:4}}>
             <div style={{padding:"8px 12px",borderBottom:"1px solid "+C.border,display:"flex",alignItems:"center",gap:6}}><div style={{width:18,height:18,borderRadius:999,background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#fff"}}>AI</div><span style={{fontSize:11,fontWeight:600,color:C.tealL}}>Modify stays</span></div>
             {stayChat.length>0&&(<div style={{maxHeight:160,overflowY:"auto",padding:"8px 12px"}}>{stayChat.map(function(msg,i){var isU=msg.from==="user";return(<div key={i} style={{display:"flex",justifyContent:isU?"flex-end":"flex-start",marginBottom:5}}><div style={{maxWidth:"85%",padding:"7px 11px",borderRadius:isU?"10px 10px 3px 10px":"10px 10px 10px 3px",background:isU?C.teal+"20":C.surface,border:"1px solid "+(isU?C.teal+"25":C.border),fontSize:13,lineHeight:1.5,color:isU?"#fff":C.tx2}}>{msg.text}</div></div>);})}{stayAskLoad&&<div style={{display:"flex",gap:4,padding:"4px 0"}}><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div>}</div>)}
