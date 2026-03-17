@@ -256,6 +256,9 @@ test.describe('07 - During-trip companion', () => {
     await expect(page.getByText('TODAY PROGRESS')).toBeVisible();
     await expect(page.getByText('QUICK ACTIONS')).toBeVisible();
     await expect(page.getByText('Open Itinerary')).toBeVisible();
+    await expect(page.getByText('Share via WhatsApp')).toBeVisible();
+    await expect(page.getByText('Copy Trip Summary')).toBeVisible();
+    await expect(page.getByText('Copy Invite Link')).toBeVisible();
     await expect(page.getByText('STAY SNAPSHOT')).toBeVisible();
     await expect(page.getByText('Shinjuku Grand')).toBeVisible();
     await expect(page.getByText('DINING TODAY')).toBeVisible();

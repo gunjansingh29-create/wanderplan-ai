@@ -8,6 +8,10 @@ import {
   buildFallbackItinerary,
   buildFlightRoutePlan,
   buildItinerarySavePayload,
+  buildTripShareLink,
+  buildTripShareSummary,
+  buildTripWhatsAppText,
+  buildWhatsAppShareUrl,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
   canonicalMealVoteKey,
@@ -335,6 +339,33 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         },
       ],
     });
+  });
+
+  test("trip share helpers build summary, link, and WhatsApp URL", () => {
+    const originalWindow = global.window;
+    Object.defineProperty(global, "window", {
+      value: {
+        location: { origin: "https://wanderplan.example" },
+      },
+      configurable: true,
+    });
+    try {
+      const trip = {
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "Spring 2026",
+        destNames: "Auckland + Queenstown",
+        dates: "Mar 22 - Apr 1",
+        days: 11,
+        members: [{ id: "m1" }],
+        status: "active",
+      };
+      expect(buildTripShareLink(trip, "accept")).toContain("join_trip_id=11111111-1111-4111-8111-111111111111");
+      expect(buildTripShareSummary(trip)).toContain("WanderPlan trip: Spring 2026");
+      expect(buildTripWhatsAppText(trip)).toContain("Join trip:");
+      expect(buildWhatsAppShareUrl("hello world")).toBe("https://wa.me/?text=hello%20world");
+    } finally {
+      Object.defineProperty(global, "window", { value: originalWindow, configurable: true });
+    }
   });
 
   test("resolveBudgetTier prefers trip member profile budget tier", () => {
@@ -1339,6 +1370,9 @@ describe("WanderPlanLLMFlow companion entry", () => {
     expect(screen.queryByText("TODAY PROGRESS")).not.toBeNull();
     expect(screen.queryByText("QUICK ACTIONS")).not.toBeNull();
     expect(screen.queryByText("Open Itinerary")).not.toBeNull();
+    expect(screen.queryByText("Share via WhatsApp")).not.toBeNull();
+    expect(screen.queryByText("Copy Trip Summary")).not.toBeNull();
+    expect(screen.queryByText("Copy Invite Link")).not.toBeNull();
     expect(screen.queryByText("STAY SNAPSHOT")).not.toBeNull();
     expect(screen.queryByText("Shinjuku Grand")).not.toBeNull();
     expect(screen.queryByText("DINING TODAY")).not.toBeNull();

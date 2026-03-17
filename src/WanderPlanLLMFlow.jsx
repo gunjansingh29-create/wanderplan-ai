@@ -229,6 +229,54 @@ function companionCheckinMeta(status){
   return {label:"Pending",color:C.tx3,bg:C.bg};
 }
 
+function appBaseUrl(){
+  if(typeof window!=="undefined"&&window.location){
+    return String(window.location.origin||"").trim()||"";
+  }
+  return "";
+}
+
+function buildTripShareLink(trip, action){
+  var tripId=String(trip&&trip.id||"").trim();
+  if(!tripId)return "";
+  var base=appBaseUrl();
+  if(!base)return "";
+  var params=new URLSearchParams();
+  params.set("join_trip_id",tripId);
+  params.set("trip_invite_action",(String(action||"accept").trim().toLowerCase()==="reject")?"reject":"accept");
+  return base+"/?"+params.toString();
+}
+
+function buildTripShareSummary(trip){
+  var tr=(trip&&typeof trip==="object")?trip:{};
+  var name=String(tr.name||"Trip").trim()||"Trip";
+  var dests=Array.isArray(tr.dests)&&tr.dests.length?tr.dests.join(" + "):String(tr.destNames||"").trim();
+  var dates=String(tr.dates||"").trim()||"Dates TBD";
+  var duration=tr.days?(String(tr.days)+" days"):"Duration TBD";
+  var travelers=String((Array.isArray(tr.members)?tr.members.length+1:1) || 1)+" travelers";
+  var status=String(tr.status||"planning").trim()||"planning";
+  return [
+    "WanderPlan trip: "+name,
+    dests?("Destinations: "+dests):"",
+    "Dates: "+dates,
+    "Duration: "+duration,
+    "Travelers: "+travelers,
+    "Status: "+status
+  ].filter(Boolean).join("\n");
+}
+
+function buildTripWhatsAppText(trip){
+  var summary=buildTripShareSummary(trip);
+  var link=buildTripShareLink(trip,"accept");
+  return summary+(link?("\n\nJoin trip: "+link):"");
+}
+
+function buildWhatsAppShareUrl(text){
+  var msg=String(text||"").trim();
+  if(!msg)return "";
+  return "https://wa.me/?text="+encodeURIComponent(msg);
+}
+
 function companionReadinessCopy(reason){
   var key=String(reason||"").trim().toLowerCase();
   if(key==="locked_dates_and_itinerary_required"){
@@ -1551,6 +1599,7 @@ export default function WanderPlan(){
   var[crewInviteLink,setCIL]=useState("");
   var[crewInviteCopyMsg,setCICM]=useState("");
   var[tripInviteMsg,setTIM]=useState("");
+  var[tripShareMsg,setTSM]=useState("");
   var[tripInviteLinks,setTIL]=useState({});
   var[showVoteDebug,setSVD]=useState(readVoteDebugFlagFromUrl());
   var[pendingInviteToken,setPIT]=useState("");
@@ -2670,6 +2719,58 @@ export default function WanderPlan(){
     }
     setTimeout(function(){setCICM("");},1800);
   }
+  async function copyTextValue(text){
+    var value=String(text||"").trim();
+    if(!value)return false;
+    try{
+      if(navigator&&navigator.clipboard&&typeof navigator.clipboard.writeText==="function"){
+        await navigator.clipboard.writeText(value);
+      }else{
+        var ta=document.createElement("textarea");
+        ta.value=value;
+        ta.setAttribute("readonly","readonly");
+        ta.style.position="fixed";
+        ta.style.opacity="0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      return true;
+    }catch(e){
+      return false;
+    }
+  }
+  function flashTripShareMessage(text){
+    setTSM(String(text||"").trim());
+    setTimeout(function(){setTSM("");},2200);
+  }
+  async function copyTripShareSummary(trip){
+    var ok=await copyTextValue(buildTripShareSummary(trip));
+    flashTripShareMessage(ok?"Trip summary copied.":"Copy failed. Please copy manually.");
+  }
+  async function copyTripInviteLink(trip){
+    var link=buildTripShareLink(trip,"accept");
+    if(!link){
+      flashTripShareMessage("Trip link unavailable.");
+      return;
+    }
+    var ok=await copyTextValue(link);
+    flashTripShareMessage(ok?"Trip link copied.":"Copy failed. Please copy manually.");
+  }
+  function shareTripViaWhatsApp(trip){
+    var url=buildWhatsAppShareUrl(buildTripWhatsAppText(trip));
+    if(!url){
+      flashTripShareMessage("WhatsApp share unavailable.");
+      return;
+    }
+    try{
+      window.open(url,"_blank","noopener,noreferrer");
+      flashTripShareMessage("Opened WhatsApp share.");
+    }catch(e){
+      flashTripShareMessage("Could not open WhatsApp share.");
+    }
+  }
   async function acceptPendingInvite(token,inviteTokenOverride,inviteActionOverride){
     var inviteToken=(String(inviteTokenOverride||"").trim()||(pendingInviteToken||"").trim()||readInviteTokenFromUrl());
     if(!inviteToken||!token)return;
@@ -3287,6 +3388,15 @@ export default function WanderPlan(){
           </div>)}
           <div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>CREW</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:8,background:C.bg,borderRadius:10,padding:"8px 12px"}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={28}/><div><p style={{fontSize:13,fontWeight:600}}>{user.name||"You"}</p><p style={{fontSize:11,color:C.tx3}}>Organizer</p></div></div>{(tr.members||[]).map(function(m){return(<div key={m.id} style={{display:"flex",alignItems:"center",gap:8,background:C.bg,borderRadius:10,padding:"8px 12px"}}><Avi ini={m.ini} color={m.color} size={28}/><div><p style={{fontSize:13,fontWeight:600}}>{m.ini}</p><p style={{fontSize:11,color:C.tx3}}>Member</p></div></div>);})}</div></div>
           {(tr.status==="planning"||tr.status==="active")&&(<div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>WIZARD PROGRESS</p><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s2,i){var done=i<(tr.step||0);var act=i===(tr.step||0);return(<div key={i} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",background:act?C.gold:done?C.teal+"25":C.bg,color:act?C.bg:done?C.teal:C.tx3,border:act?"none":"1px solid "+C.border}}>{done?"Y":(i+1)}</div>);})}</div><p style={{fontSize:12,color:C.tx3,marginTop:6}}>Step {(tr.step||0)+1} of {WIZ.length}: {WIZ[tr.step||0]||""}</p></div>)}
+          <div style={{marginBottom:16}}>
+            <p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>SHARE TRIP</p>
+            <div style={{display:"grid",gridTemplateColumns:isPhone?"1fr":"repeat(3,1fr)",gap:8}}>
+              <button onClick={function(){shareTripViaWhatsApp(tr);}} style={{padding:"11px 12px",borderRadius:10,border:"1px solid "+C.grn+"35",background:C.grnBg,color:C.grn,fontSize:12,fontWeight:700,cursor:"pointer"}}>Share via WhatsApp</button>
+              <button onClick={function(){copyTripShareSummary(tr);}} style={{padding:"11px 12px",borderRadius:10,border:"1px solid "+C.sky+"35",background:C.sky+"12",color:C.sky,fontSize:12,fontWeight:700,cursor:"pointer"}}>Copy Trip Summary</button>
+              <button onClick={function(){copyTripInviteLink(tr);}} style={{padding:"11px 12px",borderRadius:10,border:"1px solid "+C.goldT+"35",background:C.goldDim,color:C.goldT,fontSize:12,fontWeight:700,cursor:"pointer"}}>Copy Invite Link</button>
+            </div>
+            {tripShareMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:8}}>{tripShareMsg}</p>}
+          </div>
           <div style={{display:"flex",gap:10}}>
             {tr.status==="planning"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(tr.step||0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Continue Planning</button>}
             {tr.status==="active"&&isUuidLike(tr.id)&&<button onClick={function(){setCTID(tr.id||"");setVT(tr);setCompanionErr("");setCompanionData(null);go("companion");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.grn+","+C.teal+")",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><span style={{width:8,height:8,borderRadius:999,background:"#fff",animation:"pulse 1.5s infinite"}}/>Open Live Companion</button>}
@@ -3412,6 +3522,15 @@ export default function WanderPlan(){
               {action.label}
             </button>);
           })}
+        </div>
+        <div style={{marginTop:12,paddingTop:12,borderTop:"1px solid "+C.border}}>
+          <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>SHARE TRIP</p>
+          <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:8}}>
+            <button onClick={function(){shareTripViaWhatsApp(tr);}} style={{padding:"11px 10px",borderRadius:12,border:"1px solid "+C.grn+"35",background:C.grnBg,color:C.grn,fontSize:12,fontWeight:700,cursor:"pointer",minHeight:44}}>Share via WhatsApp</button>
+            <button onClick={function(){copyTripShareSummary(tr);}} style={{padding:"11px 10px",borderRadius:12,border:"1px solid "+C.sky+"35",background:C.sky+"12",color:C.sky,fontSize:12,fontWeight:700,cursor:"pointer",minHeight:44}}>Copy Trip Summary</button>
+            <button onClick={function(){copyTripInviteLink(tr);}} style={{padding:"11px 10px",borderRadius:12,border:"1px solid "+C.goldT+"35",background:C.goldDim,color:C.goldT,fontSize:12,fontWeight:700,cursor:"pointer",minHeight:44}}>Copy Invite Link</button>
+          </div>
+          {tripShareMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:8}}>{tripShareMsg}</p>}
         </div>
       </div></Fade>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
@@ -5896,5 +6015,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 
