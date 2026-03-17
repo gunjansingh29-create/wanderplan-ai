@@ -297,6 +297,25 @@ class ItineraryApproveRequest(BaseModel):
     approved: bool
 
 
+class ItineraryActivitySaveRequest(BaseModel):
+    time: Optional[str] = None
+    type: Optional[str] = "activity"
+    title: str
+    cost: Optional[float] = 0
+
+
+class ItineraryDaySaveRequest(BaseModel):
+    day: int
+    date: Optional[str] = None
+    destination: Optional[str] = None
+    theme: Optional[str] = None
+    items: list[ItineraryActivitySaveRequest] = []
+
+
+class ItinerarySaveRequest(BaseModel):
+    days: list[ItineraryDaySaveRequest] = []
+
+
 class CalendarSyncRequest(BaseModel):
     provider: str
     calendar_id: Optional[str] = None
@@ -5712,6 +5731,53 @@ async def approve_itinerary(trip_id: str, body: ItineraryApproveRequest, user_id
     }
 
 
+@app.post("/trips/{trip_id}/itinerary")
+async def save_itinerary(trip_id: str, body: ItinerarySaveRequest, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_trip_member(conn, trip_id, user_id)
+        await conn.execute("DELETE FROM itinerary_days WHERE trip_id = $1", trip_id)
+        saved_days = 0
+        saved_items = 0
+        for day in sorted(body.days or [], key=lambda row: int(row.day or 0)):
+            day_number = max(1, int(day.day or 1))
+            day_date = _safe_iso_date(day.date)
+            day_row = await conn.fetchrow(
+                """
+                INSERT INTO itinerary_days (trip_id, day_number, date, title, approved)
+                VALUES ($1, $2, $3, $4, false)
+                RETURNING id
+                """,
+                trip_id,
+                day_number,
+                day_date,
+                str(day.theme or f"Day {day_number}").strip(),
+            )
+            saved_days += 1
+            for item in day.items or []:
+                title = str(item.title or "").strip()
+                if not title:
+                    continue
+                category = str(item.type or "activity").strip().lower() or "activity"
+                await conn.execute(
+                    """
+                    INSERT INTO itinerary_activities
+                      (day_id, time_slot, title, description, category, location_name, cost_estimate)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    day_row["id"],
+                    _itinerary_time_slot(item.time, category),
+                    title,
+                    "",
+                    category,
+                    str(day.destination or "").strip(),
+                    float(item.cost or 0),
+                )
+                saved_items += 1
+    return {"saved": True, "day_count": saved_days, "item_count": saved_items}
+
+
 @app.post("/trips/{trip_id}/itinerary/calendar-sync")
 async def calendar_sync(trip_id: str, body: CalendarSyncRequest, user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
@@ -5853,6 +5919,27 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
             "SELECT current_step, state FROM trip_planning_states WHERE trip_id = $1 ORDER BY updated_at DESC LIMIT 1",
             trip_id,
         )
+        try:
+            destination_rows = await conn.fetch(
+                """
+                SELECT destination
+                FROM bucket_list_items
+                WHERE trip_id = $1
+                GROUP BY destination
+                ORDER BY COALESCE(SUM(vote_score), 0) DESC, destination ASC
+                """,
+                trip_id,
+            )
+        except Exception:
+            destination_rows = []
+        if not destination_rows:
+            try:
+                destination_rows = await conn.fetch(
+                    "SELECT destination FROM trip_destinations WHERE trip_id = $1 ORDER BY destination ASC",
+                    trip_id,
+                )
+            except Exception:
+                destination_rows = []
         day_rows = await conn.fetch(
             """
             SELECT id, day_number, date, title, approved
@@ -5898,12 +5985,19 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
             )
 
     accepted_members = []
+    member_lookup: dict[str, str] = {}
+    selected_destinations = [
+        str(row["destination"] or "").strip()
+        for row in destination_rows
+        if str(row["destination"] or "").strip()
+    ]
     for idx, m in enumerate(members):
         role = str(m["role"] or "member").lower()
         status = str(m["status"] or "pending").lower()
         if role != "owner" and status != "accepted":
             continue
         display_name = str(m["display_name"] or m["name"] or m["email"] or f"Member {idx + 1}")
+        member_lookup[str(m["user_id"])] = display_name
         accepted_members.append(
             {
                 "user_id": str(m["user_id"]),
@@ -5916,6 +6010,14 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
 
     locked_start = _safe_iso_date((locked_window or {}).get("start")) if isinstance(locked_window, dict) else None
     locked_end = _safe_iso_date((locked_window or {}).get("end")) if isinstance(locked_window, dict) else None
+    if not day_items and locked_start and locked_end:
+        day_items = _companion_fallback_days(
+            planning_state if isinstance(planning_state, dict) else {},
+            selected_destinations,
+            locked_start,
+            locked_end,
+            int(trip["duration_days"] or 0),
+        )
 
     today = date.today()
     current_index = 0
@@ -5935,10 +6037,43 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
     approved_days = sum(1 for day in day_items if day.get("approved"))
     current_item, next_item = _companion_current_and_next(current_day)
     stay_snapshot = _companion_selected_stays(planning_state if isinstance(planning_state, dict) else {})
+    today_checkins, day_progress = _companion_today_checkins(
+        planning_state if isinstance(planning_state, dict) else {},
+        current_day,
+        member_lookup,
+    )
     dining_snapshot = _companion_today_meals(
         planning_state if isinstance(planning_state, dict) else {},
         int(current_day["day_number"]) if isinstance(current_day, dict) and current_day.get("day_number") else None,
     )
+    if isinstance(current_day, dict):
+        item_status_map = {
+            str(row.get("activity_id") or ""): row
+            for row in today_checkins
+            if isinstance(row, dict) and str(row.get("activity_id") or "").strip()
+        }
+        current_day = dict(current_day)
+        current_day["items"] = [
+            dict(item, live_status=item_status_map.get(str(item.get("activity_id") or ""), {}).get("status", "pending"),
+                 live_updated_by=item_status_map.get(str(item.get("activity_id") or ""), {}).get("updated_by"),
+                 live_updated_by_name=item_status_map.get(str(item.get("activity_id") or ""), {}).get("updated_by_name"),
+                 live_updated_at=item_status_map.get(str(item.get("activity_id") or ""), {}).get("updated_at"))
+            for item in (current_day.get("items") or [])
+            if isinstance(item, dict)
+        ]
+    has_locked_window = bool(locked_start and locked_end)
+    has_itinerary = bool(day_items)
+    is_ready = has_locked_window and has_itinerary and isinstance(current_day, dict)
+    readiness_reason = None
+    if not is_ready:
+        if not has_locked_window and not has_itinerary:
+            readiness_reason = "locked_dates_and_itinerary_required"
+        elif not has_locked_window:
+            readiness_reason = "locked_dates_required"
+        elif not has_itinerary:
+            readiness_reason = "itinerary_required"
+        else:
+            readiness_reason = "today_plan_unavailable"
 
     return {
         "companion": {
@@ -5953,6 +6088,8 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
                 "start": locked_start.isoformat() if locked_start else None,
                 "end": locked_end.isoformat() if locked_end else None,
             },
+            "is_ready": is_ready,
+            "readiness_reason": readiness_reason,
             "current_step": int((planning_row["current_step"] if planning_row else 0) or 0),
             "members": accepted_members,
             "days": day_items,
@@ -5960,6 +6097,8 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
             "upcoming": upcoming_days,
             "current_item": current_item,
             "next_item": next_item,
+            "today_checkins": today_checkins,
+            "day_progress": day_progress,
             "stays": stay_snapshot,
             "today_meals": dining_snapshot,
             "stats": {
@@ -6008,6 +6147,29 @@ def _slot_times(slot: Any) -> tuple[Optional[time], Optional[time]]:
     return (_safe_time_hhmm(start_raw), _safe_time_hhmm(end_raw))
 
 
+def _itinerary_time_slot(start_text: Any, category: Any) -> str:
+    raw = str(start_text or "").strip()
+    match = re.match(r"^(\d{1,2}:\d{2})", raw)
+    start_part = match.group(1) if match else "09:00"
+    try:
+        start_time = time.fromisoformat(start_part)
+    except ValueError:
+        start_time = time(9, 0)
+    kind = str(category or "activity").strip().lower()
+    duration_min = {
+        "flight": 180,
+        "travel": 120,
+        "checkin": 60,
+        "checkout": 45,
+        "meal": 60,
+        "rest": 90,
+        "activity": 120,
+    }.get(kind, 120)
+    start_dt = datetime.combine(date.today(), start_time)
+    end_dt = start_dt + timedelta(minutes=duration_min)
+    return f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
+
+
 def _canonical_stay_choice_key(stay: Any, idx: int) -> str:
     row = stay if isinstance(stay, dict) else {}
     raw = f"{row.get('name', '')} {row.get('destination', '')} {row.get('type', '')}".strip().lower()
@@ -6054,6 +6216,67 @@ def _companion_selected_stays(planning_state: dict[str, Any]) -> list[dict[str, 
             }
         )
     return picked
+
+
+def _companion_today_checkins(
+    planning_state: dict[str, Any],
+    current_day: Optional[dict[str, Any]],
+    member_lookup: dict[str, str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    day_payload = current_day if isinstance(current_day, dict) else {}
+    items = list(day_payload.get("items") or [])
+    checkins = planning_state.get("companion_checkins")
+    checkin_map = checkins if isinstance(checkins, dict) else {}
+    statuses: list[dict[str, Any]] = []
+    done_count = 0
+    skipped_count = 0
+    in_progress_count = 0
+    pending_count = 0
+    last_updated = None
+    for item in items:
+        row = item if isinstance(item, dict) else {}
+        activity_id = str(row.get("activity_id") or "").strip()
+        saved = checkin_map.get(activity_id)
+        saved_row = saved if isinstance(saved, dict) else {}
+        status = str(saved_row.get("status") or "pending").strip().lower()
+        if status not in {"pending", "in_progress", "done", "skipped"}:
+            status = "pending"
+        updated_by = str(saved_row.get("updated_by") or "").strip()
+        updated_at = str(saved_row.get("updated_at") or "").strip()
+        updated_name = member_lookup.get(updated_by) or str(saved_row.get("updated_by_name") or "").strip()
+        if updated_at:
+            if not last_updated or updated_at > last_updated:
+                last_updated = updated_at
+        if status == "done":
+            done_count += 1
+        elif status == "skipped":
+            skipped_count += 1
+        elif status == "in_progress":
+            in_progress_count += 1
+        else:
+            pending_count += 1
+        statuses.append(
+            {
+                "activity_id": activity_id,
+                "status": status,
+                "updated_by": updated_by or None,
+                "updated_by_name": updated_name or None,
+                "updated_at": updated_at or None,
+            }
+        )
+    total_items = len(statuses)
+    completed_items = done_count + skipped_count
+    summary = {
+        "total_items": total_items,
+        "done": done_count,
+        "skipped": skipped_count,
+        "in_progress": in_progress_count,
+        "pending": pending_count,
+        "completed_items": completed_items,
+        "completion_pct": int(round((completed_items / total_items) * 100)) if total_items > 0 else 0,
+        "last_updated_at": last_updated,
+    }
+    return statuses, summary
 
 
 def _resolve_meal_option(meal: dict[str, Any]) -> dict[str, Any]:
@@ -6107,6 +6330,153 @@ def _companion_today_meals(planning_state: dict[str, Any], current_day_number: O
             }
         )
     return out
+
+
+def _companion_duration_by_destination(
+    planning_state: dict[str, Any],
+    destinations: list[str],
+    total_days: int,
+) -> dict[str, int]:
+    normalized: list[str] = [str(dest or "").strip() for dest in destinations if str(dest or "").strip()]
+    if not normalized:
+        return {}
+    raw = planning_state.get("duration_per_destination")
+    parsed = raw if isinstance(raw, dict) else {}
+    result: dict[str, int] = {}
+    assigned = 0
+    for idx, dest in enumerate(normalized):
+        remaining_destinations = len(normalized) - idx
+        value = 0
+        try:
+            value = int(parsed.get(dest) or 0)
+        except Exception:
+            value = 0
+        if value <= 0:
+            remaining_days = max(remaining_destinations, total_days - assigned)
+            value = max(1, remaining_days // max(1, remaining_destinations))
+        result[dest] = max(1, value)
+        assigned += result[dest]
+    if assigned != total_days:
+        last_dest = normalized[-1]
+        result[last_dest] = max(1, result.get(last_dest, 1) + (total_days - assigned))
+    return result
+
+
+def _companion_fallback_days(
+    planning_state: dict[str, Any],
+    destinations: list[str],
+    locked_start: date,
+    locked_end: date,
+    trip_duration_days: int,
+) -> list[dict[str, Any]]:
+    if locked_end < locked_start:
+        return []
+    total_days = (locked_end - locked_start).days + 1
+    if trip_duration_days > 0:
+        total_days = max(total_days, int(trip_duration_days))
+    ordered_dates = [locked_start + timedelta(days=i) for i in range(max(1, total_days))]
+    normalized_destinations = [str(dest or "").strip() for dest in destinations if str(dest or "").strip()]
+    if not normalized_destinations:
+        normalized_destinations = ["Destination"]
+    durations = _companion_duration_by_destination(planning_state, normalized_destinations, len(ordered_dates))
+    destination_by_day: list[str] = []
+    for dest in normalized_destinations:
+        destination_by_day.extend([dest] * max(1, int(durations.get(dest, 1))))
+    if len(destination_by_day) < len(ordered_dates):
+        destination_by_day.extend([normalized_destinations[-1]] * (len(ordered_dates) - len(destination_by_day)))
+    destination_by_day = destination_by_day[: len(ordered_dates)]
+
+    stay_snapshot = _companion_selected_stays(planning_state)
+    stay_by_destination = {
+        str(row.get("destination") or "").strip(): row
+        for row in stay_snapshot
+        if isinstance(row, dict) and str(row.get("destination") or "").strip()
+    }
+
+    meal_plan = planning_state.get("meal_plan")
+    meal_by_day: dict[int, list[dict[str, Any]]] = {}
+    meal_by_date: dict[str, list[dict[str, Any]]] = {}
+    if isinstance(meal_plan, list):
+        for row in meal_plan:
+            if not isinstance(row, dict):
+                continue
+            try:
+                day_number = int(row.get("day") or 0)
+            except Exception:
+                day_number = 0
+            row_date = str(row.get("date") or "").strip()
+            resolved_meals = []
+            for meal in row.get("meals") or []:
+                if not isinstance(meal, dict):
+                    continue
+                resolved_meals.append(_resolve_meal_option(meal))
+            if day_number > 0:
+                meal_by_day[day_number] = resolved_meals
+            if row_date:
+                meal_by_date[row_date] = resolved_meals
+
+    day_rows: list[dict[str, Any]] = []
+    for idx, day_date in enumerate(ordered_dates):
+        day_number = idx + 1
+        destination = destination_by_day[idx] if idx < len(destination_by_day) else normalized_destinations[-1]
+        items: list[dict[str, Any]] = []
+        if idx == 0:
+            items.append(
+                {
+                    "activity_id": f"fallback-day-{day_number}-arrival",
+                    "time_slot": "09:00-12:00",
+                    "title": f"Arrive in {destination}",
+                    "category": "flight",
+                    "location": destination,
+                }
+            )
+        stay = stay_by_destination.get(destination)
+        if stay and idx == 0:
+            items.append(
+                {
+                    "activity_id": f"fallback-day-{day_number}-stay",
+                    "time_slot": "15:00-16:00",
+                    "title": f"Check in at {str(stay.get('name') or 'your stay').strip()}",
+                    "category": "checkin",
+                    "location": destination,
+                }
+            )
+        meals = meal_by_day.get(day_number) or meal_by_date.get(day_date.isoformat()) or []
+        for meal_idx, meal in enumerate(meals):
+            meal_type = str(meal.get("type") or "Meal").strip() or "Meal"
+            meal_time = str(meal.get("time") or _MEAL_DEFAULT_TIME.get(meal_type, "12:00")).strip() or "12:00"
+            meal_name = str(meal.get("name") or f"{meal_type} in {destination}").strip()
+            items.append(
+                {
+                    "activity_id": f"fallback-day-{day_number}-meal-{meal_idx+1}",
+                    "time_slot": f"{meal_time}-{meal_time}",
+                    "title": meal_name,
+                    "category": "meal",
+                    "location": str(meal.get("destination") or destination).strip() or destination,
+                }
+            )
+        if not any(str(item.get("category") or "").lower() not in {"meal", "checkin"} for item in items):
+            items.insert(
+                1 if items else 0,
+                {
+                    "activity_id": f"fallback-day-{day_number}-explore",
+                    "time_slot": "10:00-12:00",
+                    "title": f"Explore {destination}",
+                    "category": "activity",
+                    "location": destination,
+                },
+            )
+        day_title = "Arrival Day" if idx == 0 else (f"{destination} Day")
+        day_rows.append(
+            {
+                "day_number": day_number,
+                "date": day_date.isoformat(),
+                "title": day_title,
+                "approved": True,
+                "items": items,
+            }
+        )
+    return day_rows
 
 
 def _companion_current_and_next(day_payload: Optional[dict[str, Any]]) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:

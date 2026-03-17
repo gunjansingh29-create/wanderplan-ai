@@ -229,6 +229,32 @@ function companionCheckinMeta(status){
   return {label:"Pending",color:C.tx3,bg:C.bg};
 }
 
+function companionReadinessCopy(reason){
+  var key=String(reason||"").trim().toLowerCase();
+  if(key==="locked_dates_and_itinerary_required"){
+    return {
+      title:"Live Companion isn't ready yet",
+      body:"This trip needs locked travel dates and a saved itinerary before daily guidance and check-ins can go live."
+    };
+  }
+  if(key==="locked_dates_required"){
+    return {
+      title:"Lock trip dates to activate Live Companion",
+      body:"This trip is missing its final locked travel window, so today's live plan and check-ins are not available yet."
+    };
+  }
+  if(key==="itinerary_required"){
+    return {
+      title:"Confirm the itinerary to activate Live Companion",
+      body:"This trip does not have persisted itinerary days yet, so there is nothing to check in against."
+    };
+  }
+  return {
+    title:"Live Companion is still getting ready",
+    body:"Trip context loaded, but today's live plan is not available yet. Open the itinerary to finish setup."
+  };
+}
+
 async function apiJson(path, options, token){
   var opts=Object.assign({},options||{});
   var hdrs=Object.assign({},opts.headers||{});
@@ -3309,6 +3335,8 @@ export default function WanderPlan(){
     var members=Array.isArray(comp.members)&&comp.members.length>0?comp.members:(Array.isArray(tr.members)?tr.members:[]);
     var lockedWindow=comp.locked_window||{};
     var tripTitle=(comp.trip&&comp.trip.name)||tr.name||"Trip";
+    var companionReady=(comp.is_ready!==false)&&!!(today||currentItem||nextItem||upcoming.length);
+    var readinessCopy=companionReadinessCopy(comp.readiness_reason);
     var companionActions=[
       {label:"Open Flights",step:10,color:C.sky},
       {label:"Open Stays",step:11,color:C.goldT},
@@ -3399,6 +3427,8 @@ export default function WanderPlan(){
             {l:"Resolved trip id",v:String((tr&&tr.id)||currentTripId||"(missing)")},
             {l:"Trip status",v:String((comp.trip&&comp.trip.status)||tr.status||"(none)")},
             {l:"Trip window",v:formatCompanionWindow(lockedWindow)},
+            {l:"Is ready",v:String(comp.is_ready!==false)},
+            {l:"Readiness reason",v:String(comp.readiness_reason||"(none)")},
             {l:"Has today",v:String(!!today)},
             {l:"Today item count",v:String(Array.isArray(today&&today.items)?today.items.length:0)},
             {l:"Progress summary",v:JSON.stringify(dayProgress||{})}
@@ -3430,6 +3460,15 @@ export default function WanderPlan(){
       </div>)}
       {companionErr&&<Fade delay={120}><div style={{marginBottom:14,padding:"12px 14px",borderRadius:12,background:C.redBg,border:"1px solid "+C.red+"20"}}><p style={{fontSize:13,color:C.red}}>{companionErr}</p></div></Fade>}
       {companionLoad&&<Fade delay={120}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}><p style={{fontSize:14,color:C.tx2}}>Loading live trip context...</p></div></Fade>}
+      {!companionLoad&&!companionReady&&(<Fade delay={125}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
+        <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:10}}>LIVE COMPANION SETUP</p>
+        <h2 style={{fontSize:22,fontWeight:700,marginBottom:8}}>{readinessCopy.title}</h2>
+        <p style={{fontSize:14,color:C.tx2,marginBottom:14}}>{readinessCopy.body}</p>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <button onClick={function(){openCompanionWizardStep(13);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.tealL+"35",background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Itinerary</button>
+          <button onClick={function(){openCompanionWizardStep(6);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.goldT+"35",background:C.goldDim,color:C.goldT,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Availability</button>
+        </div>
+      </div></Fade>)}
       {!companionLoad&&(currentItem||nextItem)&&(<Fade delay={130}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
         <p style={{fontSize:12,fontWeight:700,color:C.grn,marginBottom:10}}>NOW / NEXT</p>
         <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(2,1fr)",gap:10}}>
