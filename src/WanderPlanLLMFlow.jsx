@@ -215,6 +215,20 @@ function formatCompanionWindow(win){
   return start||end||"Dates TBD";
 }
 
+function normalizeCompanionCheckinStatus(raw){
+  var v=String(raw||"").trim().toLowerCase();
+  if(v==="done"||v==="skipped"||v==="in_progress")return v;
+  return "pending";
+}
+
+function companionCheckinMeta(status){
+  var v=normalizeCompanionCheckinStatus(status);
+  if(v==="done")return {label:"Done",color:C.grn,bg:C.grnBg};
+  if(v==="skipped")return {label:"Skipped",color:C.red,bg:C.redBg};
+  if(v==="in_progress")return {label:"In Progress",color:C.goldT,bg:C.goldDim};
+  return {label:"Pending",color:C.tx3,bg:C.bg};
+}
+
 async function apiJson(path, options, token){
   var opts=Object.assign({},options||{});
   var hdrs=Object.assign({},opts.headers||{});
@@ -1468,6 +1482,28 @@ function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approve
 }
 
 
+function buildItinerarySavePayload(rows){
+  return {
+    days:(Array.isArray(rows)?rows:[]).map(function(day,idx){
+      return {
+        day:Math.max(1,Number(day&&day.day||idx+1)||idx+1),
+        date:String(day&&day.date||"").trim(),
+        destination:String(day&&day.destination||"").trim(),
+        theme:String(day&&day.theme||"").trim(),
+        items:(Array.isArray(day&&day.items)?day.items:[]).map(function(item){
+          return {
+            time:String(item&&item.time||"").trim(),
+            type:String(item&&item.type||"activity").trim(),
+            title:String(item&&item.title||"").trim(),
+            cost:Number(item&&item.cost||0)||0
+          };
+        }).filter(function(item){return !!item.title;})
+      };
+    }).filter(function(day){return day.items.length>0;})
+  };
+}
+
+
 export default function WanderPlan(){
   var[sc,setSc]=useState("landing");
   var[fade,setFade]=useState(false);
@@ -1571,9 +1607,11 @@ export default function WanderPlan(){
   var[itin,setItin]=useState([]);
   var[itinLoad,setIL]=useState(false);
   var[itinDone,setID]=useState(false);
+  var[itinErr,setItinErr]=useState("");
   var[companionData,setCompanionData]=useState(null);
   var[companionLoad,setCompanionLoad]=useState(false);
   var[companionErr,setCompanionErr]=useState("");
+  var[companionActionLoad,setCompanionActionLoad]=useState(false);
   var flightPlannerDests=(function(){
     var tripCtx=(newTrip&&typeof newTrip==="object")?newTrip:{};
     var tripDestInputs=(Array.isArray(tripCtx.dests)&&tripCtx.dests.length)
@@ -2251,6 +2289,26 @@ export default function WanderPlan(){
       return r;
     }).catch(function(){return null;});
   }
+  function refreshCompanionNow(tid,silent){
+    var tripId=String(tid||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
+    if(!(loaded&&authToken&&tripId&&isUuidLike(tripId)))return Promise.resolve(null);
+    if(!silent){
+      setCompanionLoad(true);
+      setCompanionErr("");
+    }
+    return apiJson("/trips/"+tripId+"/companion",{method:"GET"},authToken).then(function(res){
+      setCompanionData((res&&res.companion)||null);
+      if(!silent)setCompanionLoad(false);
+      refreshCurrentTripSharedState(authToken,tripId).catch(function(){});
+      return (res&&res.companion)||null;
+    }).catch(function(e){
+      if(!silent){
+        setCompanionLoad(false);
+        setCompanionErr(String(e&&e.message||"Could not load live companion"));
+      }
+      throw e;
+    });
+  }
   function profilePayloadFor(userState){
     var u=Object.assign(emptyUserState(),userState||{});
     return {
@@ -2362,19 +2420,12 @@ export default function WanderPlan(){
     var tid=String((viewTrip&&viewTrip.id)||currentTripId||"").trim();
     if(!loaded||!authToken||sc!=="companion"||!tid||!isUuidLike(tid))return;
     var alive=true;
-    setCompanionLoad(true);
-    setCompanionErr("");
-    apiJson("/trips/"+tid+"/companion",{method:"GET"},authToken).then(function(res){
+    refreshCompanionNow(tid,false).catch(function(){});
+    var t=setInterval(function(){
       if(!alive)return;
-      setCompanionData((res&&res.companion)||null);
-      setCompanionLoad(false);
-      refreshCurrentTripSharedState(authToken,tid).catch(function(){});
-    }).catch(function(e){
-      if(!alive)return;
-      setCompanionLoad(false);
-      setCompanionErr(String(e&&e.message||"Could not load live companion"));
-    });
-    return function(){alive=false;};
+      refreshCompanionNow(tid,true).catch(function(){});
+    },4000);
+    return function(){alive=false;clearInterval(t);};
   },[loaded,authToken,sc,viewTrip&&viewTrip.id,currentTripId]);
   useEffect(function(){
     var activeTripId=resolveWizardTripId(currentTripId,newTrip);
@@ -3254,6 +3305,7 @@ export default function WanderPlan(){
     var nextItem=comp.next_item||null;
     var staySnapshot=Array.isArray(comp.stays)?comp.stays:[];
     var diningSnapshot=Array.isArray(comp.today_meals)?comp.today_meals:[];
+    var dayProgress=(comp.day_progress&&typeof comp.day_progress==="object")?comp.day_progress:{};
     var members=Array.isArray(comp.members)&&comp.members.length>0?comp.members:(Array.isArray(tr.members)?tr.members:[]);
     var lockedWindow=comp.locked_window||{};
     var tripTitle=(comp.trip&&comp.trip.name)||tr.name||"Trip";
@@ -3278,6 +3330,31 @@ export default function WanderPlan(){
       setWS(stepIndex);
       go("wizard");
     }
+    function submitCompanionCheckin(item,status){
+      var activityId=String(item&&item.activity_id||"").trim();
+      var normalizedStatus=normalizeCompanionCheckinStatus(status);
+      if(!(activityId&&today&&today.day_number))return;
+      setCompanionActionLoad(true);
+      setCompanionErr("");
+      saveTripPlanningState({state:{companion_checkins:(function(){
+        var patch={};
+        patch[activityId]={
+          status:normalizedStatus,
+          updated_by:String(userIdFromToken(authToken)||"").trim()||("email:"+String(user.email||"").trim().toLowerCase()),
+          updated_by_name:String(user.name||user.email||"Traveler"),
+          updated_at:new Date().toISOString(),
+          day_number:Number(today.day_number||0)||0
+        };
+        return patch;
+      })()}}).then(function(){
+        return refreshCompanionNow(String(tr&&tr.id||currentTripId||""),true);
+      }).then(function(){
+        setCompanionActionLoad(false);
+      }).catch(function(e){
+        setCompanionActionLoad(false);
+        setCompanionErr(String(e&&e.message||"Could not update live day status"));
+      });
+    }
     return(<div style={{maxWidth:720}}>
       <Fade delay={50}><button onClick={function(){go("trip_detail");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13,marginBottom:16}}>Back to {tr.name||"trip"}</button></Fade>
       <Fade delay={100}><div style={{background:C.surface,borderRadius:18,border:"1px solid "+C.border,overflow:"hidden",marginBottom:18}}>
@@ -3287,19 +3364,7 @@ export default function WanderPlan(){
               <h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>Live Companion</h1>
               <p style={{fontSize:14,color:C.tx2}}>{tripTitle}</p>
             </div>
-            <button onClick={function(){
-              var tid=String((tr&&tr.id)||currentTripId||"").trim();
-              if(!(authToken&&tid))return;
-              setCompanionLoad(true);
-              setCompanionErr("");
-              apiJson("/trips/"+tid+"/companion",{method:"GET"},authToken).then(function(res){
-                setCompanionData((res&&res.companion)||null);
-                setCompanionLoad(false);
-              }).catch(function(e){
-                setCompanionLoad(false);
-                setCompanionErr(String(e&&e.message||"Could not refresh live companion"));
-              });
-            }} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
+            <button onClick={function(){refreshCompanionNow(String((tr&&tr.id)||currentTripId||""),false).catch(function(){});}} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
           </div>
           <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:12}}>
             {[{l:"Trip Window",v:formatCompanionWindow(lockedWindow)},{l:"Destinations",v:(Array.isArray(tr.dests)?tr.dests.join(" + "):(tr.destNames||""))||"TBD"},{l:"Travelers",v:String(members.length||1)+" active"}].map(function(item){return(<div key={item.l} style={{background:C.bg,borderRadius:12,padding:"12px 14px"}}><p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{item.l}</p><p style={{fontSize:14,fontWeight:600}}>{item.v}</p></div>);})}
@@ -3321,6 +3386,48 @@ export default function WanderPlan(){
           })}
         </div>
       </div></Fade>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+        <p style={{fontSize:11,color:C.tx3}}>Debug panel shows the raw companion payload for this trip.</p>
+        <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+          {showVoteDebug?"Hide Debug":"Show Debug"}
+        </button>
+      </div>
+      {showVoteDebug&&(<div style={{marginBottom:14,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+        <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Companion Debug</p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
+          {[
+            {l:"Resolved trip id",v:String((tr&&tr.id)||currentTripId||"(missing)")},
+            {l:"Trip status",v:String((comp.trip&&comp.trip.status)||tr.status||"(none)")},
+            {l:"Trip window",v:formatCompanionWindow(lockedWindow)},
+            {l:"Has today",v:String(!!today)},
+            {l:"Today item count",v:String(Array.isArray(today&&today.items)?today.items.length:0)},
+            {l:"Progress summary",v:JSON.stringify(dayProgress||{})}
+          ].map(function(item){
+            return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
+              <p style={{fontSize:11,color:"#fff",wordBreak:"break-word"}}>{item.v}</p>
+            </div>);
+          })}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:10}}>
+          <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Current item</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(currentItem||null,null,2)}</pre>
+          </div>
+          <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Today payload</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:220,overflowY:"auto"}}>{JSON.stringify(today||null,null,2)}</pre>
+          </div>
+          <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw today check-ins</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:220,overflowY:"auto"}}>{JSON.stringify(comp.today_checkins||[],null,2)}</pre>
+          </div>
+          <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw companion payload</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:220,overflowY:"auto"}}>{JSON.stringify(comp||{},null,2)}</pre>
+          </div>
+        </div>
+      </div>)}
       {companionErr&&<Fade delay={120}><div style={{marginBottom:14,padding:"12px 14px",borderRadius:12,background:C.redBg,border:"1px solid "+C.red+"20"}}><p style={{fontSize:13,color:C.red}}>{companionErr}</p></div></Fade>}
       {companionLoad&&<Fade delay={120}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}><p style={{fontSize:14,color:C.tx2}}>Loading live trip context...</p></div></Fade>}
       {!companionLoad&&(currentItem||nextItem)&&(<Fade delay={130}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
@@ -3338,6 +3445,33 @@ export default function WanderPlan(){
           })}
         </div>
       </div></Fade>)}
+      {!companionLoad&&today&&(<Fade delay={135}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:12}}>
+          <div>
+            <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:4}}>TODAY PROGRESS</p>
+            <p style={{fontSize:12,color:C.tx3}}>
+              {String(dayProgress.completed_items||0)} of {String(dayProgress.total_items||0)} items closed
+              {dayProgress.last_updated_at?(" • updated "+formatCompanionDate(String(dayProgress.last_updated_at||"").slice(0,10))):""}
+            </p>
+          </div>
+          <div style={{padding:"8px 12px",borderRadius:999,background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700}}>
+            {String(dayProgress.completion_pct||0)}%
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+          {[
+            {l:"Done",v:dayProgress.done||0,c:C.grn,bg:C.grnBg},
+            {l:"In Progress",v:dayProgress.in_progress||0,c:C.goldT,bg:C.goldDim},
+            {l:"Skipped",v:dayProgress.skipped||0,c:C.red,bg:C.redBg},
+            {l:"Pending",v:dayProgress.pending||0,c:C.tx2,bg:C.bg}
+          ].map(function(stat){
+            return(<div key={stat.l} style={{padding:"10px 12px",borderRadius:12,background:stat.bg,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{stat.l}</p>
+              <p style={{fontSize:16,fontWeight:700,color:stat.c}}>{stat.v}</p>
+            </div>);
+          })}
+        </div>
+      </div></Fade>)}
       {!companionLoad&&today&&(<Fade delay={140}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,gap:10}}>
           <div>
@@ -3347,10 +3481,28 @@ export default function WanderPlan(){
           <div style={{padding:"6px 10px",borderRadius:999,background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700}}>{formatCompanionDate(today.date)||("Day "+(today.day_number||1))}</div>
         </div>
         {(today.items||[]).length>0?(<div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {(today.items||[]).map(function(item,idx){return(<div key={idx} style={{display:"grid",gridTemplateColumns:"72px 1fr",gap:12,padding:"10px 0",borderTop:idx===0?"1px solid "+C.border:"1px solid "+C.border}}>
-            <div style={{fontSize:12,color:C.tx3}}>{String(item.time_slot||"").split("-")[0]||"--:--"}</div>
-            <div><p style={{fontSize:14,fontWeight:600,marginBottom:2}}>{item.title||"Activity"}</p><p style={{fontSize:12,color:C.tx2}}>{item.location||item.category||"Planned item"}</p></div>
-          </div>);})}
+          {(today.items||[]).map(function(item,idx){
+            var meta=companionCheckinMeta(item&&item.live_status);
+            return(<div key={idx} style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"72px 1fr auto",gap:12,padding:"10px 0",borderTop:idx===0?"1px solid "+C.border:"1px solid "+C.border}}>
+              <div style={{fontSize:12,color:C.tx3}}>{String(item.time_slot||"").split("-")[0]||"--:--"}</div>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:4}}>
+                  <p style={{fontSize:14,fontWeight:600}}>{item.title||"Activity"}</p>
+                  <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:999,background:meta.bg,color:meta.color}}>{meta.label}</span>
+                </div>
+                <p style={{fontSize:12,color:C.tx2,marginBottom:4}}>{item.location||item.category||"Planned item"}</p>
+                {item&&item.live_updated_by_name&&<p style={{fontSize:11,color:C.tx3}}>Updated by {item.live_updated_by_name}</p>}
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:isNarrow?"flex-start":"flex-end"}}>
+                {[{label:"Start",status:"in_progress",color:C.goldT,bg:C.goldDim},{label:"Done",status:"done",color:C.grn,bg:C.grnBg},{label:"Skip",status:"skipped",color:C.red,bg:C.redBg}].map(function(action){
+                  var active=normalizeCompanionCheckinStatus(item&&item.live_status)===action.status;
+                  return(<button key={action.status} onClick={function(){submitCompanionCheckin(item,action.status);}} disabled={companionActionLoad} style={{padding:"7px 10px",borderRadius:8,border:"1px solid "+action.color+"35",background:active?action.bg:C.surface,color:action.color,fontSize:11,fontWeight:700,cursor:companionActionLoad?"default":"pointer",opacity:(companionActionLoad&&!active)?0.7:1}}>
+                    {action.label}
+                  </button>);
+                })}
+              </div>
+            </div>);
+          })}
         </div>):(<p style={{fontSize:13,color:C.tx3}}>No itinerary items are available for today yet.</p>)}
       </div></Fade>)}
       {!companionLoad&&upcoming.length>0&&(<Fade delay={170}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
@@ -4012,15 +4164,30 @@ export default function WanderPlan(){
         durPerDest,
         totalDays
       );
+      function persistItineraryRows(rows){
+        var payload=buildItinerarySavePayload(rows);
+        if(!(authToken&&currentTripId))return Promise.resolve(payload);
+        if(!Array.isArray(payload.days)||payload.days.length===0)return Promise.resolve(payload);
+        return apiJson("/trips/"+currentTripId+"/itinerary",{method:"POST",body:payload},authToken);
+      }
       function finalizeItineraryResult(res){
         var rows=(Array.isArray(res)&&res.length>0)
           ? res
           : buildFallbackItinerary(dests,accPois,pStays,appMeals,totalDays,flightDates.depart,itineraryDurations);
-        setItin(rows);
-        setIL(false);
-        setID(true);
+        persistItineraryRows(rows).then(function(){
+          setItinErr("");
+          setItin(rows);
+          setIL(false);
+          setID(true);
+        }).catch(function(e){
+          setItin(rows);
+          setIL(false);
+          setID(true);
+          setItinErr(String(e&&e.message||"Could not persist itinerary"));
+        });
       }
       setIL(true);
+      setItinErr("");
       if(authToken&&currentTripId){
         apiJson("/trips/"+currentTripId+"/itinerary",{method:"GET"},authToken).then(function(r){
           var days=(r&&r.itinerary&&r.itinerary.days)||[];
@@ -4056,8 +4223,8 @@ export default function WanderPlan(){
       }
     }
     function approveItineraryThenAdvance(){
-      if(authToken&&currentTripId){
-        apiJson("/trips/"+currentTripId+"/itinerary/approve",{method:"POST",body:{approved:true}},authToken).then(function(res){
+      function approveSavedItinerary(){
+        return apiJson("/trips/"+currentTripId+"/itinerary/approve",{method:"POST",body:{approved:true}},authToken).then(function(res){
           var nextStatus=String(res&&res.trip&&res.trip.status||"").trim().toLowerCase();
           if(nextStatus){
             setTrips(function(prev){
@@ -4079,7 +4246,23 @@ export default function WanderPlan(){
             refreshCurrentTripSharedState(authToken,currentTripId),
             refreshTripsFromBackend(authToken)
           ]);
-        }).catch(function(){}).then(function(){adv();});
+        });
+      }
+      if(authToken&&currentTripId){
+        setIL(true);
+        setItinErr("");
+        apiJson("/trips/"+currentTripId+"/itinerary",{method:"POST",body:buildItinerarySavePayload(itin)},authToken)
+          .then(function(){
+            return approveSavedItinerary();
+          })
+          .then(function(){
+            setIL(false);
+            adv();
+          })
+          .catch(function(e){
+            setIL(false);
+            setItinErr(String(e&&e.message||"Could not save itinerary before confirmation"));
+          });
       }else{
         adv();
       }
@@ -5589,6 +5772,7 @@ export default function WanderPlan(){
 
       return(<div>
         {ab("Itinerary Builder",itinDone?"Your complete day-by-day schedule:":"Building your itinerary from approved activities, stays, and meals...")}
+        {itinErr&&<div style={{marginBottom:12,padding:"10px 14px",borderRadius:10,background:C.redBg,border:"1px solid "+C.red+"22"}}><p style={{fontSize:12,color:C.red}}>{itinErr}</p></div>}
         {!itinDone&&!itinLoad&&(<div>
           <p style={{fontSize:14,color:C.tx2,marginBottom:10}}>The agent assembles everything into a day-by-day schedule:</p>
           <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:14}}>
@@ -5673,5 +5857,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 
