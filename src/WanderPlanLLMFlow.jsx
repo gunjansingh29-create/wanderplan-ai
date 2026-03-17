@@ -1278,10 +1278,25 @@ async function askPOI(destinations, interests, budgetTier, dietary, groupPrefs) 
 async function askStays(destinations, budgetTier, nights, groupSize) {
   var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
   var destStr = (destinations || []).map(function(d) { return d.name + ", " + d.country; }).join("; ") || "Kyoto, Japan";
-  var sys = "You are WanderPlan Accommodation Agent. Find stays for each destination.\n\nReturn ONLY a JSON array:\n[{\"name\":\"Hotel Name\",\"destination\":\"City\",\"type\":\"Boutique Hotel\",\"rating\":4.8,\"ratePerNight\":185,\"totalNights\":3,\"amenities\":[\"Pool\",\"WiFi\",\"Breakfast\"],\"neighborhood\":\"Old Town\",\"bookingSource\":\"Booking.com\",\"whyThisOne\":\"Why it fits\",\"cancellation\":\"Free cancellation\"}]\n\nProvide 2-3 options per destination. Budget: " + (bd[budgetTier] || bd.moderate) + ". Group: " + (groupSize || 2) + " people. Use local property types (Ryokan, Riad, Villa etc). ONLY JSON array.";
+  var sys = "You are WanderPlan Accommodation Agent. Find stays for each destination.\n\nReturn ONLY a JSON array:\n[{\"name\":\"Hotel Name\",\"destination\":\"City\",\"type\":\"Boutique Hotel\",\"rating\":4.8,\"ratePerNight\":185,\"totalNights\":3,\"amenities\":[\"Pool\",\"WiFi\",\"Breakfast\"],\"neighborhood\":\"Old Town\",\"bookingSource\":\"Booking.com\",\"whyThisOne\":\"Why it fits\",\"cancellation\":\"Free cancellation\",\"bookingUrl\":\"https://...\",\"imageUrl\":\"https://...\"}]\n\nProvide 2-3 options per destination. Budget: " + (bd[budgetTier] || bd.moderate) + ". Group: " + (groupSize || 2) + " people. Use local property types (Ryokan, Riad, Villa etc). Include bookingUrl and imageUrl when known. ONLY JSON array.";
   var msg = "Find stays for: " + destStr + ". " + (nights || 10) + " total nights. " + (groupSize || 2) + " people.";
   var res = await callLLM(sys, msg, 1000);
   return Array.isArray(res) ? res : [];
+}
+
+export function stayPreviewLink(stay){
+  var exact=String(stay&&(
+    stay.bookingUrl||
+    stay.booking_url||
+    stay.listingUrl||
+    stay.listing_url||
+    stay.url||
+    stay.link
+  )||"").trim();
+  if(exact)return exact;
+  var query=[String(stay&&stay.name||"").trim(),String(stay&&stay.destination||"").trim(),String(stay&&stay.bookingSource||"hotel").trim()].filter(Boolean).join(" ");
+  if(!query)return "";
+  return "https://www.google.com/search?q="+encodeURIComponent(query);
 }
 
 function normalizeStays(rows,dests,budgetTier,totalNights){
@@ -1327,7 +1342,9 @@ function normalizeStays(rows,dests,budgetTier,totalNights){
       neighborhood:String(it.neighborhood||it.area||"").trim(),
       bookingSource:String(it.bookingSource||"WanderPlan LLM").trim(),
       whyThisOne:String(it.whyThisOne||it.reason||"Good fit for your budget and trip style.").trim(),
-      cancellation:String(it.cancellation||"Flexible cancellation").trim()
+      cancellation:String(it.cancellation||"Flexible cancellation").trim(),
+      imageUrl:String(it.imageUrl||it.image_url||it.photoUrl||it.photo_url||it.thumbnail||it.image||"").trim(),
+      bookingUrl:String(it.bookingUrl||it.booking_url||it.listingUrl||it.listing_url||it.url||it.link||"").trim()
     });
   }
   return out;
@@ -1446,7 +1463,23 @@ async function askStaysBackend(tripId,destinations,budgetTier,totalNights,token)
           neighborhood:"",
           bookingSource:"WanderPlan Search",
           whyThisOne:"Matches your trip budget and destination.",
-          cancellation:"Check provider policy"
+          cancellation:"Check provider policy",
+          imageUrl:String(s&&(
+            s.imageUrl||
+            s.image_url||
+            s.photoUrl||
+            s.photo_url||
+            s.thumbnail||
+            s.image
+          )||"").trim(),
+          bookingUrl:String(s&&(
+            s.bookingUrl||
+            s.booking_url||
+            s.listingUrl||
+            s.listing_url||
+            s.url||
+            s.link
+          )||"").trim()
         });
       });
     }catch(e){}
@@ -6052,7 +6085,7 @@ export default function WanderPlan(){
         setSChat(function(p){return p.concat([{from:"user",text:msg}]);});
         var destStr=dests.map(function(d){return d.name;}).join(", ")||"your destinations";
         var currentPicked=pickedStays.map(function(s){return s.name+" ($"+s.ratePerNight+"/n) in "+s.destination;}).join("; ");
-        var sys="You are WanderPlan Accommodation Agent. User wants to modify stays. Current: "+(currentPicked||"none")+". Destinations: "+destStr+". Budget: "+effectiveTripBudgetTier+".\n\nIf user wants new options: {\"type\":\"options\",\"stays\":[{\"name\":\"Hotel\",\"destination\":\"City\",\"type\":\"Hotel\",\"rating\":4.5,\"ratePerNight\":120,\"totalNights\":3,\"amenities\":[\"WiFi\"],\"bookingSource\":\"Booking.com\",\"whyThisOne\":\"Reason\",\"cancellation\":\"Free\"}]}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nONLY JSON.";
+        var sys="You are WanderPlan Accommodation Agent. User wants to modify stays. Current: "+(currentPicked||"none")+". Destinations: "+destStr+". Budget: "+effectiveTripBudgetTier+".\n\nIf user wants new options: {\"type\":\"options\",\"stays\":[{\"name\":\"Hotel\",\"destination\":\"City\",\"type\":\"Hotel\",\"rating\":4.5,\"ratePerNight\":120,\"totalNights\":3,\"amenities\":[\"WiFi\"],\"bookingSource\":\"Booking.com\",\"whyThisOne\":\"Reason\",\"cancellation\":\"Free\",\"bookingUrl\":\"https://...\",\"imageUrl\":\"https://...\"}]}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nInclude bookingUrl and imageUrl when known. ONLY JSON.";
         callLLM(sys,msg,1000).then(function(res){
           setSAL(false);
           if(res&&res.type==="options"&&res.stays&&res.stays.length>0){
@@ -6138,6 +6171,17 @@ export default function WanderPlan(){
           })}
           {stayPreview&&stayPreview.stay&&(<div onClick={function(){setStayPreview(null);}} style={{position:"fixed",inset:0,zIndex:60,background:"rgba(4,6,12,.78)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
             <div onClick={function(e){e.stopPropagation();}} style={{width:"min(720px,100%)",maxHeight:"85vh",overflowY:"auto",borderRadius:18,background:C.surface,border:"1px solid "+C.border,padding:20,boxShadow:"0 24px 80px rgba(0,0,0,.45)"}}>
+              {stayPreview.stay.imageUrl?(
+                <div style={{marginBottom:14,borderRadius:16,overflow:"hidden",border:"1px solid "+C.border,background:C.bg}}>
+                  <img src={stayPreview.stay.imageUrl} alt={stayPreview.stay.name||"Stay preview"} style={{display:"block",width:"100%",height:isNarrow?220:280,objectFit:"cover"}}/>
+                </div>
+              ):(
+                <div style={{marginBottom:14,borderRadius:16,border:"1px dashed "+C.border,background:"linear-gradient(135deg,"+C.bg+","+C.surface+")",padding:isNarrow?18:24}}>
+                  <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:6}}>Property preview</p>
+                  <p style={{fontSize:14,fontWeight:700,color:"#fff",marginBottom:4}}>{stayPreview.stay.name||"Stay option"}</p>
+                  <p style={{fontSize:12,color:C.tx2}}>Image unavailable from this source. You can still open the live listing/search link below.</p>
+                </div>
+              )}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:12}}>
                 <div>
                   <p style={{fontSize:11,fontWeight:700,color:C.tealL,marginBottom:6}}>{stayPreview.destination||stayPreview.stay.destination||"Stay Preview"}</p>
@@ -6189,7 +6233,10 @@ export default function WanderPlan(){
               </div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                 <p style={{fontSize:12,color:C.tx3}}>Preview stays before voting so the crew can compare hotel features, pricing, and policies clearly.</p>
-                <button onClick={function(){setStayPreview(null);}} style={{padding:"10px 14px",borderRadius:10,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>Back to stays</button>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {stayPreviewLink(stayPreview.stay)&&<a href={stayPreviewLink(stayPreview.stay)} target="_blank" rel="noreferrer" style={{padding:"10px 14px",borderRadius:10,border:"1px solid "+C.sky+"35",background:C.sky+"12",color:C.sky,fontSize:12,fontWeight:700,textDecoration:"none"}}>{stayPreview.stay.bookingUrl?"Open Listing":"Search Property"}</a>}
+                  <button onClick={function(){setStayPreview(null);}} style={{padding:"10px 14px",borderRadius:10,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>Back to stays</button>
+                </div>
               </div>
             </div>
           </div>)}

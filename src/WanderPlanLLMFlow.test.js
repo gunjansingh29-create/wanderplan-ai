@@ -55,6 +55,7 @@ import {
   summarizeMealVotes,
   summarizePoiVotes,
   summarizeStayVotes,
+  stayPreviewLink,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
@@ -369,6 +370,24 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     } finally {
       Object.defineProperty(global, "window", { value: originalWindow, configurable: true });
     }
+  });
+
+  test("stayPreviewLink prefers exact booking URL and falls back to property search", () => {
+    expect(
+      stayPreviewLink({
+        name: "Harbor House",
+        destination: "Auckland",
+        bookingUrl: "https://booking.example/harbor-house",
+      })
+    ).toBe("https://booking.example/harbor-house");
+
+    expect(
+      stayPreviewLink({
+        name: "Harbor House",
+        destination: "Auckland",
+        bookingSource: "Booking.com",
+      })
+    ).toContain("google.com/search?q=");
   });
 
   test("receipt helpers total parsed items and format budget values", () => {
