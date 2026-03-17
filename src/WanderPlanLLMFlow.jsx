@@ -6295,6 +6295,58 @@ export default function WanderPlan(){
         }} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>Plan Meals</button></div>)}
         {mealLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Finding restaurants across destinations...</p></div>)}
         {mealDone&&meals.length>0&&(<div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+            <p style={{fontSize:11,color:C.tx3}}>Debug panel helps compare the shared meal plan, raw votes, and resolved vote summaries on this step.</p>
+            <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              {showVoteDebug?"Hide Debug":"Show Debug"}
+            </button>
+          </div>
+          {showVoteDebug&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+            <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Dining Debug</p>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
+              {[
+                {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"(missing)"},
+                {l:"Meal days",v:String(meals.length)},
+                {l:"Vote member count",v:String(voteMembers.length)},
+                {l:"Majority needed",v:String(majorityNeeded)},
+                {l:"Approved / Pending / Rejected",v:String(approvedMeals.length)+" / "+String(pendingMeals.length)+" / "+String(rejectedMeals.length)},
+                {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"(none)"}
+              ].map(function(item){
+                return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                  <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
+                  <p style={{fontSize:11,color:"#fff",wordBreak:"break-word"}}>{item.v}</p>
+                </div>);
+              })}
+            </div>
+            <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Vote members</p>
+              <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:140,overflowY:"auto"}}>{JSON.stringify(voteMembers||[],null,2)}</pre>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 1fr",gap:8,marginBottom:10}}>
+              <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw meal plan</p>
+                <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(meals||[],null,2)}</pre>
+              </div>
+              <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw meal votes</p>
+                <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(mealVotes||{},null,2)}</pre>
+              </div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {meals.map(function(day,di){
+                return (day.meals||[]).map(function(m,mi){
+                  var rowMeta=readMealVoteRow(mealVotes,day,m,di,mi);
+                  var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);
+                  return(<div key={"meal-debug-"+di+"-"+mi} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                    <p style={{fontSize:11,fontWeight:700,color:"#fff",marginBottom:4}}>{day.destination||("Day "+day.day)} {" · "} {m.type||"Meal"} {" · "} {m.name||"Unnamed"}</p>
+                    <p style={{fontSize:10,color:C.tx3,marginBottom:6}}>key={rowMeta.key}</p>
+                    <p style={{fontSize:10,color:C.tx2,marginBottom:6}}>summary: {summary.up} up / {summary.down} down / {summary.votedCount} voted / allVoted={String(summary.allVoted)} / majority={String(summary.majority)}</p>
+                    <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:120,overflowY:"auto"}}>{JSON.stringify({row:summary.row},null,2)}</pre>
+                  </div>);
+                });
+              })}
+            </div>
+          </div>)}
           {meals.map(function(day,di){
             return(<div key={di} style={{marginBottom:16}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>Day {day.day}</span><span style={{fontSize:12,color:C.tx3}}>{day.destination}{day.date?(" · "+day.date):""}</span></div>
