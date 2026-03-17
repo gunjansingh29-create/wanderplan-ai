@@ -17,10 +17,12 @@ import {
   canonicalMealVoteKey,
   canonicalPoiVoteKeyFromStoredKey,
   canonicalStayVoteKey,
+  companionCheckinMeta,
   dedupeVoteVoters,
   emptyUserState,
   findDuplicatePoiKeys,
   fillMissingDurationPerDestination,
+  formatMoney,
   inclusiveIsoDays,
   isCurrentVoteVoter,
   makeVoteUserId,
@@ -38,6 +40,7 @@ import {
   readStayVoteRow,
   voteKeyAliasesFor,
   readVoteForVoter,
+  receiptItemsTotal,
   resolveAvailabilityDraftWindow,
   resolveBudgetTier,
   resolveTripBudgetTier,
@@ -366,6 +369,18 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     } finally {
       Object.defineProperty(global, "window", { value: originalWindow, configurable: true });
     }
+  });
+
+  test("receipt helpers total parsed items and format budget values", () => {
+    expect(
+      receiptItemsTotal([
+        { amount: 18.5 },
+        { amount: "21.25" },
+        { amount: 0 },
+      ])
+    ).toBeCloseTo(39.75);
+    expect(formatMoney(39.75, "USD")).toContain("39.75");
+    expect(companionCheckinMeta("done").label).toBe("Done");
   });
 
   test("resolveBudgetTier prefers trip member profile budget tier", () => {
@@ -1225,6 +1240,31 @@ describe("WanderPlanLLMFlow companion entry", () => {
           note: "Easy walk from the hotel.",
         },
       ],
+      expense_summary: {
+        currency: "USD",
+        daily_target: 180,
+        total_budget: 1260,
+        spent: 244,
+        remaining: 1016,
+        warning_active: false,
+        today_spent: 61,
+        categories: [
+          { category: "dining", budget: 315, spent: 61, remaining: 254, over_budget: false },
+          { category: "activities", budget: 252, spent: 0, remaining: 252, over_budget: false },
+        ],
+      },
+      recent_expenses: [
+        {
+          id: "expense-1",
+          trip_id: "11111111-1111-4111-8111-111111111111",
+          user_id: "active-user",
+          expense_date: "2026-06-01",
+          merchant: "Haneda Ramen",
+          amount: 61,
+          currency: "USD",
+          category: "dining",
+        },
+      ],
       stats: { day_count: 7, approved_days: 7, item_count: 12 },
     };
     global.fetch = jest.fn((url, options) => {
@@ -1377,6 +1417,8 @@ describe("WanderPlanLLMFlow companion entry", () => {
     expect(screen.queryByText("Shinjuku Grand")).not.toBeNull();
     expect(screen.queryByText("DINING TODAY")).not.toBeNull();
     expect(screen.queryByText("Izakaya Hanabi")).not.toBeNull();
+    expect(screen.queryByText("END-OF-DAY RECEIPTS")).not.toBeNull();
+    expect(screen.queryByText("Haneda Ramen")).not.toBeNull();
     expect(screen.queryAllByText("Pending").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Done" })[0]);

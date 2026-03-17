@@ -229,6 +229,45 @@ function companionCheckinMeta(status){
   return {label:"Pending",color:C.tx3,bg:C.bg};
 }
 
+function formatMoney(amount,currency){
+  var value=Number(amount||0)||0;
+  var code=String(currency||"USD").trim().toUpperCase()||"USD";
+  try{
+    return new Intl.NumberFormat(undefined,{style:"currency",currency:code,maximumFractionDigits:2}).format(value);
+  }catch(e){}
+  return "$"+value.toFixed(2);
+}
+
+function receiptItemsTotal(items){
+  return (Array.isArray(items)?items:[]).reduce(function(sum,item){
+    return sum+(Number(item&&item.amount||0)||0);
+  },0);
+}
+
+function readFileAsBase64(file){
+  return new Promise(function(resolve,reject){
+    if(!file)return resolve({name:"",mediaType:"",base64:""});
+    try{
+      var reader=new FileReader();
+      reader.onload=function(){
+        var raw=String(reader.result||"");
+        var match=raw.match(/^data:([^;]+);base64,(.*)$/);
+        if(match){
+          resolve({name:String(file.name||""),mediaType:match[1],base64:match[2]});
+          return;
+        }
+        resolve({name:String(file.name||""),mediaType:String(file.type||"image/jpeg"),base64:""});
+      };
+      reader.onerror=function(){
+        reject(new Error("Could not read receipt image"));
+      };
+      reader.readAsDataURL(file);
+    }catch(e){
+      reject(e);
+    }
+  });
+}
+
 function appBaseUrl(){
   if(typeof window!=="undefined"&&window.location){
     return String(window.location.origin||"").trim()||"";
@@ -1687,6 +1726,12 @@ export default function WanderPlan(){
   var[companionLoad,setCompanionLoad]=useState(false);
   var[companionErr,setCompanionErr]=useState("");
   var[companionActionLoad,setCompanionActionLoad]=useState(false);
+  var[receiptText,setReceiptText]=useState("");
+  var[receiptImage,setReceiptImage]=useState({name:"",mediaType:"",base64:""});
+  var[receiptParse,setReceiptParse]=useState(null);
+  var[receiptLoad,setReceiptLoad]=useState(false);
+  var[receiptSaveLoad,setReceiptSaveLoad]=useState(false);
+  var[receiptMsg,setReceiptMsg]=useState("");
   var flightPlannerDests=(function(){
     var tripCtx=(newTrip&&typeof newTrip==="object")?newTrip:{};
     var tripDestInputs=(Array.isArray(tripCtx.dests)&&tripCtx.dests.length)
@@ -2383,6 +2428,16 @@ export default function WanderPlan(){
       }
       throw e;
     });
+  }
+  function parseReceiptForTrip(tripId,payload){
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
+    if(!(authToken&&tid&&isUuidLike(tid)))return Promise.reject(new Error("Trip context missing"));
+    return apiJson("/trips/"+tid+"/expenses/parse",{method:"POST",body:payload},authToken);
+  }
+  function saveReceiptItemsForTrip(tripId,items){
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
+    if(!(authToken&&tid&&isUuidLike(tid)))return Promise.reject(new Error("Trip context missing"));
+    return apiJson("/trips/"+tid+"/expenses",{method:"POST",body:{items:items}},authToken);
   }
   function profilePayloadFor(userState){
     var u=Object.assign(emptyUserState(),userState||{});
@@ -3441,6 +3496,8 @@ export default function WanderPlan(){
     var nextItem=comp.next_item||null;
     var staySnapshot=Array.isArray(comp.stays)?comp.stays:[];
     var diningSnapshot=Array.isArray(comp.today_meals)?comp.today_meals:[];
+    var expenseSummary=(comp.expense_summary&&typeof comp.expense_summary==="object")?comp.expense_summary:{};
+    var recentExpenses=Array.isArray(comp.recent_expenses)?comp.recent_expenses:[];
     var dayProgress=(comp.day_progress&&typeof comp.day_progress==="object")?comp.day_progress:{};
     var members=Array.isArray(comp.members)&&comp.members.length>0?comp.members:(Array.isArray(tr.members)?tr.members:[]);
     var lockedWindow=comp.locked_window||{};
@@ -3491,6 +3548,86 @@ export default function WanderPlan(){
       }).catch(function(e){
         setCompanionActionLoad(false);
         setCompanionErr(String(e&&e.message||"Could not update live day status"));
+      });
+    }
+    function onReceiptImageChange(ev){
+      var file=ev&&ev.target&&ev.target.files&&ev.target.files[0];
+      if(!file){
+        setReceiptImage({name:"",mediaType:"",base64:""});
+        return;
+      }
+      setReceiptMsg("");
+      readFileAsBase64(file).then(function(payload){
+        setReceiptImage(payload||{name:"",mediaType:"",base64:""});
+      }).catch(function(e){
+        setReceiptImage({name:"",mediaType:"",base64:""});
+        setReceiptMsg(String(e&&e.message||"Could not read receipt image"));
+      });
+    }
+    function analyzeReceipt(){
+      var tripId=String((tr&&tr.id)||currentTripId||"").trim();
+      var payload={
+        expense_date:String(today&&today.date||new Date().toISOString().slice(0,10)).slice(0,10),
+        receipt_text:String(receiptText||"").trim(),
+        receipt_name:String(receiptImage&&receiptImage.name||"").trim(),
+        receipt_image_base64:String(receiptImage&&receiptImage.base64||"").trim(),
+        receipt_image_media_type:String(receiptImage&&receiptImage.mediaType||"").trim(),
+        currency:String(expenseSummary.currency||"USD")
+      };
+      setReceiptLoad(true);
+      setReceiptParse(null);
+      setReceiptMsg("");
+      parseReceiptForTrip(tripId,payload).then(function(res){
+        setReceiptParse(res&&res.parsed||null);
+        if(res&&res.llm_error){
+          setReceiptMsg("Receipt parsed with fallback logic because the LLM parse was unavailable.");
+        }else{
+          setReceiptMsg("Receipt analyzed. Review the categories before saving.");
+        }
+        setReceiptLoad(false);
+      }).catch(function(e){
+        setReceiptLoad(false);
+        setReceiptMsg(String(e&&e.message||"Could not analyze receipt"));
+      });
+    }
+    function saveParsedReceipt(){
+      var tripId=String((tr&&tr.id)||currentTripId||"").trim();
+      var parsed=(receiptParse&&typeof receiptParse==="object")?receiptParse:{};
+      var items=Array.isArray(parsed.items)?parsed.items:[];
+      if(items.length===0){
+        setReceiptMsg("Analyze a receipt first.");
+        return;
+      }
+      setReceiptSaveLoad(true);
+      setReceiptMsg("");
+      saveReceiptItemsForTrip(tripId,items.map(function(item){
+        return {
+          expense_date:String(item&&item.expense_date||today&&today.date||"").slice(0,10),
+          merchant:String(item&&item.merchant||parsed.merchant||"Receipt expense"),
+          amount:Number(item&&item.amount||0)||0,
+          currency:String(item&&item.currency||parsed.currency||expenseSummary.currency||"USD"),
+          category:String(item&&item.category||"misc"),
+          note:String(item&&item.note||parsed.summary||""),
+          receipt_name:String(receiptImage&&receiptImage.name||"").trim(),
+          receipt_text:String(receiptText||"").trim()
+        };
+      })).then(function(res){
+        setReceiptSaveLoad(false);
+        setReceiptParse(null);
+        setReceiptText("");
+        setReceiptImage({name:"",mediaType:"",base64:""});
+        setReceiptMsg("Receipt saved to trip budget.");
+        setCompanionData(function(prev){
+          if(!(prev&&typeof prev==="object"))return prev;
+          return Object.assign({},prev,{
+            expense_summary:(res&&res.summary)||prev.expense_summary||{},
+            recent_expenses:(res&&res.expenses)||prev.recent_expenses||[]
+          });
+        });
+        return refreshCompanionNow(tripId,true);
+      }).then(function(){return null;}).catch(function(e){
+        setReceiptSaveLoad(false);
+        setReceiptMsg(String(e&&e.message||"Could not save receipt"));
       });
     }
     return(<div style={{maxWidth:720}}>
@@ -3550,7 +3687,9 @@ export default function WanderPlan(){
             {l:"Readiness reason",v:String(comp.readiness_reason||"(none)")},
             {l:"Has today",v:String(!!today)},
             {l:"Today item count",v:String(Array.isArray(today&&today.items)?today.items.length:0)},
-            {l:"Progress summary",v:JSON.stringify(dayProgress||{})}
+            {l:"Progress summary",v:JSON.stringify(dayProgress||{})},
+            {l:"Expense summary",v:JSON.stringify(expenseSummary||{})},
+            {l:"Recent expense count",v:String(recentExpenses.length||0)}
           ].map(function(item){
             return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
               <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
@@ -3574,6 +3713,10 @@ export default function WanderPlan(){
           <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
             <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw companion payload</p>
             <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:220,overflowY:"auto"}}>{JSON.stringify(comp||{},null,2)}</pre>
+          </div>
+          <div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Recent expenses</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:220,overflowY:"auto"}}>{JSON.stringify(recentExpenses||[],null,2)}</pre>
           </div>
         </div>
       </div>)}
@@ -3719,6 +3862,99 @@ export default function WanderPlan(){
                 </div>);
               })}
             </div>):(<p style={{fontSize:12,color:C.tx3}}>No dining snapshot available yet.</p>)}
+          </div>
+          <div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+              <div>
+                <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:4}}>END-OF-DAY RECEIPTS</p>
+                <p style={{fontSize:12,color:C.tx3}}>Upload or paste receipts and let WanderPlan categorize them against the shared trip budget.</p>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <p style={{fontSize:11,color:C.tx3}}>Trip spend</p>
+                <p style={{fontSize:15,fontWeight:700,color:(Number(expenseSummary.remaining||0)<0?C.red:C.grn)}}>
+                  {formatMoney(expenseSummary.spent||0,expenseSummary.currency||"USD")}
+                </p>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:8,marginBottom:12}}>
+              {[
+                {l:"Today",v:formatMoney(expenseSummary.today_spent||0,expenseSummary.currency||"USD"),c:C.goldT},
+                {l:"Remaining",v:formatMoney(expenseSummary.remaining||0,expenseSummary.currency||"USD"),c:Number(expenseSummary.remaining||0)<0?C.red:C.tealL},
+                {l:"Daily target",v:formatMoney(expenseSummary.daily_target||0,expenseSummary.currency||"USD"),c:C.sky}
+              ].map(function(stat){
+                return(<div key={stat.l} style={{padding:"10px 12px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+                  <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{stat.l}</p>
+                  <p style={{fontSize:15,fontWeight:700,color:stat.c}}>{stat.v}</p>
+                </div>);
+              })}
+            </div>
+            {Array.isArray(expenseSummary.categories)&&expenseSummary.categories.length>0&&(
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
+                {expenseSummary.categories.map(function(cat){
+                  return(<div key={cat.category} style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:12,padding:"7px 0",borderTop:"1px solid "+C.border}}>
+                    <span style={{color:C.tx2,textTransform:"capitalize"}}>{String(cat.category||"misc")}</span>
+                    <span style={{color:cat.over_budget?C.red:C.tx2}}>
+                      {formatMoney(cat.spent||0,expenseSummary.currency||"USD")} / {formatMoney(cat.budget||0,expenseSummary.currency||"USD")}
+                    </span>
+                  </div>);
+                })}
+              </div>
+            )}
+            <textarea
+              value={receiptText}
+              onChange={function(e){setReceiptText(e.target.value);}}
+              placeholder="Paste receipt text here if you have it..."
+              style={{width:"100%",minHeight:88,borderRadius:12,border:"1px solid "+C.border,background:C.bg,color:"#fff",padding:"12px 14px",fontSize:13,marginBottom:10}}
+            />
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginBottom:10}}>
+              <label style={{padding:"10px 12px",borderRadius:12,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                Upload receipt image
+                <input type="file" accept="image/*" onChange={onReceiptImageChange} style={{display:"none"}}/>
+              </label>
+              {receiptImage&&receiptImage.name&&<span style={{fontSize:12,color:C.tx3}}>{receiptImage.name}</span>}
+            </div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+              <button onClick={analyzeReceipt} disabled={receiptLoad||receiptSaveLoad||(!String(receiptText||"").trim()&&!(receiptImage&&receiptImage.base64))} style={{padding:"11px 14px",borderRadius:12,border:"1px solid "+C.tealL+"35",background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700,cursor:(receiptLoad||receiptSaveLoad)?"default":"pointer",opacity:(!String(receiptText||"").trim()&&!(receiptImage&&receiptImage.base64))?0.55:1}}>
+                {receiptLoad?"Analyzing...":"Analyze Receipt"}
+              </button>
+              <button onClick={saveParsedReceipt} disabled={receiptSaveLoad||!(receiptParse&&Array.isArray(receiptParse.items)&&receiptParse.items.length)} style={{padding:"11px 14px",borderRadius:12,border:"1px solid "+C.grn+"35",background:C.grnBg,color:C.grn,fontSize:12,fontWeight:700,cursor:receiptSaveLoad?"default":"pointer",opacity:(receiptParse&&Array.isArray(receiptParse.items)&&receiptParse.items.length)?1:0.55}}>
+                {receiptSaveLoad?"Saving...":"Save to Budget"}
+              </button>
+            </div>
+            {receiptMsg&&<p style={{fontSize:12,color:receiptMsg.toLowerCase().indexOf("could not")>=0?C.red:C.tx2,marginBottom:10}}>{receiptMsg}</p>}
+            {receiptParse&&Array.isArray(receiptParse.items)&&receiptParse.items.length>0&&(
+              <div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:10,marginBottom:8}}>
+                  <div>
+                    <p style={{fontSize:13,fontWeight:700}}>{receiptParse.merchant||"Parsed receipt"}</p>
+                    <p style={{fontSize:11,color:C.tx3}}>{receiptParse.expense_date||today&&today.date||"Date TBD"}{receiptParse.parse_source?(" • "+receiptParse.parse_source):""}</p>
+                  </div>
+                  <p style={{fontSize:13,fontWeight:700,color:C.goldT}}>{formatMoney(receiptItemsTotal(receiptParse.items),receiptParse.currency||expenseSummary.currency||"USD")}</p>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {receiptParse.items.map(function(item,idx){
+                    return(<div key={(item.category||"item")+"-"+idx} style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:12}}>
+                      <span style={{color:C.tx2}}>{item.merchant||receiptParse.merchant||"Expense"} <span style={{color:C.tx3}}>• {String(item.category||"misc")}</span></span>
+                      <span style={{fontWeight:700}}>{formatMoney(item.amount||0,item.currency||receiptParse.currency||expenseSummary.currency||"USD")}</span>
+                    </div>);
+                  })}
+                </div>
+              </div>
+            )}
+            <div>
+              <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>RECENT RECEIPTS</p>
+              {recentExpenses.length>0?(<div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {recentExpenses.slice(0,5).map(function(expense){
+                  return(<div key={expense.id} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"10px 0",borderTop:"1px solid "+C.border}}>
+                    <div>
+                      <p style={{fontSize:13,fontWeight:600}}>{expense.merchant||"Expense"}</p>
+                      <p style={{fontSize:11,color:C.tx3}}>{expense.expense_date||"Date TBD"} • {String(expense.category||"misc")}</p>
+                    </div>
+                    <span style={{fontSize:12,fontWeight:700,color:C.goldT}}>{formatMoney(expense.amount||0,expense.currency||expenseSummary.currency||"USD")}</span>
+                  </div>);
+                })}
+              </div>):(<p style={{fontSize:12,color:C.tx3}}>No receipts saved yet.</p>)}
+            </div>
           </div>
           <div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border}}>
             <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:10}}>TRIP SNAPSHOT</p>
@@ -6015,5 +6251,5 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, companionCheckinMeta, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 

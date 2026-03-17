@@ -179,6 +179,30 @@ class BudgetIncreaseRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class ReceiptParseRequest(BaseModel):
+    expense_date: Optional[str] = None
+    receipt_text: Optional[str] = None
+    receipt_image_base64: Optional[str] = None
+    receipt_image_media_type: Optional[str] = None
+    receipt_name: Optional[str] = None
+    currency: str = "USD"
+
+
+class TripExpenseItemRequest(BaseModel):
+    expense_date: Optional[str] = None
+    merchant: str
+    amount: float
+    currency: str = "USD"
+    category: str = "misc"
+    note: Optional[str] = None
+    receipt_name: Optional[str] = None
+    receipt_text: Optional[str] = None
+
+
+class TripExpenseSaveRequest(BaseModel):
+    items: list[TripExpenseItemRequest] = []
+
+
 class FlightSegmentRequest(BaseModel):
     from_airport: str
     to_airport: str
@@ -634,6 +658,301 @@ def _budget_breakdown(total_budget: float) -> dict[str, float]:
         "activities": activities,
         "transport": transport,
         "misc": misc,
+    }
+
+
+_EXPENSE_CATEGORY_ALIASES: dict[str, str] = {
+    "restaurant": "dining",
+    "food": "dining",
+    "meal": "dining",
+    "cafe": "dining",
+    "coffee": "dining",
+    "groceries": "dining",
+    "grocery": "dining",
+    "hotel": "accommodation",
+    "stay": "accommodation",
+    "lodging": "accommodation",
+    "airbnb": "accommodation",
+    "museum": "activities",
+    "ticket": "activities",
+    "tour": "activities",
+    "activity": "activities",
+    "attraction": "activities",
+    "taxi": "transport",
+    "uber": "transport",
+    "lyft": "transport",
+    "metro": "transport",
+    "train": "transport",
+    "bus": "transport",
+    "fuel": "transport",
+    "gas": "transport",
+    "shopping": "misc",
+    "souvenir": "misc",
+    "misc": "misc",
+}
+
+
+def _normalize_expense_category(raw: Any) -> str:
+    text = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not text:
+        return "misc"
+    if text in {"accommodation", "dining", "activities", "transport", "misc"}:
+        return text
+    return _EXPENSE_CATEGORY_ALIASES.get(text, "misc")
+
+
+def _extract_llm_text(response: dict[str, Any]) -> str:
+    if not isinstance(response, dict):
+        return ""
+    parts = response.get("content")
+    if isinstance(parts, list):
+        texts: list[str] = []
+        for part in parts:
+            if isinstance(part, dict) and str(part.get("type") or "").lower() == "text":
+                text = str(part.get("text") or "").strip()
+                if text:
+                    texts.append(text)
+        if texts:
+            return "\n".join(texts).strip()
+    return str(response.get("output_text") or "").strip()
+
+
+def _parse_json_object_from_text(raw: str) -> Optional[dict[str, Any]]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    for candidate in (fenced, text):
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    start = fenced.find("{")
+    end = fenced.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(fenced[start : end + 1])
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+    return None
+
+
+def _safe_float(raw: Any, fallback: float = 0.0) -> float:
+    try:
+        return float(raw)
+    except Exception:
+        return fallback
+
+
+def _normalize_receipt_item(raw: dict[str, Any], default_date: Optional[str], default_currency: str, default_merchant: str) -> Optional[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    amount = round(_safe_float(raw.get("amount"), 0.0), 2)
+    if amount <= 0:
+        return None
+    merchant = str(raw.get("merchant") or default_merchant or "").strip() or "Receipt expense"
+    return {
+        "expense_date": str(raw.get("expense_date") or default_date or "").strip()[:10] or None,
+        "merchant": merchant,
+        "amount": amount,
+        "currency": str(raw.get("currency") or default_currency or "USD").strip().upper() or "USD",
+        "category": _normalize_expense_category(raw.get("category")),
+        "note": str(raw.get("note") or "").strip(),
+    }
+
+
+def _guess_receipt_category(text: str) -> str:
+    haystack = str(text or "").strip().lower()
+    if not haystack:
+        return "misc"
+    for key, category in _EXPENSE_CATEGORY_ALIASES.items():
+        if key in haystack:
+            return category
+    return "misc"
+
+
+def _parse_receipt_date(raw: str) -> Optional[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    iso_match = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+    if iso_match:
+        return iso_match.group(1)
+    us_match = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2,4})", text)
+    if us_match:
+        month = int(us_match.group(1))
+        day = int(us_match.group(2))
+        year = int(us_match.group(3))
+        if year < 100:
+            year += 2000
+        try:
+            return date(year, month, day).isoformat()
+        except Exception:
+            return None
+    return None
+
+
+def _heuristic_receipt_parse(receipt_text: str, expense_date: Optional[str], currency: str, receipt_name: Optional[str]) -> dict[str, Any]:
+    raw_text = str(receipt_text or "").strip()
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    merchant = (lines[0] if lines else "").strip() or str(receipt_name or "").strip() or "Receipt expense"
+    total = 0.0
+    total_match = re.search(r"(?:total|amount|balance)[^0-9]{0,8}(\d+(?:\.\d{2})?)", raw_text, flags=re.IGNORECASE)
+    if total_match:
+        total = _safe_float(total_match.group(1), 0.0)
+    else:
+        amounts = [float(m) for m in re.findall(r"(?<!\d)(\d{1,4}(?:\.\d{2}))(?!\d)", raw_text)]
+        if amounts:
+            total = max(amounts)
+    total = round(total, 2)
+    detected_date = expense_date or _parse_receipt_date(raw_text)
+    category = _guess_receipt_category(" ".join(lines[:6]))
+    item = {
+        "expense_date": detected_date,
+        "merchant": merchant,
+        "amount": total,
+        "currency": str(currency or "USD").strip().upper() or "USD",
+        "category": category,
+        "note": "Heuristic receipt parse",
+    }
+    items = [item] if total > 0 else []
+    return {
+        "merchant": merchant,
+        "expense_date": detected_date,
+        "currency": str(currency or "USD").strip().upper() or "USD",
+        "items": items,
+        "parse_source": "heuristic",
+    }
+
+
+def _parse_receipt_llm_response(raw_response: dict[str, Any], *, expense_date: Optional[str], currency: str, receipt_name: Optional[str]) -> Optional[dict[str, Any]]:
+    payload = _parse_json_object_from_text(_extract_llm_text(raw_response))
+    if not isinstance(payload, dict):
+        return None
+    merchant = str(payload.get("merchant") or receipt_name or "Receipt expense").strip() or "Receipt expense"
+    default_date = str(payload.get("expense_date") or expense_date or "").strip()[:10] or None
+    default_currency = str(payload.get("currency") or currency or "USD").strip().upper() or "USD"
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        raw_items = []
+    items = [
+        normalized
+        for normalized in (
+            _normalize_receipt_item(item, default_date, default_currency, merchant)
+            for item in raw_items
+        )
+        if normalized
+    ]
+    if not items and _safe_float(payload.get("total_amount"), 0.0) > 0:
+        fallback_item = _normalize_receipt_item(
+            {
+                "merchant": merchant,
+                "amount": payload.get("total_amount"),
+                "currency": default_currency,
+                "category": payload.get("category") or payload.get("category_guess"),
+                "note": payload.get("summary") or payload.get("note"),
+                "expense_date": default_date,
+            },
+            default_date,
+            default_currency,
+            merchant,
+        )
+        if fallback_item:
+            items = [fallback_item]
+    total_amount = round(sum(_safe_float(item.get("amount"), 0.0) for item in items), 2)
+    return {
+        "merchant": merchant,
+        "expense_date": default_date,
+        "currency": default_currency,
+        "items": items,
+        "summary": str(payload.get("summary") or "").strip(),
+        "total_amount": total_amount,
+        "parse_source": "llm",
+    }
+
+
+def _receipt_parse_prompt(currency: str) -> str:
+    return (
+        "You read a travel receipt and convert it into budget-ready JSON. "
+        "Return ONLY JSON with this exact shape: "
+        "{\"merchant\":\"...\",\"expense_date\":\"YYYY-MM-DD or null\",\"currency\":\"USD\","
+        "\"summary\":\"short summary\",\"items\":[{\"merchant\":\"...\",\"amount\":12.34,"
+        "\"currency\":\"USD\",\"category\":\"dining|activities|transport|accommodation|misc\","
+        "\"note\":\"...\",\"expense_date\":\"YYYY-MM-DD or null\"}],"
+        "\"total_amount\":12.34}. "
+        f"If currency is unclear, default to {currency}. "
+        "Use one item if the receipt is a single purchase. "
+        "Do not include markdown."
+    )
+
+
+def _expense_rows_to_public(rows: list[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not row:
+            continue
+        created_at = row.get("created_at") if isinstance(row, dict) else row["created_at"]
+        out.append(
+            {
+                "id": str(row["id"]),
+                "trip_id": str(row["trip_id"]),
+                "user_id": str(row["user_id"]),
+                "expense_date": row["expense_date"].isoformat() if row["expense_date"] else None,
+                "merchant": str(row["merchant"] or ""),
+                "amount": round(float(row["amount"] or 0), 2),
+                "currency": str(row["currency"] or "USD"),
+                "category": _normalize_expense_category(row["category"]),
+                "note": str(row["note"] or ""),
+                "receipt_name": str(row["receipt_name"] or ""),
+                "created_at": created_at.isoformat() if created_at else None,
+            }
+        )
+    return out
+
+
+def _expense_summary(budget_row: Any, expense_rows: list[Any], current_day_date: Optional[str]) -> dict[str, Any]:
+    budget = _json_obj((budget_row["breakdown"] if budget_row else {}) or {})
+    currency = str((budget_row["currency"] if budget_row else "USD") or "USD")
+    total_budget = round(float((budget_row["total_budget"] if budget_row else 0) or 0), 2)
+    spent = round(float((budget_row["spent"] if budget_row else 0) or 0), 2)
+    remaining = round(float((budget_row["remaining"] if budget_row else max(total_budget - spent, 0)) or 0), 2)
+    by_category_spent = Counter()
+    current_day_total = 0.0
+    current_day_iso = str(current_day_date or "").strip()[:10]
+    for row in expense_rows or []:
+        category = _normalize_expense_category(row["category"] if isinstance(row, dict) else row["category"])
+        amount = round(float((row.get("amount") if isinstance(row, dict) else row["amount"]) or 0), 2)
+        by_category_spent[category] += amount
+        raw_date = row.get("expense_date") if isinstance(row, dict) else row["expense_date"]
+        row_date = raw_date.isoformat() if hasattr(raw_date, "isoformat") and raw_date else str(raw_date or "").strip()[:10]
+        if current_day_iso and row_date == current_day_iso:
+            current_day_total += amount
+    categories = []
+    for category in ("accommodation", "dining", "activities", "transport", "misc"):
+        cat_budget = round(float(budget.get(category) or 0), 2)
+        cat_spent = round(float(by_category_spent.get(category, 0.0)), 2)
+        categories.append(
+            {
+                "category": category,
+                "budget": cat_budget,
+                "spent": cat_spent,
+                "remaining": round(cat_budget - cat_spent, 2),
+                "over_budget": cat_spent > cat_budget if cat_budget > 0 else False,
+            }
+        )
+    return {
+        "currency": currency,
+        "daily_target": round(float((budget_row["daily_target"] if budget_row else 0) or 0), 2),
+        "total_budget": total_budget,
+        "spent": spent,
+        "remaining": remaining,
+        "warning_active": bool((budget_row["warning_active"] if budget_row else False) or False),
+        "today_spent": round(current_day_total, 2),
+        "categories": categories,
     }
 
 
@@ -1981,6 +2300,22 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
           breakdown JSONB DEFAULT '{}'::jsonb,
           warning_active BOOLEAN DEFAULT FALSE,
           updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS trip_expenses (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id),
+          expense_date DATE,
+          merchant TEXT,
+          amount NUMERIC(12,2) NOT NULL,
+          currency TEXT DEFAULT 'USD',
+          category TEXT DEFAULT 'misc',
+          note TEXT,
+          receipt_name TEXT,
+          receipt_text TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
         )
         """,
         """
@@ -4758,6 +5093,190 @@ async def increase_budget(trip_id: str, body: BudgetIncreaseRequest, user_id: st
     return {"budget": {"daily_target": body.new_daily_budget, "total_budget": total_budget, "spent": spent, "remaining": remaining, "breakdown": breakdown, "warning_active": False}}
 
 
+@app.post("/trips/{trip_id}/expenses/parse")
+async def parse_trip_receipt(
+    trip_id: str,
+    body: ReceiptParseRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_accepted_trip_member(conn, trip_id, user_id)
+
+    receipt_text = str(body.receipt_text or "").strip()
+    receipt_name = str(body.receipt_name or "").strip()
+    image_base64 = str(body.receipt_image_base64 or "").strip()
+    image_media_type = str(body.receipt_image_media_type or "").strip() or "image/jpeg"
+    expense_date = str(body.expense_date or "").strip()[:10] or None
+    currency = str(body.currency or "USD").strip().upper() or "USD"
+
+    if not receipt_text and not image_base64:
+        raise HTTPException(status_code=422, detail="Provide receipt text or a receipt image")
+
+    parsed: Optional[dict[str, Any]] = None
+    llm_error = ""
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        try:
+            content: list[dict[str, Any]] = [{"type": "text", "text": _receipt_parse_prompt(currency)}]
+            if receipt_text:
+                content.append({"type": "text", "text": f"Receipt text:\n{receipt_text}"})
+            if image_base64:
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image_media_type,
+                            "data": image_base64,
+                        },
+                    }
+                )
+            llm_response = await asyncio.to_thread(
+                _anthropic_messages_proxy,
+                LLMMessageRequest(
+                    max_tokens=900,
+                    temperature=0,
+                    messages=[{"role": "user", "content": content}],
+                ),
+            )
+            parsed = _parse_receipt_llm_response(
+                llm_response,
+                expense_date=expense_date,
+                currency=currency,
+                receipt_name=receipt_name,
+            )
+        except Exception as err:
+            llm_error = str(err)
+            parsed = None
+
+    if parsed is None:
+        parsed = _heuristic_receipt_parse(receipt_text, expense_date, currency, receipt_name)
+    items = parsed.get("items") if isinstance(parsed, dict) else []
+    if not isinstance(items, list):
+        items = []
+    total_amount = round(sum(_safe_float(item.get("amount"), 0.0) for item in items if isinstance(item, dict)), 2)
+    return {
+        "parsed": {
+            "merchant": str((parsed or {}).get("merchant") or receipt_name or "Receipt expense"),
+            "expense_date": (parsed or {}).get("expense_date") or expense_date,
+            "currency": str((parsed or {}).get("currency") or currency or "USD"),
+            "summary": str((parsed or {}).get("summary") or ""),
+            "parse_source": str((parsed or {}).get("parse_source") or ("llm" if not llm_error else "heuristic")),
+            "total_amount": total_amount,
+            "items": items,
+        },
+        "llm_error": llm_error or None,
+    }
+
+
+@app.post("/trips/{trip_id}/expenses")
+async def save_trip_expenses(
+    trip_id: str,
+    body: TripExpenseSaveRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    items = [item for item in (body.items or []) if round(_safe_float(item.amount, 0.0), 2) > 0]
+    if not items:
+        raise HTTPException(status_code=422, detail="No valid expense items to save")
+
+    async with db_pool.acquire() as conn:
+        await _require_accepted_trip_member(conn, trip_id, user_id)
+        async with conn.transaction():
+            for item in items:
+                await conn.execute(
+                    """
+                    INSERT INTO trip_expenses (
+                      trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, receipt_text
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    """,
+                    trip_id,
+                    user_id,
+                    _safe_iso_date(item.expense_date),
+                    str(item.merchant or "").strip() or "Receipt expense",
+                    round(_safe_float(item.amount, 0.0), 2),
+                    str(item.currency or "USD").strip().upper() or "USD",
+                    _normalize_expense_category(item.category),
+                    str(item.note or "").strip(),
+                    str(item.receipt_name or "").strip(),
+                    str(item.receipt_text or "").strip(),
+                )
+            budget = await conn.fetchrow(
+                "SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1",
+                trip_id,
+            )
+            if budget:
+                added_total = round(sum(round(_safe_float(item.amount, 0.0), 2) for item in items), 2)
+                total_budget = round(float(budget["total_budget"] or 0), 2)
+                spent = round(float(budget["spent"] or 0) + added_total, 2)
+                remaining = round(total_budget - spent, 2)
+                warning_active = spent > total_budget if total_budget > 0 else False
+                await conn.execute(
+                    """
+                    UPDATE budgets
+                    SET spent = $1,
+                        remaining = $2,
+                        warning_active = $3,
+                        updated_at = NOW()
+                    WHERE trip_id = $4
+                    """,
+                    spent,
+                    remaining,
+                    warning_active,
+                    trip_id,
+                )
+            recent_rows = await conn.fetch(
+                """
+                SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, created_at
+                FROM trip_expenses
+                WHERE trip_id = $1
+                ORDER BY COALESCE(expense_date, created_at::date) DESC, created_at DESC
+                LIMIT 12
+                """,
+                trip_id,
+            )
+            refreshed_budget = await conn.fetchrow(
+                "SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1",
+                trip_id,
+            )
+
+    summary = _expense_summary(refreshed_budget, recent_rows, None)
+    return {
+        "saved": len(items),
+        "expenses": _expense_rows_to_public(recent_rows),
+        "summary": summary,
+    }
+
+
+@app.get("/trips/{trip_id}/expenses")
+async def get_trip_expenses(trip_id: str, user_id: str = Depends(get_current_user_id)):
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with db_pool.acquire() as conn:
+        await _require_accepted_trip_member(conn, trip_id, user_id)
+        expense_rows = await conn.fetch(
+            """
+            SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, created_at
+            FROM trip_expenses
+            WHERE trip_id = $1
+            ORDER BY COALESCE(expense_date, created_at::date) DESC, created_at DESC
+            LIMIT 20
+            """,
+            trip_id,
+        )
+        budget_row = await conn.fetchrow(
+            "SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1",
+            trip_id,
+        )
+    return {
+        "expenses": _expense_rows_to_public(expense_rows),
+        "summary": _expense_summary(budget_row, expense_rows, None),
+    }
+
+
 _AIRPORT_STATIC: list[dict[str, str]] = [
     {"iata": "ATL", "name": "Hartsfield-Jackson Atlanta International", "city": "Atlanta", "country": "US"},
     {"iata": "LAX", "name": "Los Angeles International", "city": "Los Angeles", "country": "US"},
@@ -5949,6 +6468,20 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
             """,
             trip_id,
         )
+        budget_row = await conn.fetchrow(
+            "SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1",
+            trip_id,
+        )
+        expense_rows = await conn.fetch(
+            """
+            SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, created_at
+            FROM trip_expenses
+            WHERE trip_id = $1
+            ORDER BY COALESCE(expense_date, created_at::date) DESC, created_at DESC
+            LIMIT 12
+            """,
+            trip_id,
+        )
 
         planning_state = _json_obj((planning_row["state"] if planning_row else {}) or {})
         locked_window = planning_state.get("availability_locked_window") if isinstance(planning_state, dict) else None
@@ -6046,6 +6579,12 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
         planning_state if isinstance(planning_state, dict) else {},
         int(current_day["day_number"]) if isinstance(current_day, dict) and current_day.get("day_number") else None,
     )
+    expense_summary = _expense_summary(
+        budget_row,
+        expense_rows,
+        current_day["date"] if isinstance(current_day, dict) else None,
+    )
+    recent_expenses = _expense_rows_to_public(expense_rows)
     if isinstance(current_day, dict):
         item_status_map = {
             str(row.get("activity_id") or ""): row
@@ -6101,6 +6640,8 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
             "day_progress": day_progress,
             "stays": stay_snapshot,
             "today_meals": dining_snapshot,
+            "expense_summary": expense_summary,
+            "recent_expenses": recent_expenses,
             "stats": {
                 "day_count": len(day_items),
                 "approved_days": approved_days,
