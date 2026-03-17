@@ -1509,10 +1509,109 @@ async function askDining(destinations, budgetTier, dietary, days, groupSize) {
   var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
   var destStr = (destinations || []).map(function(d) { return d.name + ", " + d.country; }).join("; ") || "Kyoto, Japan";
   var dietStr = (dietary && dietary.length > 0) ? dietary.join(", ") : "none";
-  var sys = "You are WanderPlan Dining Agent. Plan meals for a " + (days || 10) + "-day trip.\n\nReturn ONLY a JSON array:\n[{\"day\":1,\"destination\":\"City\",\"meals\":[{\"type\":\"Breakfast\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":25,\"dietaryOk\":true,\"note\":\"Why go here\"}]}]\n\n3 meals per day (Breakfast, Lunch, Dinner). Dietary: " + dietStr + ". Budget: " + (bd[budgetTier] || bd.moderate) + ". Plan first 3 days. Use authentic local restaurants. ONLY JSON array.";
+  var sys = "You are WanderPlan Dining Agent. Plan meals for a " + (days || 10) + "-day trip.\n\nReturn ONLY a JSON array:\n[{\"day\":1,\"destination\":\"City\",\"meals\":[{\"type\":\"Breakfast\",\"time\":\"08:00\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":25,\"rating\":4.6,\"dietaryOk\":true,\"note\":\"Why go here\",\"options\":[{\"name\":\"Restaurant A\",\"cuisine\":\"Cafe\",\"cost\":22,\"rating\":4.7,\"note\":\"Known for pastries\"},{\"name\":\"Restaurant B\",\"cuisine\":\"Brunch\",\"cost\":26,\"rating\":4.5,\"note\":\"High-rated brunch spot\"},{\"name\":\"Restaurant C\",\"cuisine\":\"Bakery\",\"cost\":18,\"rating\":4.4,\"note\":\"Quick local favorite\"}]}]}]\n\n3 meals per day (Breakfast, Lunch, Dinner). Dietary: " + dietStr + ". Budget: " + (bd[budgetTier] || bd.moderate) + ". Plan first 4 days. Use authentic local restaurants. Give each meal 3 distinct rated restaurant options when possible. ONLY JSON array.";
   var msg = "Plan meals for: " + destStr + ". " + (days || 10) + " days. " + (groupSize || 2) + " people. Dietary: " + dietStr;
   var res = await callLLM(sys, msg, 1000);
   return Array.isArray(res) ? res : [];
+}
+
+function mealOptionVariants(type){
+  var t=String(type||"meal").toLowerCase();
+  if(t==="breakfast")return [
+    {suffix:"Sunrise Cafe",cuisine:"Cafe"},
+    {suffix:"Brunch Table",cuisine:"Brunch"},
+    {suffix:"Bakery Kitchen",cuisine:"Bakery"},
+    {suffix:"Morning Roastery",cuisine:"Coffee"}
+  ];
+  if(t==="lunch")return [
+    {suffix:"Market Bistro",cuisine:"Bistro"},
+    {suffix:"Laneway Kitchen",cuisine:"Local"},
+    {suffix:"Harbor Grill",cuisine:"Grill"},
+    {suffix:"Food Hall",cuisine:"Street Food"}
+  ];
+  return [
+    {suffix:"Supper Club",cuisine:"Local Fine Dining"},
+    {suffix:"Chef's Table",cuisine:"Modern"},
+    {suffix:"Night Market House",cuisine:"Street Food"},
+    {suffix:"Ember Kitchen",cuisine:"Regional"}
+  ];
+}
+
+function mealTimeForType(type){
+  var t=String(type||"meal").toLowerCase();
+  if(t==="breakfast")return "08:00";
+  if(t==="lunch")return "13:00";
+  if(t==="dinner")return "19:00";
+  return "";
+}
+
+export function normalizeDiningPlan(rows){
+  var list=Array.isArray(rows)?rows:[];
+  return list.map(function(day,dayIndex){
+    var destination=String(day&&day.destination||"City").trim()||"City";
+    var mealsIn=Array.isArray(day&&day.meals)?day.meals:[];
+    var mealsOut=mealsIn.map(function(meal,mealIndex){
+      var type=String(meal&&meal.type||"Meal").trim()||"Meal";
+      var optionSeed=(Array.isArray(meal&&meal.options)&&meal.options.length?meal.options:[meal]).map(function(opt,optIndex){
+        return {
+          option_id:String(opt&&opt.option_id||("meal-opt-"+dayIndex+"-"+mealIndex+"-"+optIndex)),
+          name:String(opt&&opt.name||meal&&meal.name||((destination+" "+(mealOptionVariants(type)[optIndex]||mealOptionVariants(type)[0]).suffix))).trim(),
+          city:String(opt&&opt.city||meal&&meal.city||destination).trim(),
+          cuisine:String(opt&&opt.cuisine||meal&&meal.cuisine||"Local").trim()||"Local",
+          cost:Number((opt&&opt.cost)!==undefined?opt.cost:(meal&&meal.cost)!==undefined?meal.cost:0)||0,
+          rating:Number((opt&&opt.rating)!==undefined?opt.rating:(meal&&meal.rating)!==undefined?meal.rating:(4.2+(optIndex*0.2)))||4.2,
+          note:String(opt&&opt.note||opt&&opt.near_poi||meal&&meal.note||"").trim(),
+          travel_minutes:Number((opt&&opt.travel_minutes)!==undefined?opt.travel_minutes:(opt&&opt.travelMinutes)!==undefined?opt.travelMinutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0,
+          tags:Array.isArray(opt&&opt.tags)?opt.tags:[]
+        };
+      });
+      var variants=mealOptionVariants(type);
+      var options=optionSeed.slice();
+      variants.forEach(function(variant,variantIndex){
+        if(options.length>=4)return;
+        var candidateName=((destination+" "+variant.suffix).replace(/\s+/g," ")).trim();
+        var exists=options.some(function(opt){
+          return String(opt&&opt.name||"").trim().toLowerCase()===candidateName.toLowerCase();
+        });
+        if(exists)return;
+        options.push({
+          option_id:"meal-opt-"+dayIndex+"-"+mealIndex+"-fallback-"+variantIndex,
+          name:candidateName,
+          city:destination,
+          cuisine:variant.cuisine,
+          cost:Math.max(8,Math.round((Number(meal&&meal.cost||24)||24)+(variantIndex*4)-4)),
+          rating:Number((4.8-(variantIndex*0.1)).toFixed(1)),
+          note:"Popular "+variant.cuisine.toLowerCase()+" option in "+destination+".",
+          travel_minutes:Math.max(4,8+(variantIndex*4)),
+          tags:[String(type||"meal").toLowerCase(),variant.cuisine.toLowerCase()]
+        });
+      });
+      var selectedOpt=(meal&&meal.selectedOption!==undefined&&meal.selectedOption!==null)?Number(meal.selectedOption):0;
+      if(!(selectedOpt>=0&&selectedOpt<options.length))selectedOpt=0;
+      var picked=options[selectedOpt]||options[0]||{};
+      return {
+        type:type,
+        time:String(meal&&meal.time||mealTimeForType(type)).trim(),
+        date:String(meal&&meal.date||day&&day.date||"").trim(),
+        options:options,
+        selectedOption:selectedOpt,
+        name:String(picked.name||meal&&meal.name||"Restaurant").trim(),
+        city:String(picked.city||meal&&meal.city||destination).trim(),
+        cuisine:String(picked.cuisine||meal&&meal.cuisine||"Local").trim()||"Local",
+        cost:Number((picked.cost!==undefined)?picked.cost:(meal&&meal.cost)!==undefined?meal.cost:0)||0,
+        rating:Number((picked.rating!==undefined)?picked.rating:(meal&&meal.rating)!==undefined?meal.rating:4.4)||4.4,
+        dietaryOk:typeof (meal&&meal.dietaryOk)==="boolean"?meal.dietaryOk:true,
+        note:String(picked.note||meal&&meal.note||"").trim(),
+        travelMinutes:Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0
+      };
+    });
+    return {
+      day:Number(day&&day.day||dayIndex+1)||dayIndex+1,
+      date:String(day&&day.date||"").trim(),
+      destination:destination,
+      meals:mealsOut
+    };
+  });
 }
 
 async function askItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, budgetTier, days, groupSize, startDateIso) {
@@ -2193,6 +2292,7 @@ export default function WanderPlan(){
       meal.name=String(picked.name||meal.name||"");
       meal.cuisine=String(picked.cuisine||meal.cuisine||"Local");
       meal.cost=Number((picked.cost!==undefined)?picked.cost:meal.cost)||0;
+      meal.rating=Number((picked.rating!==undefined)?picked.rating:meal.rating)||0;
       meal.note=String(picked.note||picked.near_poi||meal.note||"");
       meal.city=String(picked.city||meal.city||"");
       meal.travelMinutes=Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(picked.travelMinutes!==undefined)?picked.travelMinutes:meal.travelMinutes)||0;
@@ -2390,8 +2490,9 @@ export default function WanderPlan(){
       setStayVotes((st.stay_votes&&typeof st.stay_votes==="object")?st.stay_votes:{});
       setSFC((st.stay_final_choices&&typeof st.stay_final_choices==="object")?st.stay_final_choices:{});
       if(Array.isArray(st.meal_plan)){
-        setMeals(st.meal_plan);
-        setMD(st.meal_plan.length>0);
+        var normalizedMealPlan=normalizeDiningPlan(st.meal_plan);
+        setMeals(normalizedMealPlan);
+        setMD(normalizedMealPlan.length>0);
       }
       setMealVotes((st.meal_votes&&typeof st.meal_votes==="object")?st.meal_votes:{});
       setAData(function(prev){
@@ -2457,7 +2558,7 @@ export default function WanderPlan(){
         if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
         if(state.stay_votes&&typeof state.stay_votes==="object")setStayVotes(state.stay_votes);
         if(state.stay_final_choices&&typeof state.stay_final_choices==="object")setSFC(state.stay_final_choices);
-        if(Array.isArray(state.meal_plan)){setMeals(state.meal_plan);setMD(state.meal_plan.length>0);}
+        if(Array.isArray(state.meal_plan)){var normalizedMealPlan=normalizeDiningPlan(state.meal_plan);setMeals(normalizedMealPlan);setMD(normalizedMealPlan.length>0);}
         if(state.meal_votes&&typeof state.meal_votes==="object")setMealVotes(state.meal_votes);
         setAData(function(prev){
           var returnedTripDays=Math.max(0,Number(state.duration_days_locked!==undefined?state.duration_days_locked:sharedDurationDays)||0);
@@ -6300,12 +6401,12 @@ export default function WanderPlan(){
         if(!mealAsk.trim()||mealAskLoad)return;var msg=mealAsk.trim();setMA("");setMAL(true);
         setMChat(function(p){return p.concat([{from:"user",text:msg}]);});
         var destStr=dests.map(function(d){return d.name;}).join(", ")||"your destinations";
-        var sys="You are WanderPlan Dining Agent. User wants to modify meals. Destinations: "+destStr+". Dietary: "+dietStr+". Budget: "+user.budget+".\n\nIf new restaurants: {\"type\":\"meals\",\"day\":{\"day\":1,\"destination\":\"City\",\"meals\":[{\"type\":\"Dinner\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":30,\"dietaryOk\":true,\"note\":\"Why great\"}]}}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nONLY JSON.";
+        var sys="You are WanderPlan Dining Agent. User wants to modify meals. Destinations: "+destStr+". Dietary: "+dietStr+". Budget: "+user.budget+".\n\nIf new restaurants: {\"type\":\"meals\",\"day\":{\"day\":1,\"destination\":\"City\",\"meals\":[{\"type\":\"Dinner\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":30,\"rating\":4.6,\"dietaryOk\":true,\"note\":\"Why great\",\"options\":[{\"name\":\"Restaurant A\",\"cuisine\":\"Local\",\"cost\":28,\"rating\":4.7,\"note\":\"Popular local dinner spot\"},{\"name\":\"Restaurant B\",\"cuisine\":\"Modern\",\"cost\":34,\"rating\":4.5,\"note\":\"Well-rated chef-led option\"},{\"name\":\"Restaurant C\",\"cuisine\":\"Street Food\",\"cost\":18,\"rating\":4.4,\"note\":\"Casual neighborhood favorite\"}]}]}}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nReturn 3 distinct rated restaurant options per meal when possible. ONLY JSON.";
         callLLM(sys,msg,800).then(function(res){
           setMAL(false);
           if(res&&res.type==="meals"&&res.day){
             setMeals(function(p){
-              var next=(Array.isArray(p)?p:[]).concat([res.day]);
+              var next=normalizeDiningPlan((Array.isArray(p)?p:[]).concat([res.day]));
               saveTripPlanningState({state:{meal_plan:next,meal_votes:mealVotes}}).then(function(){
                 refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
               });
@@ -6336,6 +6437,7 @@ export default function WanderPlan(){
                     city:s.city||"",
                     cuisine:s.cuisine||((s.tags&&s.tags[0])||"Local"),
                     cost:s.cost||0,
+                    rating:Number((s.rating!==undefined)?s.rating:4.5)||4.5,
                     tags:s.tags||[],
                     near_poi:s.near_poi||"",
                     travel_minutes:s.travel_from_poi_minutes||0
@@ -6346,6 +6448,7 @@ export default function WanderPlan(){
                       city:o.city||"",
                       cuisine:o.cuisine||((o.tags&&o.tags[0])||"Local"),
                       cost:Number((o.cost!==undefined)?o.cost:0)||0,
+                      rating:Number((o.rating!==undefined)?o.rating:4.5)||4.5,
                       tags:Array.isArray(o.tags)?o.tags:[],
                       near_poi:o.near_poi||s.near_poi||"",
                       travel_minutes:Number((o.travel_minutes!==undefined)?o.travel_minutes:0)||0
@@ -6362,12 +6465,13 @@ export default function WanderPlan(){
                     city:top.city||s.city||"",
                     cuisine:top.cuisine||((s.tags&&s.tags[0])||"Local"),
                     cost:Number((top.cost!==undefined)?top.cost:(s.cost||0))||0,
+                    rating:Number((top.rating!==undefined)?top.rating:(s.rating!==undefined)?s.rating:4.5)||4.5,
                     dietaryOk:true,
                     note:top.near_poi||s.near_poi||((s.tags||[]).join(", ")),
                     travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s.travel_from_poi_minutes||0))||0
                   });
                 });
-                var rows=Object.keys(byDay).sort(function(a,b){return Number(a)-Number(b);}).map(function(k){return byDay[k];});
+                var rows=normalizeDiningPlan(Object.keys(byDay).sort(function(a,b){return Number(a)-Number(b);}).map(function(k){return byDay[k];}));
                 setMeals(rows);setML(false);setMD(true);
                 saveTripPlanningState({state:{meal_plan:rows,meal_votes:{}}}).then(function(){
                   refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
@@ -6375,14 +6479,14 @@ export default function WanderPlan(){
                 return;
               }
               return askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
-                var nextMeals=res&&res.length?res:[];
+                var nextMeals=normalizeDiningPlan(res&&res.length?res:[]);
                 setMeals(nextMeals);setML(false);setMD(true);
                 saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
                   refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
                 });
               });
             }).catch(function(){askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
-              var nextMeals=res&&res.length?res:[];
+              var nextMeals=normalizeDiningPlan(res&&res.length?res:[]);
               setMeals(nextMeals);setML(false);setMD(true);
               saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
                 refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
@@ -6390,7 +6494,7 @@ export default function WanderPlan(){
             });});
           }else{
             askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
-              var nextMeals=res&&res.length?res:[];
+              var nextMeals=normalizeDiningPlan(res&&res.length?res:[]);
               setMeals(nextMeals);setML(false);setMD(true);
               saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
                 refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
@@ -6465,7 +6569,7 @@ export default function WanderPlan(){
                       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                         <span style={{fontSize:10,color:typeCol,fontWeight:600}}>{m.type}</span>
                         {m.time&&<span style={{fontSize:10,color:C.tx3}}>{m.time}</span>}
-                        <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>
+                        <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>{m.rating? <span style={{fontSize:10,color:C.wrn,fontWeight:700}}>{"*"+Number(m.rating).toFixed(1)}</span> : null}
                       </div>
                       <div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,flexWrap:"wrap"}}>
                         <span>{m.cuisine}</span>
@@ -6479,7 +6583,7 @@ export default function WanderPlan(){
                   {opts.length>1&&(<div style={{display:"flex",gap:6,flexWrap:"wrap",paddingLeft:16}}>
                     {opts.map(function(opt,oi){
                       var picked=selectedOpt===oi;
-                      return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{opt.name}{" · $"+(opt.cost||0)}</button>;
+                      return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{opt.name+" *"+Number(opt.rating||0).toFixed(1)+" $"+(opt.cost||0)}</button>;
                     })}
                   </div>)}
                   <div style={{display:"flex",flexWrap:"wrap",gap:8,paddingLeft:16}}>
@@ -6617,4 +6721,5 @@ export default function WanderPlan(){
 }
 
 export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, companionCheckinMeta, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+
 

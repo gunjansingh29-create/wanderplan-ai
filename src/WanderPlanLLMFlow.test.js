@@ -32,6 +32,7 @@ import {
   mergeVoteRows,
   moveFlightRouteStop,
   normalizeDestinationVoteState,
+  normalizeDiningPlan,
   normalizePoiStateMap,
   normalizePersonalBucketItems,
   readDestinationVoteRow,
@@ -388,6 +389,29 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         bookingSource: "Booking.com",
       })
     ).toContain("google.com/search?q=");
+  });
+
+  test("normalizeDiningPlan expands meal options and keeps ratings", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 1,
+        destination: "Auckland",
+        meals: [
+          {
+            type: "Breakfast",
+            name: "Harbor Brunch",
+            cuisine: "Cafe",
+            cost: 24,
+            rating: 4.7,
+          },
+        ],
+      },
+    ]);
+    expect(out[0].meals[0].options.length).toBeGreaterThanOrEqual(3);
+    expect(out[0].meals[0].rating).toBe(4.7);
+    expect(out[0].meals[0].options[0]).toEqual(
+      expect.objectContaining({ name: "Harbor Brunch", rating: 4.7 })
+    );
   });
 
   test("receipt helpers total parsed items and format budget values", () => {
