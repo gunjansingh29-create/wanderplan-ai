@@ -244,6 +244,17 @@ function receiptItemsTotal(items){
   },0);
 }
 
+function defaultExpenseSplitMemberIds(members,currentUserId){
+  var out=[];
+  (Array.isArray(members)?members:[]).forEach(function(member){
+    var memberId=String(member&&member.user_id||member&&member.id||"").trim();
+    if(memberId&&out.indexOf(memberId)<0)out.push(memberId);
+  });
+  var currentId=String(currentUserId||"").trim();
+  if(currentId&&out.indexOf(currentId)<0)out.push(currentId);
+  return out;
+}
+
 function readFileAsBase64(file){
   return new Promise(function(resolve,reject){
     if(!file)return resolve({name:"",mediaType:"",base64:""});
@@ -1732,6 +1743,22 @@ export default function WanderPlan(){
   var[receiptLoad,setReceiptLoad]=useState(false);
   var[receiptSaveLoad,setReceiptSaveLoad]=useState(false);
   var[receiptMsg,setReceiptMsg]=useState("");
+  var[expensePaidBy,setExpensePaidBy]=useState("");
+  var[expenseSplitWith,setExpenseSplitWith]=useState([]);
+  var[manualExpensePaidBy,setManualExpensePaidBy]=useState("");
+  var[manualExpenseSplitWith,setManualExpenseSplitWith]=useState([]);
+  var[manualExpense,setManualExpense]=useState({merchant:"",amount:"",category:"dining",note:"",date:""});
+  useEffect(function(){
+    if(sc!=="companion")return;
+    var comp=(companionData&&typeof companionData==="object")?companionData:{};
+    var tripMembers=(Array.isArray(comp.members)&&comp.members.length>0)?comp.members:(Array.isArray(viewTrip&&viewTrip.members)?viewTrip.members:[]);
+    var currentId=String(userIdFromToken(authToken)||"").trim()||makeVoteUserId(user);
+    var defaults=defaultExpenseSplitMemberIds(tripMembers,currentId);
+    if(currentId&&!expensePaidBy)setExpensePaidBy(currentId);
+    if(defaults.length>0&&(!Array.isArray(expenseSplitWith)||expenseSplitWith.length===0))setExpenseSplitWith(defaults);
+    if(currentId&&!manualExpensePaidBy)setManualExpensePaidBy(currentId);
+    if(currentId&&(!Array.isArray(manualExpenseSplitWith)||manualExpenseSplitWith.length===0))setManualExpenseSplitWith([currentId]);
+  },[sc,companionData,viewTrip,authToken,user,expensePaidBy,expenseSplitWith,manualExpensePaidBy,manualExpenseSplitWith]);
   var flightPlannerDests=(function(){
     var tripCtx=(newTrip&&typeof newTrip==="object")?newTrip:{};
     var tripDestInputs=(Array.isArray(tripCtx.dests)&&tripCtx.dests.length)
@@ -3498,10 +3525,13 @@ export default function WanderPlan(){
     var diningSnapshot=Array.isArray(comp.today_meals)?comp.today_meals:[];
     var expenseSummary=(comp.expense_summary&&typeof comp.expense_summary==="object")?comp.expense_summary:{};
     var recentExpenses=Array.isArray(comp.recent_expenses)?comp.recent_expenses:[];
+    var expenseBalances=Array.isArray(comp.expense_member_balances)?comp.expense_member_balances:[];
     var dayProgress=(comp.day_progress&&typeof comp.day_progress==="object")?comp.day_progress:{};
     var members=Array.isArray(comp.members)&&comp.members.length>0?comp.members:(Array.isArray(tr.members)?tr.members:[]);
     var lockedWindow=comp.locked_window||{};
     var tripTitle=(comp.trip&&comp.trip.name)||tr.name||"Trip";
+    var currentUserVoteId=String(userIdFromToken(authToken)||"").trim()||makeVoteUserId(user);
+    var splitDefaultIds=defaultExpenseSplitMemberIds(members,currentUserVoteId);
     var companionReady=(comp.is_ready!==false)&&!!(today||currentItem||nextItem||upcoming.length);
     var readinessCopy=companionReadinessCopy(comp.readiness_reason);
     var companionActions=[
@@ -3609,7 +3639,9 @@ export default function WanderPlan(){
           category:String(item&&item.category||"misc"),
           note:String(item&&item.note||parsed.summary||""),
           receipt_name:String(receiptImage&&receiptImage.name||"").trim(),
-          receipt_text:String(receiptText||"").trim()
+          receipt_text:String(receiptText||"").trim(),
+          paid_by_user_id:String(expensePaidBy||currentUserVoteId||"").trim(),
+          split_with_user_ids:(Array.isArray(expenseSplitWith)&&expenseSplitWith.length?expenseSplitWith:[String(expensePaidBy||currentUserVoteId||"").trim()].filter(Boolean))
         };
       })).then(function(res){
         setReceiptSaveLoad(false);
@@ -3621,13 +3653,81 @@ export default function WanderPlan(){
           if(!(prev&&typeof prev==="object"))return prev;
           return Object.assign({},prev,{
             expense_summary:(res&&res.summary)||prev.expense_summary||{},
-            recent_expenses:(res&&res.expenses)||prev.recent_expenses||[]
+            recent_expenses:(res&&res.expenses)||prev.recent_expenses||[],
+            expense_member_balances:(res&&res.member_balances)||prev.expense_member_balances||[]
           });
         });
         return refreshCompanionNow(tripId,true);
       }).then(function(){return null;}).catch(function(e){
         setReceiptSaveLoad(false);
         setReceiptMsg(String(e&&e.message||"Could not save receipt"));
+      });
+    }
+    function saveManualExpense(){
+      var tripId=String((tr&&tr.id)||currentTripId||"").trim();
+      var amount=Number(manualExpense.amount||0)||0;
+      var paidBy=String(manualExpensePaidBy||expensePaidBy||currentUserVoteId||"").trim();
+      var splitWith=(Array.isArray(manualExpenseSplitWith)&&manualExpenseSplitWith.length?manualExpenseSplitWith:[paidBy].filter(Boolean));
+      if(!String(manualExpense.merchant||"").trim()||amount<=0){
+        setReceiptMsg("Enter a merchant and amount for the manual expense.");
+        return;
+      }
+      setReceiptSaveLoad(true);
+      setReceiptMsg("");
+      saveReceiptItemsForTrip(tripId,[{
+        expense_date:String(manualExpense.date||today&&today.date||new Date().toISOString().slice(0,10)).slice(0,10),
+        merchant:String(manualExpense.merchant||"").trim(),
+        amount:amount,
+        currency:String(expenseSummary.currency||"USD"),
+        category:String(manualExpense.category||"misc"),
+        note:String(manualExpense.note||"").trim(),
+        paid_by_user_id:paidBy,
+        split_with_user_ids:splitWith
+      }]).then(function(res){
+        setReceiptSaveLoad(false);
+        setManualExpense({merchant:"",amount:"",category:"dining",note:"",date:""});
+        if(paidBy)setManualExpenseSplitWith([paidBy]);
+        setReceiptMsg("Manual expense saved to trip budget.");
+        setCompanionData(function(prev){
+          if(!(prev&&typeof prev==="object"))return prev;
+          return Object.assign({},prev,{
+            expense_summary:(res&&res.summary)||prev.expense_summary||{},
+            recent_expenses:(res&&res.expenses)||prev.recent_expenses||[],
+            expense_member_balances:(res&&res.member_balances)||prev.expense_member_balances||[]
+          });
+        });
+        return refreshCompanionNow(tripId,true);
+      }).then(function(){return null;}).catch(function(e){
+        setReceiptSaveLoad(false);
+        setReceiptMsg(String(e&&e.message||"Could not save manual expense"));
+      });
+    }
+    function toggleExpenseSplitMember(memberId){
+      var nextId=String(memberId||"").trim();
+      if(!nextId)return;
+      setExpenseSplitWith(function(prev){
+        var list=Array.isArray(prev)?prev.slice():[];
+        var idx=list.indexOf(nextId);
+        if(idx>=0){
+          list.splice(idx,1);
+        }else{
+          list.push(nextId);
+        }
+        return list;
+      });
+    }
+    function toggleManualExpenseSplitMember(memberId){
+      var nextId=String(memberId||"").trim();
+      if(!nextId)return;
+      setManualExpenseSplitWith(function(prev){
+        var list=Array.isArray(prev)?prev.slice():[];
+        var idx=list.indexOf(nextId);
+        if(idx>=0){
+          list.splice(idx,1);
+        }else{
+          list.push(nextId);
+        }
+        return list;
       });
     }
     return(<div style={{maxWidth:720}}>
@@ -3900,6 +4000,31 @@ export default function WanderPlan(){
                 })}
               </div>
             )}
+            <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 1fr",gap:8,marginBottom:10}}>
+              <div>
+                <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:6}}>Paid by</p>
+                <select value={expensePaidBy} onChange={function(e){setExpensePaidBy(e.target.value);}} style={{width:"100%",padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:C.bg,color:"#fff",fontSize:13}}>
+                  {members.map(function(member,idx){
+                    var memberId=String(member&&member.user_id||member&&member.id||"").trim();
+                    var label=String(member&&member.display_name||member&&member.name||("Traveler "+(idx+1)));
+                    return(<option key={memberId||idx} value={memberId}>{label}</option>);
+                  })}
+                </select>
+              </div>
+              <div>
+                <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:6}}>Split with</p>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6,minHeight:48,padding:"8px 10px",borderRadius:12,border:"1px solid "+C.border,background:C.bg}}>
+                  {members.map(function(member,idx){
+                    var memberId=String(member&&member.user_id||member&&member.id||"").trim();
+                    var label=String(member&&member.display_name||member&&member.name||("Traveler "+(idx+1)));
+                    var active=expenseSplitWith.indexOf(memberId)>=0;
+                    return(<button key={memberId||idx} onClick={function(){toggleExpenseSplitMember(memberId);}} style={{padding:"6px 10px",borderRadius:999,border:"1px solid "+(active?C.tealL:C.border),background:active?(C.teal+"12"):C.surface,color:active?C.tealL:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                      {label}
+                    </button>);
+                  })}
+                </div>
+              </div>
+            </div>
             <textarea
               value={receiptText}
               onChange={function(e){setReceiptText(e.target.value);}}
@@ -3941,6 +4066,86 @@ export default function WanderPlan(){
                 </div>
               </div>
             )}
+            <div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+              <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>MANUAL EXPENSE</p>
+              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1.2fr .8fr",gap:8,marginBottom:8}}>
+                <input
+                  value={manualExpense.merchant}
+                  onChange={function(e){setManualExpense(function(prev){return Object.assign({},prev,{merchant:e.target.value});});}}
+                  placeholder="Merchant or expense name"
+                  style={{width:"100%",padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:13}}
+                />
+                <input
+                  value={manualExpense.amount}
+                  onChange={function(e){setManualExpense(function(prev){return Object.assign({},prev,{amount:e.target.value});});}}
+                  placeholder="Amount"
+                  inputMode="decimal"
+                  style={{width:"100%",padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:13}}
+                />
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 1fr",gap:8,marginBottom:8}}>
+                <select value={manualExpense.category} onChange={function(e){setManualExpense(function(prev){return Object.assign({},prev,{category:e.target.value});});}} style={{width:"100%",padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:13}}>
+                  {["dining","activities","transport","accommodation","misc"].map(function(cat){return <option key={cat} value={cat}>{cat}</option>;})}
+                </select>
+                <input
+                  type="date"
+                  value={manualExpense.date}
+                  onChange={function(e){setManualExpense(function(prev){return Object.assign({},prev,{date:e.target.value});});}}
+                  style={{width:"100%",padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:13}}
+                />
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 1fr",gap:8,marginBottom:8}}>
+                <div>
+                  <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:6}}>Manual paid by</p>
+                  <select value={manualExpensePaidBy} onChange={function(e){var next=e.target.value;setManualExpensePaidBy(next);if(!Array.isArray(manualExpenseSplitWith)||manualExpenseSplitWith.length===0)setManualExpenseSplitWith(next?[next]:[]);}} style={{width:"100%",padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:13}}>
+                    {members.map(function(member,idx){
+                      var memberId=String(member&&member.user_id||member&&member.id||"").trim();
+                      var label=String(member&&member.display_name||member&&member.name||("Traveler "+(idx+1)));
+                      return(<option key={memberId||idx} value={memberId}>{label}</option>);
+                    })}
+                  </select>
+                </div>
+                <div>
+                  <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:6}}>Manual split with</p>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6,minHeight:48,padding:"8px 10px",borderRadius:12,border:"1px solid "+C.border,background:C.surface}}>
+                    {members.map(function(member,idx){
+                      var memberId=String(member&&member.user_id||member&&member.id||"").trim();
+                      var label=String(member&&member.display_name||member&&member.name||("Traveler "+(idx+1)));
+                      var active=manualExpenseSplitWith.indexOf(memberId)>=0;
+                      return(<button key={memberId||idx} onClick={function(){toggleManualExpenseSplitMember(memberId);}} style={{padding:"6px 10px",borderRadius:999,border:"1px solid "+(active?C.sky:C.border),background:active?(C.sky+"12"):C.surface,color:active?C.sky:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                        {label}
+                      </button>);
+                    })}
+                  </div>
+                </div>
+              </div>
+              <textarea
+                value={manualExpense.note}
+                onChange={function(e){setManualExpense(function(prev){return Object.assign({},prev,{note:e.target.value});});}}
+                placeholder="Optional note"
+                style={{width:"100%",minHeight:64,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:13,marginBottom:8}}
+              />
+              <button onClick={saveManualExpense} disabled={receiptSaveLoad} style={{padding:"11px 14px",borderRadius:12,border:"1px solid "+C.sky+"35",background:C.sky+"12",color:C.sky,fontSize:12,fontWeight:700,cursor:receiptSaveLoad?"default":"pointer"}}>
+                {receiptSaveLoad?"Saving...":"Save Manual Expense"}
+              </button>
+            </div>
+            {expenseBalances.length>0&&(
+              <div style={{marginBottom:12}}>
+                <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>WHO PAID VS SHARE</p>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {expenseBalances.map(function(row){
+                    return(<div key={row.user_id} style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr repeat(3,auto)",gap:10,alignItems:"center",padding:"10px 0",borderTop:"1px solid "+C.border}}>
+                      <span style={{fontSize:13,fontWeight:600}}>{row.display_name||"Traveler"}</span>
+                      <span style={{fontSize:12,color:C.tx3}}>Paid {formatMoney(row.paid_total||0,expenseSummary.currency||"USD")}</span>
+                      <span style={{fontSize:12,color:C.tx3}}>Share {formatMoney(row.share_total||0,expenseSummary.currency||"USD")}</span>
+                      <span style={{fontSize:12,fontWeight:700,color:Number(row.net_balance||0)>=0?C.grn:C.red}}>
+                        Net {formatMoney(row.net_balance||0,expenseSummary.currency||"USD")}
+                      </span>
+                    </div>);
+                  })}
+                </div>
+              </div>
+            )}
             <div>
               <p style={{fontSize:11,fontWeight:700,color:C.tx3,marginBottom:8}}>RECENT RECEIPTS</p>
               {recentExpenses.length>0?(<div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -3948,7 +4153,10 @@ export default function WanderPlan(){
                   return(<div key={expense.id} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"10px 0",borderTop:"1px solid "+C.border}}>
                     <div>
                       <p style={{fontSize:13,fontWeight:600}}>{expense.merchant||"Expense"}</p>
-                      <p style={{fontSize:11,color:C.tx3}}>{expense.expense_date||"Date TBD"} • {String(expense.category||"misc")}</p>
+                      <p style={{fontSize:11,color:C.tx3}}>
+                        {expense.expense_date||"Date TBD"} • {String(expense.category||"misc")}
+                        {expense.split_count?(" • split "+expense.split_count+" ways"):""}
+                      </p>
                     </div>
                     <span style={{fontSize:12,fontWeight:700,color:C.goldT}}>{formatMoney(expense.amount||0,expense.currency||expenseSummary.currency||"USD")}</span>
                   </div>);

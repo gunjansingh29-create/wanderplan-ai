@@ -197,6 +197,8 @@ class TripExpenseItemRequest(BaseModel):
     note: Optional[str] = None
     receipt_name: Optional[str] = None
     receipt_text: Optional[str] = None
+    paid_by_user_id: Optional[str] = None
+    split_with_user_ids: list[str] = []
 
 
 class TripExpenseSaveRequest(BaseModel):
@@ -896,6 +898,10 @@ def _expense_rows_to_public(rows: list[Any]) -> list[dict[str, Any]]:
         if not row:
             continue
         created_at = row.get("created_at") if isinstance(row, dict) else row["created_at"]
+        split_with_raw = row.get("split_with_user_ids") if isinstance(row, dict) else row["split_with_user_ids"]
+        split_with_ids = [str(v) for v in (split_with_raw or []) if str(v or "").strip()]
+        amount_value = round(float(row["amount"] or 0), 2)
+        split_count = max(1, len(split_with_ids))
         out.append(
             {
                 "id": str(row["id"]),
@@ -903,11 +909,15 @@ def _expense_rows_to_public(rows: list[Any]) -> list[dict[str, Any]]:
                 "user_id": str(row["user_id"]),
                 "expense_date": row["expense_date"].isoformat() if row["expense_date"] else None,
                 "merchant": str(row["merchant"] or ""),
-                "amount": round(float(row["amount"] or 0), 2),
+                "amount": amount_value,
                 "currency": str(row["currency"] or "USD"),
                 "category": _normalize_expense_category(row["category"]),
                 "note": str(row["note"] or ""),
                 "receipt_name": str(row["receipt_name"] or ""),
+                "paid_by_user_id": str(row["paid_by_user_id"]) if row["paid_by_user_id"] else None,
+                "split_with_user_ids": split_with_ids,
+                "split_count": split_count,
+                "share_per_person": round(amount_value / split_count, 2),
                 "created_at": created_at.isoformat() if created_at else None,
             }
         )
@@ -954,6 +964,38 @@ def _expense_summary(budget_row: Any, expense_rows: list[Any], current_day_date:
         "today_spent": round(current_day_total, 2),
         "categories": categories,
     }
+
+
+def _expense_member_balances(expense_rows: list[Any], member_lookup: dict[str, str]) -> list[dict[str, Any]]:
+    paid_by_member: dict[str, float] = Counter()
+    share_by_member: dict[str, float] = Counter()
+    for row in expense_rows or []:
+        amount = round(float((row.get("amount") if isinstance(row, dict) else row["amount"]) or 0), 2)
+        paid_by = str((row.get("paid_by_user_id") if isinstance(row, dict) else row["paid_by_user_id"]) or "").strip()
+        split_with_raw = row.get("split_with_user_ids") if isinstance(row, dict) else row["split_with_user_ids"]
+        split_with_ids = [str(v) for v in (split_with_raw or []) if str(v or "").strip()]
+        split_count = max(1, len(split_with_ids))
+        share_amount = round(amount / split_count, 2)
+        if paid_by:
+            paid_by_member[paid_by] += amount
+        for member_id in split_with_ids or ([paid_by] if paid_by else []):
+            if member_id:
+                share_by_member[member_id] += share_amount
+    all_ids = {member_id for member_id in list(member_lookup.keys()) + list(paid_by_member.keys()) + list(share_by_member.keys()) if str(member_id).strip()}
+    out = []
+    for member_id in sorted(all_ids, key=lambda mid: member_lookup.get(mid, mid).lower()):
+        paid = round(float(paid_by_member.get(member_id, 0.0)), 2)
+        share = round(float(share_by_member.get(member_id, 0.0)), 2)
+        out.append(
+            {
+                "user_id": member_id,
+                "display_name": member_lookup.get(member_id, member_id),
+                "paid_total": paid,
+                "share_total": share,
+                "net_balance": round(paid - share, 2),
+            }
+        )
+    return out
 
 
 def _json_obj(value: Any) -> dict[str, Any]:
@@ -2315,6 +2357,8 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
           note TEXT,
           receipt_name TEXT,
           receipt_text TEXT,
+          paid_by_user_id UUID REFERENCES users(id),
+          split_with_user_ids UUID[] DEFAULT '{}'::uuid[],
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
         """,
@@ -2509,6 +2553,8 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
     for stmt in statements:
         await conn.execute(stmt)
     await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS shortlisted BOOLEAN DEFAULT FALSE")
+    await conn.execute("ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS paid_by_user_id UUID REFERENCES users(id)")
+    await conn.execute("ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS split_with_user_ids UUID[] DEFAULT '{}'::uuid[]")
 
 
 @app.on_event("startup")
@@ -5184,14 +5230,39 @@ async def save_trip_expenses(
 
     async with db_pool.acquire() as conn:
         await _require_accepted_trip_member(conn, trip_id, user_id)
+        accepted_member_rows = await conn.fetch(
+            """
+            SELECT tm.user_id, tm.role, tm.status, COALESCE(up.display_name, u.name, u.email) AS display_name
+            FROM trip_members tm
+            JOIN users u ON u.id = tm.user_id
+            LEFT JOIN user_profiles up ON up.user_id = tm.user_id
+            WHERE tm.trip_id = $1
+            """,
+            trip_id,
+        )
+        accepted_member_ids = {
+            str(row["user_id"])
+            for row in accepted_member_rows
+            if str(row["role"] or "").lower() == "owner" or str(row["status"] or "").lower() == "accepted"
+        }
         async with conn.transaction():
             for item in items:
+                paid_by_user_id = str(item.paid_by_user_id or user_id or "").strip() or user_id
+                if paid_by_user_id not in accepted_member_ids:
+                    raise HTTPException(status_code=422, detail="paid_by_user_id must be an accepted trip member")
+                split_with_user_ids = []
+                for raw_id in (item.split_with_user_ids or []):
+                    member_id = str(raw_id or "").strip()
+                    if member_id and member_id in accepted_member_ids and member_id not in split_with_user_ids:
+                        split_with_user_ids.append(member_id)
+                if not split_with_user_ids:
+                    split_with_user_ids = [paid_by_user_id]
                 await conn.execute(
                     """
                     INSERT INTO trip_expenses (
-                      trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, receipt_text
+                      trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, receipt_text, paid_by_user_id, split_with_user_ids
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::uuid[])
                     """,
                     trip_id,
                     user_id,
@@ -5203,6 +5274,8 @@ async def save_trip_expenses(
                     str(item.note or "").strip(),
                     str(item.receipt_name or "").strip(),
                     str(item.receipt_text or "").strip(),
+                    paid_by_user_id,
+                    split_with_user_ids,
                 )
             budget = await conn.fetchrow(
                 "SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1",
@@ -5230,7 +5303,7 @@ async def save_trip_expenses(
                 )
             recent_rows = await conn.fetch(
                 """
-                SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, created_at
+                SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, paid_by_user_id, split_with_user_ids, created_at
                 FROM trip_expenses
                 WHERE trip_id = $1
                 ORDER BY COALESCE(expense_date, created_at::date) DESC, created_at DESC
@@ -5244,10 +5317,16 @@ async def save_trip_expenses(
             )
 
     summary = _expense_summary(refreshed_budget, recent_rows, None)
+    member_lookup = {
+        str(row["user_id"]): str(row["display_name"] or row["user_id"])
+        for row in accepted_member_rows
+        if str(row["user_id"] or "").strip()
+    }
     return {
         "saved": len(items),
         "expenses": _expense_rows_to_public(recent_rows),
         "summary": summary,
+        "member_balances": _expense_member_balances(recent_rows, member_lookup),
     }
 
 
@@ -5259,7 +5338,7 @@ async def get_trip_expenses(trip_id: str, user_id: str = Depends(get_current_use
         await _require_accepted_trip_member(conn, trip_id, user_id)
         expense_rows = await conn.fetch(
             """
-            SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, created_at
+            SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, paid_by_user_id, split_with_user_ids, created_at
             FROM trip_expenses
             WHERE trip_id = $1
             ORDER BY COALESCE(expense_date, created_at::date) DESC, created_at DESC
@@ -5271,9 +5350,25 @@ async def get_trip_expenses(trip_id: str, user_id: str = Depends(get_current_use
             "SELECT currency, daily_target, total_budget, spent, remaining, breakdown, warning_active FROM budgets WHERE trip_id = $1",
             trip_id,
         )
+        member_rows = await conn.fetch(
+            """
+            SELECT tm.user_id, COALESCE(up.display_name, u.name, u.email) AS display_name
+            FROM trip_members tm
+            JOIN users u ON u.id = tm.user_id
+            LEFT JOIN user_profiles up ON up.user_id = tm.user_id
+            WHERE tm.trip_id = $1 AND (tm.role = 'owner' OR tm.status = 'accepted')
+            """,
+            trip_id,
+        )
+    member_lookup = {
+        str(row["user_id"]): str(row["display_name"] or row["user_id"])
+        for row in member_rows
+        if str(row["user_id"] or "").strip()
+    }
     return {
         "expenses": _expense_rows_to_public(expense_rows),
         "summary": _expense_summary(budget_row, expense_rows, None),
+        "member_balances": _expense_member_balances(expense_rows, member_lookup),
     }
 
 
@@ -6474,7 +6569,7 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
         )
         expense_rows = await conn.fetch(
             """
-            SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, created_at
+            SELECT id, trip_id, user_id, expense_date, merchant, amount, currency, category, note, receipt_name, paid_by_user_id, split_with_user_ids, created_at
             FROM trip_expenses
             WHERE trip_id = $1
             ORDER BY COALESCE(expense_date, created_at::date) DESC, created_at DESC
@@ -6585,6 +6680,7 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
         current_day["date"] if isinstance(current_day, dict) else None,
     )
     recent_expenses = _expense_rows_to_public(expense_rows)
+    expense_member_balances = _expense_member_balances(expense_rows, member_lookup)
     if isinstance(current_day, dict):
         item_status_map = {
             str(row.get("activity_id") or ""): row
@@ -6642,6 +6738,7 @@ async def get_trip_companion(trip_id: str, user_id: str = Depends(get_current_us
             "today_meals": dining_snapshot,
             "expense_summary": expense_summary,
             "recent_expenses": recent_expenses,
+            "expense_member_balances": expense_member_balances,
             "stats": {
                 "day_count": len(day_items),
                 "approved_days": approved_days,

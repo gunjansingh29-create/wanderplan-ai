@@ -23,6 +23,12 @@ describe('21 - receipts and budget comparison', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ daily_budget: 100, currency: 'USD' })
       .expect(200);
+    await dbQuery(
+      `INSERT INTO trip_members (trip_id, user_id, role, status, joined_at)
+       VALUES ($1, $2, 'member', 'accepted', NOW())
+       ON CONFLICT DO NOTHING`,
+      [trip.id, '00000000-0000-0000-0000-000000000002']
+    );
   });
 
   test('POST /trips/:id/expenses/parse heuristically categorizes pasted receipt text', async () => {
@@ -63,6 +69,8 @@ describe('21 - receipts and budget comparison', () => {
             currency: 'USD',
             category: 'dining',
             note: 'Breakfast receipts',
+            paid_by_user_id: '00000000-0000-0000-0000-000000000001',
+            split_with_user_ids: ['00000000-0000-0000-0000-000000000001'],
           },
           {
             expense_date: '2026-03-15',
@@ -71,6 +79,11 @@ describe('21 - receipts and budget comparison', () => {
             currency: 'USD',
             category: 'activities',
             note: 'Entry tickets',
+            paid_by_user_id: '00000000-0000-0000-0000-000000000001',
+            split_with_user_ids: [
+              '00000000-0000-0000-0000-000000000001',
+              '00000000-0000-0000-0000-000000000002',
+            ],
           },
         ],
       })
@@ -85,9 +98,25 @@ describe('21 - receipts and budget comparison', () => {
         expect.objectContaining({ category: 'activities', spent: 24 }),
       ])
     );
+    expect(saveRes.body.member_balances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          user_id: '00000000-0000-0000-0000-000000000001',
+          paid_total: 43,
+          share_total: 31,
+          net_balance: 12,
+        }),
+        expect.objectContaining({
+          user_id: '00000000-0000-0000-0000-000000000002',
+          paid_total: 0,
+          share_total: 12,
+          net_balance: -12,
+        }),
+      ])
+    );
 
     const expenseRows = await dbQuery(
-      `SELECT merchant, amount, category
+      `SELECT merchant, amount, category, paid_by_user_id, split_with_user_ids
          FROM trip_expenses
         WHERE trip_id = $1
         ORDER BY merchant ASC`,
@@ -99,11 +128,13 @@ describe('21 - receipts and budget comparison', () => {
         merchant: expect.any(String),
         amount: expect.any(String),
         category: expect.any(String),
+        paid_by_user_id: expect.any(String),
+        split_with_user_ids: expect.any(Array),
       })
     );
   });
 
-  test('GET /trips/:id/expenses returns recent expenses with budget comparison summary', async () => {
+  test('GET /trips/:id/expenses returns recent expenses with budget comparison summary and balances', async () => {
     const res = await request(API_V1)
       .get(`/trips/${trip.id}/expenses`)
       .set('Authorization', `Bearer ${token}`)
@@ -117,6 +148,44 @@ describe('21 - receipts and budget comparison', () => {
         spent: 43,
         total_budget: 500,
       })
+    );
+    expect(Array.isArray(res.body.member_balances)).toBe(true);
+    expect(res.body.expenses[0]).toEqual(
+      expect.objectContaining({
+        split_count: expect.any(Number),
+        share_per_person: expect.any(Number),
+      })
+    );
+  });
+
+  test('POST /trips/:id/expenses supports manual solo expense entry', async () => {
+    const res = await request(API_V1)
+      .post(`/trips/${trip.id}/expenses`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        items: [
+          {
+            expense_date: '2026-03-16',
+            merchant: 'Bus pass',
+            amount: 8,
+            currency: 'USD',
+            category: 'transport',
+            note: 'Cash ticket',
+          },
+        ],
+      })
+      .expect(200);
+
+    expect(res.body.saved).toBe(1);
+    expect(res.body.summary.spent).toBeCloseTo(51, 2);
+    expect(res.body.expenses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          merchant: 'Bus pass',
+          split_count: 1,
+          share_per_person: 8,
+        }),
+      ])
     );
   });
 });

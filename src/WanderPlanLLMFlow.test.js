@@ -1263,6 +1263,16 @@ describe("WanderPlanLLMFlow companion entry", () => {
           amount: 61,
           currency: "USD",
           category: "dining",
+          split_count: 1,
+        },
+      ],
+      expense_member_balances: [
+        {
+          user_id: "active-user",
+          display_name: "Alice Active",
+          paid_total: 61,
+          share_total: 61,
+          net_balance: 0,
         },
       ],
       stats: { day_count: 7, approved_days: 7, item_count: 12 },
@@ -1419,6 +1429,9 @@ describe("WanderPlanLLMFlow companion entry", () => {
     expect(screen.queryByText("Izakaya Hanabi")).not.toBeNull();
     expect(screen.queryByText("END-OF-DAY RECEIPTS")).not.toBeNull();
     expect(screen.queryByText("Haneda Ramen")).not.toBeNull();
+    expect(screen.queryByText("MANUAL EXPENSE")).not.toBeNull();
+    expect(screen.queryByText("WHO PAID VS SHARE")).not.toBeNull();
+    expect(screen.queryByText("Save Manual Expense")).not.toBeNull();
     expect(screen.queryAllByText("Pending").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Done" })[0]);
