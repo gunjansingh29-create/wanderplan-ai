@@ -1742,6 +1742,51 @@ function materializeItineraryDates(rows, startDateIso){
   return changed?mapped:(Array.isArray(rows)?rows:[]);
 }
 
+function normalizeItineraryText(text){
+  return String(text||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+}
+
+function itineraryRowsScore(rows, acceptedPOIs){
+  var candidateRows=Array.isArray(rows)?rows:[];
+  var pois=Array.isArray(acceptedPOIs)?acceptedPOIs:[];
+  var seenPoiNames={};
+  var poiHits=0;
+  var travelCount=0;
+  var genericActivityPenalty=0;
+  candidateRows.forEach(function(day){
+    (Array.isArray(day&&day.items)?day.items:[]).forEach(function(item){
+      var title=normalizeItineraryText(item&&item.title);
+      if(String(item&&item.type||"").toLowerCase()==="travel")travelCount+=1;
+      if((String(item&&item.type||"").toLowerCase()==="activity"||String(item&&item.type||"").toLowerCase()==="rest")&&/^(explore|free time|last walk|settle in|flexible time)/.test(title)){
+        genericActivityPenalty+=1;
+      }
+      pois.forEach(function(poi){
+        var poiName=normalizeItineraryText(poi&&poi.name);
+        if(!poiName||seenPoiNames[poiName])return;
+        if(title.indexOf(poiName)>=0){
+          seenPoiNames[poiName]=true;
+          poiHits+=1;
+        }
+      });
+    });
+  });
+  return {
+    poiHits:poiHits,
+    travelCount:travelCount,
+    genericActivityPenalty:genericActivityPenalty,
+    score:(poiHits*5)+(travelCount*1)-genericActivityPenalty
+  };
+}
+
+function chooseBestItineraryRows(candidateRows, fallbackRows, acceptedPOIs){
+  var candidateScore=itineraryRowsScore(candidateRows,acceptedPOIs);
+  var fallbackScore=itineraryRowsScore(fallbackRows,acceptedPOIs);
+  if(candidateScore.poiHits===0&&fallbackScore.poiHits>0)return Array.isArray(fallbackRows)?fallbackRows:[];
+  if(candidateScore.travelCount===0&&fallbackScore.travelCount>0&&fallbackScore.poiHits>=candidateScore.poiHits)return Array.isArray(fallbackRows)?fallbackRows:[];
+  if(fallbackScore.score>candidateScore.score)return Array.isArray(fallbackRows)?fallbackRows:[];
+  return Array.isArray(candidateRows)?candidateRows:[];
+}
+
 function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, totalTripDays, startDateIso, durationPerDestination){
   var destList=(Array.isArray(destinations)?destinations:[]).map(function(d){
     return typeof d==="string"?String(d||"").trim():String(d&&d.name||d&&d.destination||"").trim();
@@ -5102,6 +5147,7 @@ export default function WanderPlan(){
         durPerDest,
         totalDays
       );
+      var fallbackRows=buildFallbackItinerary(dests,accPois,pStays,appMeals,totalDays,itineraryStartDate,itineraryDurations);
       function persistItineraryRows(rows){
         var payload=buildItinerarySavePayload(rows);
         if(!(authToken&&currentTripId))return Promise.resolve(payload);
@@ -5111,7 +5157,8 @@ export default function WanderPlan(){
       function finalizeItineraryResult(res){
         var rows=(Array.isArray(res)&&res.length>0)
           ? res
-          : buildFallbackItinerary(dests,accPois,pStays,appMeals,totalDays,itineraryStartDate,itineraryDurations);
+          : fallbackRows;
+        rows=chooseBestItineraryRows(rows,fallbackRows,accPois);
         rows=materializeItineraryDates(rows,itineraryStartDate);
         persistItineraryRows(rows).then(function(){
           setItinErr("");
@@ -5148,6 +5195,8 @@ export default function WanderPlan(){
                 items:mapped
               };
             });
+            rows=chooseBestItineraryRows(rows,fallbackRows,accPois);
+            rows=materializeItineraryDates(rows,itineraryStartDate);
             setItin(rows);
             setIL(false);
             setID(true);
@@ -6879,6 +6928,7 @@ export default function WanderPlan(){
               {l:"Approved meals",v:String(appMeals.length)},
               {l:"Duration per destination",v:JSON.stringify(itineraryDurations||{})},
               {l:"Itinerary rows",v:String((itin||[]).length)},
+              {l:"Itinerary quality",v:JSON.stringify(itineraryRowsScore(itin||[],accPois))},
               {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"--"}
             ].map(function(row){
               return(<div key={row.l} style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
@@ -6995,6 +7045,6 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, addClockMinutes, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, addClockMinutes, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 
 

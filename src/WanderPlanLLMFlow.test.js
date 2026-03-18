@@ -9,6 +9,7 @@ import {
   buildFallbackItinerary,
   buildFlightRoutePlan,
   buildItinerarySavePayload,
+  chooseBestItineraryRows,
   buildTripShareLink,
   buildTripShareSummary,
   buildTripWhatsAppText,
@@ -26,6 +27,7 @@ import {
   fillMissingDurationPerDestination,
   formatMoney,
   inclusiveIsoDays,
+  itineraryRowsScore,
   isCurrentVoteVoter,
   makeVoteUserId,
   materializeItineraryDates,
@@ -408,6 +410,37 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         type: "travel",
       })
     );
+  });
+
+  test("chooseBestItineraryRows prefers fallback when generic LLM rows omit approved POIs", () => {
+    const genericRows = [
+      {
+        day: 1,
+        destination: "Auckland",
+        items: [
+          { time: "09:00", type: "flight", title: "Arrive in Auckland", cost: 0 },
+          { time: "10:00", type: "activity", title: "Explore Auckland", cost: 0 },
+        ],
+      },
+    ];
+    const fallbackRows = buildFallbackItinerary(
+      [{ name: "Auckland" }],
+      [{ name: "Mount Eden Summit Hike", destination: "Auckland", category: "Nature", tags: ["hiking", "views"] }],
+      [{ name: "Grand Auckland Palace", destination: "Auckland", neighborhood: "CBD" }],
+      [
+        { name: "Auckland Morning Table", destination: "Auckland", type: "Breakfast", cost: 18 },
+        { name: "Auckland Lunch Table", destination: "Auckland", type: "Lunch", cost: 24 },
+        { name: "Auckland Evening Table", destination: "Auckland", type: "Dinner", cost: 36 },
+      ],
+      3,
+      "",
+      { Auckland: 2 }
+    );
+    const chosen = chooseBestItineraryRows(genericRows, fallbackRows, [
+      { name: "Mount Eden Summit Hike", destination: "Auckland" },
+    ]);
+    expect(chosen).toEqual(fallbackRows);
+    expect(itineraryRowsScore(chosen, [{ name: "Mount Eden Summit Hike", destination: "Auckland" }]).poiHits).toBeGreaterThan(0);
   });
 
   test("buildItinerarySavePayload maps itinerary rows into backend save shape", () => {
