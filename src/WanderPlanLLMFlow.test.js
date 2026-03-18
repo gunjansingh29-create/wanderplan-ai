@@ -2,7 +2,9 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   accountCacheKey,
+  activeTripTravelerCount,
   availabilityWindowMatchesTripDays,
+  addTripDestinationValue,
   buildTransitItem,
   buildCurrentVoteActor,
   buildDurationPlanSignature,
@@ -40,6 +42,7 @@ import {
   normalizeDiningPlan,
   normalizePoiStateMap,
   normalizePersonalBucketItems,
+  normalizeTripDestinationValue,
   normalizeWizardStepIndex,
   readDestinationVoteRow,
   readMealVoteRow,
@@ -63,6 +66,7 @@ import {
   summarizePoiVotes,
   summarizeStayVotes,
   stayPreviewLink,
+  tripDestinationNamesFromValues,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
@@ -1717,6 +1721,139 @@ describe("WanderPlanLLMFlow companion entry", () => {
     expect(await screen.findByText("LIVE COMPANION SETUP")).not.toBeNull();
     expect(screen.queryByText("TODAY'S PLAN")).toBeNull();
     expect(screen.queryByText("TODAY PROGRESS")).toBeNull();
+  });
+});
+
+describe("WanderPlanLLMFlow trip setup hardening helpers", () => {
+  test("trip destination helpers normalize direct entries and bucket ids into unique destination names", () => {
+    const bucket = [
+      { id: "bucket-1", name: "Kyoto" },
+      { id: "bucket-2", name: "Auckland" },
+    ];
+    const added = addTripDestinationValue(["  kyoto  "], "Auckland");
+    expect(added).toEqual(["  kyoto  ", "Auckland"]);
+    expect(normalizeTripDestinationValue("  New   York ")).toBe("New York");
+    expect(
+      tripDestinationNamesFromValues(
+        ["bucket-1", "auckland", "Auckland", "  Kyoto "],
+        bucket
+      )
+    ).toEqual(["Kyoto", "auckland"]);
+  });
+
+  test("activeTripTravelerCount treats accepted or joined members as active travelers", () => {
+    expect(activeTripTravelerCount([], {})).toBe(1);
+    expect(
+      activeTripTravelerCount(
+        [
+          { id: "m-accepted", status: "accepted" },
+          { id: "m-invited", status: "invited" },
+          { id: "m-selected", status: "selected" },
+        ],
+        { "m-selected": true }
+      )
+    ).toBe(3);
+  });
+});
+
+describe("WanderPlanLLMFlow solo trip setup", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+  });
+
+  test("allows direct destination entry without bucket list and skips destination voting for solo trips", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Solo Traveler",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/wizard/sessions" && method === "POST") {
+        return jsonResponse({
+          session: {
+            id: "session-1",
+            trip_id: "11111111-1111-4111-8111-111111111111",
+          },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:solo-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:solo-user",
+      JSON.stringify({
+        name: "Solo Traveler",
+        email: "solo@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Plan a new trip"));
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText("e.g. Summer 2025")).not.toBeNull()
+    );
+    fireEvent.change(screen.getByPlaceholderText("e.g. Summer 2025"), {
+      target: { value: "Solo Escape" },
+    });
+    fireEvent.change(
+      screen.getByPlaceholderText("Add a destination directly (e.g. Kyoto)"),
+      { target: { value: "Kyoto" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(screen.queryByText("Kyoto")).not.toBeNull());
+    fireEvent.click(screen.getByText("Start Planning"));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Confirm 1 Destination")).not.toBeNull()
+    );
+    fireEvent.click(screen.getByText("Confirm 1 Destination"));
+
+    await waitFor(() => expect(screen.queryByText("Continue Solo")).not.toBeNull());
+    fireEvent.click(screen.getByText("Continue Solo"));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(
+          "Solo trip detected. Voting is skipped here, so you can continue directly with your destination set."
+        )
+      ).not.toBeNull()
+    );
+    expect(screen.queryByText(/Majority needed:/)).toBeNull();
   });
 });
 

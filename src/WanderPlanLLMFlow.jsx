@@ -81,6 +81,55 @@ function normalizePersonalBucketItems(items){
   });
 }
 
+function normalizeTripDestinationValue(value){
+  return String(value||"").replace(/\s+/g," ").trim();
+}
+
+function addTripDestinationValue(values,value){
+  var nextValue=normalizeTripDestinationValue(value);
+  var out=Array.isArray(values)?values.slice():[];
+  if(!nextValue)return out;
+  var exists=out.some(function(entry){
+    return normalizeTripDestinationValue(entry).toLowerCase()===nextValue.toLowerCase();
+  });
+  if(exists)return out;
+  out.push(nextValue);
+  return out;
+}
+
+function removeTripDestinationValue(values,value){
+  var target=normalizeTripDestinationValue(value).toLowerCase();
+  return (Array.isArray(values)?values:[]).filter(function(entry){
+    return normalizeTripDestinationValue(entry).toLowerCase()!==target;
+  });
+}
+
+function tripDestinationNamesFromValues(values,bucket){
+  var seen={};
+  return (Array.isArray(values)?values:[]).map(function(raw){
+    var text=normalizeTripDestinationValue(raw);
+    if(!text)return "";
+    var byId=(Array.isArray(bucket)?bucket:[]).find(function(item){
+      return String(item&&item.id||"").trim()===text;
+    });
+    var name=normalizeTripDestinationValue(byId&&byId.name?byId.name:text);
+    var key=name.toLowerCase();
+    if(!name||seen[key])return "";
+    seen[key]=1;
+    return name;
+  }).filter(Boolean);
+}
+
+function activeTripTravelerCount(members,tripJoinedMap){
+  var count=1;
+  (Array.isArray(members)?members:[]).forEach(function(member){
+    var st=mapTripMemberStatus(member&&(member.trip_status||member.status));
+    var joined=!!(tripJoinedMap&&member&&tripJoinedMap[member.id]);
+    if(st==="accepted"||joined)count++;
+  });
+  return count;
+}
+
 function normalizeApiBase(raw){
   var v=String(raw||"").trim();
   if((v.startsWith('"')&&v.endsWith('"'))||(v.startsWith("'")&&v.endsWith("'"))){
@@ -2019,6 +2068,7 @@ export default function WanderPlan(){
   var[bucket,setBucket]=useState([]);
   var[trips,setTrips]=useState([]);
   var[newTrip,setNT]=useState({name:"",dests:[],members:[],step:0});
+  var[newTripDestInput,setNTDI]=useState("");
   var[tripFilter,setTF]=useState("all");
   var[viewTrip,setVT]=useState(null);
   var[wizStep,setWS]=useState(0);
@@ -3359,15 +3409,35 @@ export default function WanderPlan(){
     return nm+"|"+ct;
   }
 
-  function pickDestinationForTrip(dest){
-    var did=String(dest&&dest.id||"").trim();
-    if(!did)return;
+  function addDestinationToNewTrip(value){
+    var normalized=normalizeTripDestinationValue(value);
+    if(!normalized)return false;
     setNT(function(prev){
       var p=prev||{};
-      var ds=Array.isArray(p.dests)?p.dests:[];
-      if(ds.indexOf(did)>=0)return p;
-      return Object.assign({},p,{dests:ds.concat([did])});
+      return Object.assign({},p,{dests:addTripDestinationValue(p.dests,normalized)});
     });
+    return true;
+  }
+
+  function removeDestinationFromNewTrip(value){
+    var normalized=normalizeTripDestinationValue(value);
+    if(!normalized)return;
+    setNT(function(prev){
+      var p=prev||{};
+      var nextDests=removeTripDestinationValue(p.dests,normalized);
+      (Array.isArray(bucket)?bucket:[]).forEach(function(item){
+        if(normalizeTripDestinationValue(item&&item.name).toLowerCase()===normalized.toLowerCase()){
+          nextDests=removeTripDestinationValue(nextDests,item.id);
+        }
+      });
+      return Object.assign({},p,{dests:nextDests});
+    });
+  }
+
+  function pickDestinationForTrip(dest){
+    var picked=normalizeTripDestinationValue(dest&&dest.name);
+    if(!picked)return;
+    addDestinationToNewTrip(picked);
     setCM("Destination selected for your next trip. Continue in Plan a New Trip.");
     go("new_trip");
   }
@@ -4686,7 +4756,15 @@ export default function WanderPlan(){
   {sc==="new_trip"&&(<div style={{maxWidth:520}}>
     <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:24}}>Plan a New Trip</h1></Fade>
     <Fade delay={100}><div style={{background:C.surface,borderRadius:14,padding:18,border:"1px solid "+C.border,marginBottom:16}}><p style={{fontSize:11,fontWeight:600,color:C.tx3,marginBottom:8}}>TRIP NAME</p><input placeholder="e.g. Summer 2025" value={newTrip.name} onChange={function(e){setNT(function(p){return Object.assign({},p,{name:e.target.value});});}} style={{width:"100%",padding:"12px 14px",borderRadius:10,background:C.bg,border:"1.5px solid "+C.border,fontSize:14,color:"#fff"}}/></div></Fade>
-    <Fade delay={150}><div style={{background:C.surface,borderRadius:14,padding:18,border:"1px solid "+C.border,marginBottom:16}}><p style={{fontSize:11,fontWeight:600,color:C.tx3,marginBottom:10}}>DESTINATIONS ({newTrip.dests.length})</p>{bucket.length>0?(<div style={{display:"flex",flexDirection:"column",gap:6}}>{bucket.map(function(d){var sel=newTrip.dests.indexOf(d.id)>=0;return(<button key={d.id} onClick={function(){setNT(function(p){var ds=p.dests;return Object.assign({},p,{dests:ds.indexOf(d.id)>=0?ds.filter(function(x){return x!==d.id;}):ds.concat([d.id])});});}} style={{display:"flex",justifyContent:"space-between",padding:"10px 14px",borderRadius:10,border:"2px solid "+(sel?C.gold+"50":C.border),background:sel?C.goldDim:"transparent",cursor:"pointer",color:C.tx}}><span style={{fontWeight:sel?600:400,color:sel?C.goldT:C.tx}}>{d.name} ({d.country})</span>{sel&&<span style={{color:C.gold}}>Y</span>}</button>);})}</div>):(<p style={{fontSize:13,color:C.tx3}}>Add destinations to bucket list first!</p>)}</div></Fade>
+    <Fade delay={150}><div style={{background:C.surface,borderRadius:14,padding:18,border:"1px solid "+C.border,marginBottom:16}}><p style={{fontSize:11,fontWeight:600,color:C.tx3,marginBottom:10}}>DESTINATIONS ({newTrip.dests.length})</p>
+      <div style={{display:"flex",gap:8,marginBottom:10}}>
+        <input placeholder="Add a destination directly (e.g. Kyoto)" value={newTripDestInput} onChange={function(e){setNTDI(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){if(addDestinationToNewTrip(newTripDestInput))setNTDI("");}}} style={{flex:1,padding:"10px 12px",borderRadius:9,background:C.bg,border:"1.5px solid "+C.border,fontSize:13,color:"#fff"}}/>
+        <button onClick={function(){if(addDestinationToNewTrip(newTripDestInput))setNTDI("");}} style={{padding:"9px 14px",borderRadius:9,border:"none",background:C.teal,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Add</button>
+      </div>
+      <p style={{fontSize:12,color:C.tx3,marginBottom:10}}>Bucket list is optional here. Add destinations directly, or quick-pick them below.</p>
+      {newTrip.dests.length>0?(<div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>{tripDestinationNamesFromValues(newTrip.dests,bucket).map(function(destName){return(<div key={destName} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:999,background:C.bg,border:"1px solid "+C.border}}><span style={{fontSize:12,fontWeight:600,color:"#fff"}}>{destName}</span><button onClick={function(){removeDestinationFromNewTrip(destName);}} title="Remove destination" aria-label={"Remove "+destName} style={{padding:"3px 7px",borderRadius:999,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:10,fontWeight:700,cursor:"pointer"}}>Remove</button></div>);})}</div>):(<p style={{fontSize:13,color:C.tx3,marginBottom:12}}>Add at least one destination to start planning.</p>)}
+      {bucket.length>0&&(<div style={{display:"flex",flexDirection:"column",gap:6}}>{bucket.map(function(d){var sel=tripDestinationNamesFromValues(newTrip.dests,bucket).some(function(name){return name.toLowerCase()===String(d.name||"").trim().toLowerCase();});return(<button key={d.id} onClick={function(){if(sel)removeDestinationFromNewTrip(d.name);else addDestinationToNewTrip(d.name);}} style={{display:"flex",justifyContent:"space-between",padding:"10px 14px",borderRadius:10,border:"2px solid "+(sel?C.gold+"50":C.border),background:sel?C.goldDim:"transparent",cursor:"pointer",color:C.tx}}><span style={{fontWeight:sel?600:400,color:sel?C.goldT:C.tx}}>{d.name} ({d.country})</span>{sel&&<span style={{color:C.gold}}>Y</span>}</button>);})}</div>)}
+    </div></Fade>
     <Fade delay={200}><div style={{background:C.surface,borderRadius:14,padding:18,border:"1px solid "+C.border,marginBottom:16}}>
       <p style={{fontSize:11,fontWeight:600,color:C.tx3,marginBottom:10}}>SELECT CREW FOR THIS TRIP ({newTrip.members.length})</p>
       <div style={{display:"flex",gap:8,marginBottom:10}}>
@@ -4712,7 +4790,7 @@ export default function WanderPlan(){
     </div></Fade>
     {newTrip.name&&newTrip.dests.length>0&&(<Fade delay={250}><button onClick={function(){
       var localTrip=Object.assign({},newTrip,{step:0,id:"trip"+Date.now(),status:"planning"});
-      var destNames=(newTrip.dests||[]).map(function(id){var b=bucket.find(function(x){return x.id===id;});return b?b.name:null;}).filter(Boolean);
+      var destNames=tripDestinationNamesFromValues(newTrip.dests,bucket);
       if(authToken){
         apiJson("/wizard/sessions",{method:"POST",body:{trip_name:newTrip.name,duration_days:10,initial_state:{selected_destinations:destNames}}},authToken).then(function(r){
           if(r&&r.session){
@@ -4724,7 +4802,7 @@ export default function WanderPlan(){
             if(r.session.trip_id&&newTrip.members&&newTrip.members.length>0){
               inviteSelectedMembersToTrip(r.session.trip_id,newTrip.members.filter(function(m){return isTripInvitePending(m);}));
             }
-            var trip=Object.assign({},localTrip,{id:r.session.trip_id||localTrip.id,name:newTrip.name,destNames:destNames.join(" + "),status:"planning"});
+            var trip=Object.assign({},localTrip,{id:r.session.trip_id||localTrip.id,name:newTrip.name,dests:destNames.slice(),destNames:destNames.join(" + "),status:"planning"});
             setTrips(function(p){return p.concat([trip]);});
             setNT(trip);
             setWS(0);go("wizard");
@@ -4738,7 +4816,7 @@ export default function WanderPlan(){
             if(createdTripId&&newTrip.members&&newTrip.members.length>0){
               inviteSelectedMembersToTrip(createdTripId,newTrip.members.filter(function(m){return isTripInvitePending(m);}));
             }
-            var trip=Object.assign({},localTrip,{id:createdTripId||localTrip.id,name:newTrip.name,destNames:destNames.join(" + "),status:"planning"});
+            var trip=Object.assign({},localTrip,{id:createdTripId||localTrip.id,name:newTrip.name,dests:destNames.slice(),destNames:destNames.join(" + "),status:"planning"});
             setCTID(createdTripId||"");
             setTrips(function(p){return p.concat([trip]);});
             setNT(trip);
@@ -4819,6 +4897,8 @@ export default function WanderPlan(){
         return Object.assign({},prev,{members:nextMembers});
       });
     }
+    var activeTravelerCount=activeTripTravelerCount(tm,tripJoined);
+    var soloTripMode=activeTravelerCount<=1;
     var canGo=jc>0||tm.length===0;
     var tripDestInputs=(Array.isArray(tr.dests)&&tr.dests.length)?tr.dests:String(tr.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
     var td=tripDestInputs.map(function(v,idx){
@@ -5287,8 +5367,13 @@ export default function WanderPlan(){
 
     {wizStep===0&&(<div>
       {ab("Destination Agent","Here are the destinations you selected. Confirm to lock them in.")}
-      {td.map(function(d){return(<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid "+C.border}}><div><span style={{fontWeight:600}}>{d.name}</span><span style={{color:C.tx3,marginLeft:8,fontSize:13}}>{d.country}</span></div><div style={{textAlign:"right"}}><span style={{color:C.goldT,fontWeight:600,fontSize:13}}>~${d.costPerDay}/day</span>{d.bestTimeDesc&&<p style={{fontSize:11,color:C.tx3}}>{d.bestTimeDesc}</p>}</div></div>);})}
-      {goBtn("Confirm "+td.length+" Destination"+(td.length>1?"s":""))}
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        <input value={newTripDestInput} onChange={function(e){setNTDI(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){if(addDestinationToNewTrip(newTripDestInput))setNTDI("");}}} placeholder="Add another destination directly" style={{flex:1,padding:"10px 12px",borderRadius:9,background:C.bg,border:"1.5px solid "+C.border,fontSize:13,color:"#fff"}}/>
+        <button onClick={function(){if(addDestinationToNewTrip(newTripDestInput))setNTDI("");}} style={{padding:"9px 14px",borderRadius:9,border:"none",background:C.teal,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Add</button>
+      </div>
+      {td.length===0&&<p style={{fontSize:13,color:C.tx3,marginBottom:10}}>Add at least one destination before continuing.</p>}
+      {td.map(function(d){return(<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid "+C.border,gap:10}}><div><span style={{fontWeight:600}}>{d.name}</span><span style={{color:C.tx3,marginLeft:8,fontSize:13}}>{d.country}</span></div><div style={{textAlign:"right",display:"flex",alignItems:"center",gap:10}}><div><span style={{color:C.goldT,fontWeight:600,fontSize:13}}>~${d.costPerDay}/day</span>{d.bestTimeDesc&&<p style={{fontSize:11,color:C.tx3}}>{d.bestTimeDesc}</p>}</div><button onClick={function(){removeDestinationFromNewTrip(d.name);}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button></div></div>);})}
+      {td.length>0&&goBtn("Confirm "+td.length+" Destination"+(td.length>1?"s":""))}
     </div>)}
 
     {wizStep===1&&(<div>
@@ -5362,10 +5447,10 @@ export default function WanderPlan(){
     </div>)}
 
     {wizStep===2&&(<div>
-      {ab("Voting Agent","Each traveler votes thumbs up/down per destination. Continue unlocks only after all votes are in and at least one destination has majority.")}
-      <div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}>
+      {ab("Voting Agent",soloTripMode?"Solo trip detected. Voting is skipped here, so you can continue directly with your destination set.":"Each traveler votes thumbs up/down per destination. Continue unlocks only after all votes are in and at least one destination has majority.")}
+      {!soloTripMode&&(<div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}>
         <p style={{fontSize:12,color:C.tealL}}>Majority needed: {majorityNeeded} of {destVoteVoters.length}</p>
-      </div>
+      </div>)}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
         <p style={{fontSize:11,color:C.tx3}}>Debug panel helps compare organizer and crew runtime state on this step.</p>
         <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
@@ -5408,7 +5493,18 @@ export default function WanderPlan(){
           })}
         </div>
       </div>)}
-      {td.map(function(d){
+      {soloTripMode?(<div>
+        {td.map(function(d){
+          return(<div key={d.id} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,alignItems:"center"}}>
+              <div><span style={{fontWeight:700}}>{d.name}</span><span style={{color:C.tx3,fontSize:13,marginLeft:8}}>{d.country}</span></div>
+              <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,background:C.grnBg,color:C.grn}}>Ready</span>
+            </div>
+            <p style={{fontSize:12,color:C.tx3}}>No destination voting is needed for a solo trip.</p>
+          </div>);
+        })}
+        {td.length>0&&goBtn("Continue with "+td.length+" destination"+(td.length>1?"s":""))}
+      </div>):td.map(function(d){
         var s=getDestVoteSummary(d);
         return(<div key={d.id} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,alignItems:"center"}}>
@@ -5435,13 +5531,13 @@ export default function WanderPlan(){
           </div>
         </div>);
       })}
-      {allDestinationsVoted&&vd.length>0&&(<div style={{marginTop:12}}>
+      {!soloTripMode&&allDestinationsVoted&&vd.length>0&&(<div style={{marginTop:12}}>
         <div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}>
           <p style={{fontSize:12,color:C.grn}}>{vd.length} approved by majority: {vd.map(function(d){return d.name;}).join(", ")}</p>
         </div>
         {goBtn("Continue with "+vd.length+" destination"+(vd.length>1?"s":""))}
       </div>)}
-      {allDestinationsVoted&&vd.length===0&&(<div style={{marginTop:12,padding:"10px 14px",borderRadius:10,background:C.wrnBg}}>
+      {!soloTripMode&&allDestinationsVoted&&vd.length===0&&(<div style={{marginTop:12,padding:"10px 14px",borderRadius:10,background:C.wrnBg}}>
         <p style={{fontSize:12,color:C.wrn}}>No destination reached majority yet. Adjust votes so at least one place wins.</p>
       </div>)}
     </div>)}
@@ -5797,6 +5893,29 @@ export default function WanderPlan(){
         setPS(nextStatus);
         logWizAction("record_selection",{key:"pois.voting",value:ranked.map(function(r){return {name:r.poi.name,up:r.up,down:r.down,approved:r.up>=r.down};})});
         syncTripPoisToBackend(nextStatus).finally(function(){adv();});
+      }
+      if(soloTripMode){
+        return(<div>
+          {ab("POI Voting Agent","Solo trip detected. Crew voting is skipped here, so your approved POIs move straight into the itinerary.")} 
+          {ranked.length===0&&<p style={{fontSize:13,color:C.tx2,padding:"8px 0"}}>No POIs available yet. Go back to Activities and approve some first.</p>}
+          {ranked.map(function(r){
+            return(<div key={r.idx} style={{padding:"12px 0",borderBottom:"1px solid "+C.border}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <p style={{fontSize:18,fontWeight:700,lineHeight:1.2}}>{r.poi.name}</p>
+                <span style={{fontSize:11,padding:"3px 10px",borderRadius:999,background:C.grnBg,color:C.grn,fontWeight:700}}>Selected</span>
+              </div>
+              <p style={{fontSize:13,color:C.tx2,marginBottom:6}}>{r.poi.destination||"Destination"} · {r.poi.duration||"2h"} · {r.poi.cost>0?"$"+r.poi.cost:"Free"}</p>
+              {r.poi.matchReason&&<p style={{fontSize:12,color:C.tealL,fontStyle:"italic"}}>{r.poi.matchReason}</p>}
+            </div>);
+          })}
+          {ranked.length>0&&(<div style={{marginTop:14,padding:"10px 14px",borderRadius:10,background:C.grnBg}}>
+            <p style={{fontSize:12,color:C.grn}}>{ranked.length} approved activit{ranked.length===1?"y":"ies"} ready for the itinerary.</p>
+          </div>)}
+          <div style={{display:"flex",gap:10,marginTop:14}}>
+            <button onClick={revise} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
+            <button onClick={applyPoiVotingAndContinue} disabled={ranked.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:ranked.length===0?C.border:C.teal,color:ranked.length===0?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:ranked.length===0?"default":"pointer",minHeight:46}}>Continue</button>
+          </div>
+        </div>);
       }
       return(<div>
         {ab("POI Voting Agent","Crew votes are tabulated here. Ranked from most voted to least voted.")}
@@ -6400,16 +6519,37 @@ export default function WanderPlan(){
           return next;
         });
       }
-      var allResolved=destList.length>0&&destList.every(function(d){return !!summarizeStayDestination(d).resolvedEntry;});
-      var pickedStays=[];var nextStayPick={};
+      var allResolved=false;var pickedStays=[];var nextStayPick={};
       destList.forEach(function(d){
-        var resolved=summarizeStayDestination(d).resolvedEntry;
+        var resolved=soloTripMode?(function(){
+          var selectedIdx=stayPick[d];
+          if(selectedIdx===undefined||selectedIdx===null)return null;
+          return (destGroups[d]||[]).find(function(entry){return entry.localIndex===selectedIdx;})||null;
+        }()):summarizeStayDestination(d).resolvedEntry;
         if(resolved){
           pickedStays.push(resolved.stay);
           nextStayPick[d]=resolved.localIndex;
         }
       });
+      allResolved=destList.length>0&&destList.every(function(d){return nextStayPick[d]!==undefined;});
       var totalCost=pickedStays.reduce(function(s,st){return s+(st.ratePerNight||0)*(st.totalNights||1);},0);
+      function selectSoloStay(destName, entry){
+        if(!soloTripMode||!entry)return;
+        setStayPick(function(prev){
+          var next=Object.assign({},prev||{});
+          next[destName]=entry.localIndex;
+          return next;
+        });
+        var lockKey=canonicalStayVoteKey(entry.stay,entry.idx);
+        setSFC(function(prev){
+          var next=Object.assign({},prev||{});
+          next[destName]=lockKey;
+          saveTripPlanningState({state:{stay_final_choices:next}}).then(function(){
+            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          });
+          return next;
+        });
+      }
       async function runStayLLM(){
         setSL(true);
         setSD(false);
@@ -6480,7 +6620,7 @@ export default function WanderPlan(){
       }
 
       return(<div>
-        {ab("Accommodation Agent",stayDone?"Select one per destination. Chat below to refine.":"Generating LLM accommodation options...")}
+        {ab("Accommodation Agent",stayDone?(soloTripMode?"Choose one stay per destination. Chat below to refine.":"Select one per destination. Chat below to refine."): "Generating LLM accommodation options...")}
         {!stayDone&&!stayLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>LLM agent will generate 2-3 stay options per destination from your budget and trip profile.</p><button onClick={runStayLLM} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>Generate Stay Options</button></div>)}
         {stayLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Analyzing destinations and generating stay options...</p></div>)}
         {stayDone&&stays.length>0&&(<div>
@@ -6511,10 +6651,10 @@ export default function WanderPlan(){
               <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:180,overflowY:"auto"}}>{JSON.stringify(stayVotes||{},null,2)}</pre>
             </div>
           </div>)}
-          {destList.map(function(destName){var opts=destGroups[destName]||[];var destSummary=summarizeStayDestination(destName);var ranked=rankStayOptions(destName);var leadingIdx=ranked[0]?ranked[0].idx:-1;var lockedEntry=destSummary.lockedEntry;var resolvedEntry=destSummary.resolvedEntry;
+          {destList.map(function(destName){var opts=destGroups[destName]||[];var destSummary=summarizeStayDestination(destName);var ranked=rankStayOptions(destName);var leadingIdx=ranked[0]?ranked[0].idx:-1;var lockedEntry=destSummary.lockedEntry;var resolvedEntry=soloTripMode?(function(){var selectedIdx=stayPick[destName];return opts.find(function(entry){return entry.localIndex===selectedIdx;})||null;}()):destSummary.resolvedEntry;
             return(<div key={destName} style={{marginBottom:16}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL}}/><span style={{fontSize:14,fontWeight:700}}>{destName}</span><span style={{fontSize:12,color:C.tx3}}>{opts.length} options</span><span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:lockedEntry?C.goldDim:(resolvedEntry?C.grnBg:C.wrnBg),color:lockedEntry?C.goldT:(resolvedEntry?C.grn:C.wrn),marginLeft:"auto"}}>{lockedEntry?"Locked":(resolvedEntry?("Ready "+destSummary.votedCount+"/"+voteMembers.length):("Voting "+destSummary.votedCount+"/"+voteMembers.length))}</span></div>
-              {opts.map(function(entry){var s=entry.stay;var summary=summarizeStayVotes(stayVotes,s,entry.idx,voteMembers);var mine=readVoteForVoter(summary.row,currentVoteActor)==="up";var leader=entry.idx===leadingIdx;var isLocked=!!(lockedEntry&&lockedEntry.idx===entry.idx);var isResolved=!!(resolvedEntry&&resolvedEntry.idx===entry.idx);
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL}}/><span style={{fontSize:14,fontWeight:700}}>{destName}</span><span style={{fontSize:12,color:C.tx3}}>{opts.length} options</span><span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:lockedEntry?C.goldDim:(resolvedEntry?C.grnBg:C.wrnBg),color:lockedEntry?C.goldT:(resolvedEntry?C.grn:C.wrn),marginLeft:"auto"}}>{soloTripMode?(resolvedEntry?"Selected":"Choose one"): (lockedEntry?"Locked":(resolvedEntry?("Ready "+destSummary.votedCount+"/"+voteMembers.length):("Voting "+destSummary.votedCount+"/"+voteMembers.length)))}</span></div>
+              {opts.map(function(entry){var s=entry.stay;var summary=summarizeStayVotes(stayVotes,s,entry.idx,voteMembers);var mine=readVoteForVoter(summary.row,currentVoteActor)==="up";var leader=soloTripMode?(stayPick[destName]===entry.localIndex):(entry.idx===leadingIdx);var isLocked=!!(lockedEntry&&lockedEntry.idx===entry.idx);var isResolved=!!(resolvedEntry&&resolvedEntry.idx===entry.idx);
                 return(<div key={entry.idx} onClick={function(){setStayPreview({destination:destName,stay:s,summary:summary,isLocked:isLocked,isResolved:isResolved,leader:leader});}} style={{background:isLocked?C.goldDim:(leader?C.teal+"10":C.bg),borderRadius:12,padding:"12px 14px",marginBottom:6,border:"2px solid "+(isLocked?C.goldT:(isResolved?C.teal+"50":C.border)),transition:"all .2s",cursor:"pointer"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                     <div><h4 style={{fontWeight:700,fontSize:14,color:isLocked?C.goldT:(leader?C.tealL:C.tx)}}>{s.name}</h4><div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,marginTop:2,flexWrap:"wrap"}}><span>{s.type}</span><span style={{color:C.wrn}}>{"*"+(s.rating||4.5)}</span>{s.neighborhood&&<span>{s.neighborhood}</span>}<span style={{color:C.sky}}>Click to preview</span></div></div>
@@ -6523,10 +6663,12 @@ export default function WanderPlan(){
                   {s.amenities&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:4}}>{s.amenities.map(function(a){return <span key={a} style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:"rgba(255,255,255,.04)",color:C.tx2}}>{a}</span>;})}</div>}
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>{s.whyThisOne&&<p style={{fontSize:11,color:C.tealL,fontStyle:"italic",flex:1}}>{s.whyThisOne}</p>}{s.bookingSource&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:C.sky+"15",color:C.sky}}>{s.bookingSource}</span>}</div>
                   <div style={{marginTop:6,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:11,color:mine?C.grn:C.tx3}}>{isLocked?"Organizer locked this stay":(mine?"Your pick":"Vote on this stay below")}</span>
-                    <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:isLocked?C.goldDim:(summary.up>=majorityNeeded?C.grnBg:C.surface),color:isLocked?C.goldT:(summary.up>=majorityNeeded?C.grn:C.tx2)}}>{summary.up} / {voteMembers.length} votes</span>
+                    <span style={{fontSize:11,color:(mine||isResolved)?C.grn:C.tx3}}>{soloTripMode?(isResolved?"Selected for this trip":"Preview and select below"):(isLocked?"Organizer locked this stay":(mine?"Your pick":"Vote on this stay below"))}</span>
+                    <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:isLocked?C.goldDim:(soloTripMode?(isResolved?C.grnBg:C.surface):(summary.up>=majorityNeeded?C.grnBg:C.surface)),color:isLocked?C.goldT:(soloTripMode?(isResolved?C.grn:C.tx2):(summary.up>=majorityNeeded?C.grn:C.tx2))}}>
+                      {soloTripMode?(isResolved?"Selected":"Preview"):(summary.up+" / "+voteMembers.length+" votes")}
+                    </span>
                   </div>
-                  <div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:8}}>
+                  {!soloTripMode&&(<div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:8}}>
                     {voteMembers.map(function(vm){
                       var v=readVoteForVoter(summary.row,vm);
                       var canEdit=!lockedEntry&&canEditVoteForMember(vm,currentVoteActor,organizerMode);
@@ -6536,8 +6678,11 @@ export default function WanderPlan(){
                         <button disabled={!canEdit} onClick={function(e){e.stopPropagation();voteForStay(destName,entry,vm,"down");}} style={{width:26,height:26,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:10,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"Dn"}</button>
                       </div>);
                     })}
+                  </div>)}
+                  <div style={{marginTop:10,display:"flex",justifyContent:"flex-end",gap:8}}>
+                    {soloTripMode&&<button onClick={function(e){e.stopPropagation();selectSoloStay(destName,entry);}} style={{padding:"8px 12px",borderRadius:8,border:"none",background:isResolved?C.grn:C.teal,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>{isResolved?"Selected":"Select Stay"}</button>}
+                    {!soloTripMode&&organizerMode&&<button onClick={function(e){e.stopPropagation();lockStayChoice(destName,entry);}} style={{padding:"8px 12px",borderRadius:8,border:"none",background:isLocked?C.gold:C.goldT,color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>{isLocked?"Locked by Organizer":"Lock This Stay"}</button>}
                   </div>
-                  {organizerMode&&<div style={{marginTop:10,display:"flex",justifyContent:"flex-end"}}><button onClick={function(e){e.stopPropagation();lockStayChoice(destName,entry);}} style={{padding:"8px 12px",borderRadius:8,border:"none",background:isLocked?C.gold:C.goldT,color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>{isLocked?"Locked by Organizer":"Lock This Stay"}</button></div>}
                 </div>);
               })}
             </div>);
@@ -6618,8 +6763,8 @@ export default function WanderPlan(){
             {stayChat.length>0&&(<div style={{maxHeight:160,overflowY:"auto",padding:"8px 12px"}}>{stayChat.map(function(msg,i){var isU=msg.from==="user";return(<div key={i} style={{display:"flex",justifyContent:isU?"flex-end":"flex-start",marginBottom:5}}><div style={{maxWidth:"85%",padding:"7px 11px",borderRadius:isU?"10px 10px 3px 10px":"10px 10px 10px 3px",background:isU?C.teal+"20":C.surface,border:"1px solid "+(isU?C.teal+"25":C.border),fontSize:13,lineHeight:1.5,color:isU?"#fff":C.tx2}}>{msg.text}</div></div>);})}{stayAskLoad&&<div style={{display:"flex",gap:4,padding:"4px 0"}}><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div>}</div>)}
             <div style={{display:"flex",gap:6,padding:"8px 10px",borderTop:stayChat.length>0?"1px solid "+C.border:"none"}}><input value={stayAsk} onChange={function(e){setSA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendStayChat();}} placeholder="'cheaper in Kyoto' or 'need a pool'" disabled={stayAskLoad} style={{flex:1,padding:"8px 11px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:12,color:"#fff",opacity:stayAskLoad?.5:1}}/><button onClick={sendStayChat} disabled={stayAskLoad} style={{padding:"7px 12px",borderRadius:8,border:"none",background:stayAskLoad?C.border:C.teal,color:stayAskLoad?C.tx3:"#fff",fontSize:11,fontWeight:600,cursor:stayAskLoad?"default":"pointer"}}>Ask</button></div>
           </div>
-          {allResolved&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{pickedStays.length} resolved stays. Total: ${totalCost}</p></div><button onClick={function(){setStayPick(nextStayPick);adv();}} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{"Confirm Stays ($"+totalCost+")"}</button></div>)}
-          {!allResolved&&destList.length>0&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>{organizerMode?"If votes split, lock one stay per destination to continue.":"Vote for one stay per destination. Organizer will lock any mismatches."}</p>}
+          {allResolved&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{pickedStays.length} {soloTripMode?"selected":"resolved"} stays. Total: ${totalCost}</p></div><button onClick={function(){setStayPick(nextStayPick);adv();}} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{"Confirm Stays ($"+totalCost+")"}</button></div>)}
+          {!allResolved&&destList.length>0&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>{soloTripMode?"Select one stay per destination to continue.":(organizerMode?"If votes split, lock one stay per destination to continue.":"Vote for one stay per destination. Organizer will lock any mismatches.")}</p>}
         </div>)}
         {stayDone&&stays.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"12px 0"}}>No results. Describe what you need:</p><div style={{display:"flex",gap:6}}><input value={stayAsk} onChange={function(e){setSA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendStayChat();}} placeholder="e.g. 'Airbnbs in Santorini under $150'" style={{flex:1,padding:"9px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/><button onClick={sendStayChat} style={{padding:"8px 14px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>Ask</button></div></div>)}
       </div>);
@@ -6650,7 +6795,7 @@ export default function WanderPlan(){
       var majorityNeeded=Math.floor(Math.max(voteMembers.length,1)/2)+1;
       var approvedMeals=[];var rejectedMeals=[];var pendingMeals=[];
       meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);if(summary.up>=majorityNeeded&&summary.up>summary.down)approvedMeals.push(m);else if(summary.votedCount===voteMembers.length&&summary.down>=summary.up)rejectedMeals.push(m);else pendingMeals.push(m);});});
-      var allDecided=mealDone&&meals.length>0&&pendingMeals.length===0;
+      var allDecided=soloTripMode?(mealDone&&meals.length>0):(mealDone&&meals.length>0&&pendingMeals.length===0);
       var totalMealCost=approvedMeals.reduce(function(s,m){return s+(m.cost||0);},0);
       function castMealVote(day,meal,di,mi,member,vote){
         if(!member||!canEditVoteForMember(member,currentVoteActor,organizerMode))return;
@@ -6692,7 +6837,7 @@ export default function WanderPlan(){
       }
 
       return(<div>
-        {ab("Dining Agent",mealDone?"Review your meal plan. Dietary: "+dietStr+". Chat to adjust.":"Planning meals across your destinations...")}
+        {ab("Dining Agent",mealDone?(soloTripMode?"Solo trip detected. Review your meal plan, adjust anything you want, then continue. Dietary: "+dietStr+".":"Review your meal plan. Dietary: "+dietStr+". Chat to adjust."):"Planning meals across your destinations...")}
         {!mealDone&&!mealLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent plans breakfast, lunch, and dinner for {totalDays} days, respecting all dietary needs and your approved budget.</p><button onClick={function(){
           setML(true);
           if(authToken&&currentTripId){
@@ -6831,7 +6976,7 @@ export default function WanderPlan(){
           {meals.map(function(day,di){
             return(<div key={di} style={{marginBottom:16}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>Day {day.day}</span><span style={{fontSize:12,color:C.tx3}}>{day.destination}{day.date?(" · "+day.date):""}</span></div>
-              {(day.meals||[]).map(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);var st=(summary.up>=majorityNeeded&&summary.up>summary.down)?"yes":(summary.votedCount===voteMembers.length&&summary.down>=summary.up?"no":"");var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
+              {(day.meals||[]).map(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);var st=soloTripMode?"yes":((summary.up>=majorityNeeded&&summary.up>summary.down)?"yes":(summary.votedCount===voteMembers.length&&summary.down>=summary.up?"no":""));var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
                 var opts=Array.isArray(m.options)?m.options:[];
                 var selectedOpt=(m.selectedOption!==undefined&&m.selectedOption!==null)?m.selectedOption:0;
                 return(<div key={mi} style={{display:"flex",flexDirection:"column",gap:6,padding:"8px 0",borderBottom:mi<(day.meals||[]).length-1?"1px solid "+C.border:"none",opacity:st==="no"?.35:1}}>
@@ -6850,7 +6995,7 @@ export default function WanderPlan(){
                       </div>
                     </div>
                     <span style={{fontSize:13,fontWeight:600,color:C.goldT,flexShrink:0}}>{"$"+(m.cost||0)}</span>
-                    <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:999,background:st==="yes"?C.grnBg:(st==="no"?C.redBg:C.wrnBg),color:st==="yes"?C.grn:(st==="no"?C.red:C.wrn),flexShrink:0}}>{st==="yes"?"Approved":(st==="no"?"Rejected":("Voting "+summary.votedCount+"/"+voteMembers.length))}</span>
+                    <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:999,background:st==="yes"?C.grnBg:(st==="no"?C.redBg:C.wrnBg),color:st==="yes"?C.grn:(st==="no"?C.red:C.wrn),flexShrink:0}}>{soloTripMode?"Ready":(st==="yes"?"Approved":(st==="no"?"Rejected":("Voting "+summary.votedCount+"/"+voteMembers.length)))}</span>
                   </div>
                   {opts.length>1&&(<div style={{display:"flex",gap:6,flexWrap:"wrap",paddingLeft:16}}>
                     {opts.map(function(opt,oi){
@@ -6858,7 +7003,7 @@ export default function WanderPlan(){
                       return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{opt.name+" *"+Number(opt.rating||0).toFixed(1)+" $"+(opt.cost||0)}</button>;
                     })}
                   </div>)}
-                  <div style={{display:"flex",flexWrap:"wrap",gap:8,paddingLeft:16}}>
+                  {!soloTripMode&&(<div style={{display:"flex",flexWrap:"wrap",gap:8,paddingLeft:16}}>
                     {voteMembers.map(function(vm){
                       var v=readVoteForVoter(summary.row,vm);
                       var canEdit=canEditVoteForMember(vm,currentVoteActor,organizerMode);
@@ -6868,7 +7013,7 @@ export default function WanderPlan(){
                         <button disabled={!canEdit} onClick={function(e){e.stopPropagation();castMealVote(day,m,di,mi,vm,"down");}} style={{width:26,height:26,borderRadius:8,border:"1px solid "+(v==="down"?C.red+"55":C.red+"40"),background:v==="down"?C.redBg:"transparent",color:C.red,fontSize:10,fontWeight:700,cursor:canEdit?"pointer":"default",opacity:canEdit?1:.5}}>{"Dn"}</button>
                       </div>);
                     })}
-                  </div>
+                  </div>)}
                 </div>);
               })}
             </div>);
@@ -6882,8 +7027,8 @@ export default function WanderPlan(){
             <div style={{display:"flex",gap:6,padding:"8px 10px",borderTop:mealChat.length>0?"1px solid "+C.border:"none"}}><input value={mealAsk} onChange={function(e){setMA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendMealChat();}} placeholder="'vegan ramen in Kyoto' or 'cheaper dinners'" disabled={mealAskLoad} style={{flex:1,padding:"8px 11px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:12,color:"#fff",opacity:mealAskLoad?.5:1}}/><button onClick={sendMealChat} disabled={mealAskLoad} style={{padding:"7px 12px",borderRadius:8,border:"none",background:mealAskLoad?C.border:C.teal,color:mealAskLoad?C.tx3:"#fff",fontSize:11,fontWeight:600,cursor:mealAskLoad?"default":"pointer"}}>Ask</button></div>
           </div>
 
-          {allDecided&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{approvedMeals.length} meals approved. Est. food cost for sample: ${totalMealCost}</p></div>{goBtn("Confirm Meal Plan")}</div>)}
-          {!allDecided&&mealDone&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>Accept or reject each meal to continue.</p>}
+          {allDecided&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{soloTripMode?meals.reduce(function(total,day){return total+((day.meals||[]).length||0);},0):approvedMeals.length} meals {soloTripMode?"ready":"approved"}. Est. food cost for sample: ${totalMealCost}</p></div>{goBtn("Confirm Meal Plan")}</div>)}
+          {!allDecided&&mealDone&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>{soloTripMode?"Finish reviewing the meal plan to continue.":"Accept or reject each meal to continue."}</p>}
         </div>)}
         {mealDone&&meals.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"12px 0"}}>No meal plan generated. Describe what you want:</p><div style={{display:"flex",gap:6}}><input value={mealAsk} onChange={function(e){setMA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendMealChat();}} placeholder="e.g. 'plan meals for Kyoto, mostly local food'" style={{flex:1,padding:"9px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/><button onClick={sendMealChat} style={{padding:"8px 14px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>Ask</button></div></div>)}
       </div>);
@@ -7045,6 +7190,6 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, addClockMinutes, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeTripDestinationValue, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
 
 
