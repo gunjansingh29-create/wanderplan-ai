@@ -317,6 +317,35 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(rows.every((day) => Array.isArray(day.items) && day.items.length > 0)).toBe(true);
   });
 
+  test("buildFallbackItinerary places breakfast first and keeps morning POIs before lunch", () => {
+    const rows = buildFallbackItinerary(
+      [{ name: "Kyoto" }],
+      [
+        { name: "Arashiyama Bamboo Grove", destination: "Kyoto", cost: 0, category: "Nature", tags: ["garden", "photography"] },
+        { name: "Nishiki Market", destination: "Kyoto", cost: 15, category: "Food", tags: ["market", "food"] },
+        { name: "Gion Evening Walk", destination: "Kyoto", cost: 0, category: "Culture", tags: ["night", "walk"] },
+      ],
+      [{ name: "Riverside Inn", destination: "Kyoto", neighborhood: "Gion" }],
+      [
+        { name: "Morning Table", destination: "Kyoto", type: "Breakfast", cost: 18 },
+        { name: "Market Lunch", destination: "Kyoto", type: "Lunch", cost: 24 },
+        { name: "Lantern Dinner", destination: "Kyoto", type: "Dinner", cost: 36 },
+      ],
+      3,
+      "2026-04-10",
+      { Kyoto: 2 }
+    );
+    const fullDay = rows.find((day) => day.items.some((item) => item.title === "Morning Table"));
+    expect(fullDay).toBeTruthy();
+    const breakfastIndex = fullDay.items.findIndex((item) => item.title === "Morning Table");
+    const lunchIndex = fullDay.items.findIndex((item) => item.title === "Market Lunch");
+    const bambooIndex = fullDay.items.findIndex((item) => String(item.title).toLowerCase().includes("arashiyama bamboo grove"));
+    expect(breakfastIndex).toBeGreaterThanOrEqual(0);
+    expect(lunchIndex).toBeGreaterThan(breakfastIndex);
+    expect(bambooIndex).toBeGreaterThan(breakfastIndex);
+    expect(bambooIndex).toBeLessThan(lunchIndex);
+  });
+
   test("buildItinerarySavePayload maps itinerary rows into backend save shape", () => {
     const payload = buildItinerarySavePayload([
       {

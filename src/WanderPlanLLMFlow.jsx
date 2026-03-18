@@ -1628,10 +1628,47 @@ async function askItinerary(destinations, acceptedPOIs, pickedStays, approvedMea
   var dateRule = startDate
     ? ("Start date is " + startDate + ". Increment one day for each itinerary day.")
     : "Use consecutive ISO dates in YYYY-MM-DD format.";
-  var sys = "Build a " + showDays + "-day travel itinerary. Return ONLY a JSON array. No markdown.\n\nFormat: [{\"day\":1,\"date\":\"YYYY-MM-DD\",\"destination\":\"City\",\"theme\":\"Theme\",\"items\":[{\"time\":\"09:00\",\"type\":\"activity\",\"title\":\"Name\",\"cost\":0}]}]\n\ntype must be one of: flight, checkin, checkout, activity, meal, travel, rest\nPlan " + showDays + " days for " + destStr + ".\n" + dateRule + "\nUse these activities: " + actList + "\nStays: " + stayList + "\nMeals: " + mealList + "\n5-6 items per day. Day 1 starts with arrival. ONLY JSON array.";
+  var sys = "Build a " + showDays + "-day travel itinerary. Return ONLY a JSON array. No markdown.\n\nFormat: [{\"day\":1,\"date\":\"YYYY-MM-DD\",\"destination\":\"City\",\"theme\":\"Theme\",\"items\":[{\"time\":\"09:00\",\"type\":\"activity\",\"title\":\"Name\",\"cost\":0}]}]\n\ntype must be one of: flight, checkin, checkout, activity, meal, travel, rest\nPlan " + showDays + " days for " + destStr + ".\n" + dateRule + "\nUse these activities: " + actList + "\nStays: " + stayList + "\nMeals: " + mealList + "\nRules:\n- breakfast is the first stop on every full day\n- place morning-friendly POIs after breakfast and before lunch\n- place afternoon/evening POIs after lunch and before dinner\n- use the hotel and lunch/dinner restaurants as routing anchors so POIs feel geographically grouped\n- do not push sunrise/garden/market/temple/viewpoint style POIs into late-afternoon if better in the morning\n- make sure approved POIs actually appear in the itinerary\n5-6 items per day. Day 1 starts with arrival. ONLY JSON array.";
   var msg = "Create " + showDays + "-day itinerary for " + (groupSize || 2) + " people visiting " + destStr + (startDate?(". Start on "+startDate+"."):"");
   var res = await callLLM(sys, msg, 1500);
   return Array.isArray(res) ? res : [];
+}
+
+function poiDayPartScore(poi, dayPart){
+  var part=String(dayPart||"any").toLowerCase();
+  var text=[
+    String(poi&&poi.name||""),
+    String(poi&&poi.category||""),
+    Array.isArray(poi&&poi.tags)?poi.tags.join(" "):"",
+    String(poi&&poi.matchReason||"")
+  ].join(" ").toLowerCase();
+  var score=0;
+  if(part==="morning"){
+    if(/breakfast|brunch|nightlife|bar|club|cocktail|late/.test(text))score-=4;
+    if(/sunrise|garden|market|temple|shrine|museum|lookout|viewpoint|park|walk|photo|photography|hike|trail|nature|culture/.test(text))score+=5;
+    if(/beach|spa|shopping|food/.test(text))score+=1;
+  }else if(part==="afternoon"){
+    if(/sunrise|garden|temple|shrine|lookout|viewpoint|hike|trail|photography/.test(text))score-=4;
+    if(/museum|gallery|market|food|shopping|culture|park|garden|harbor|waterfront|tour/.test(text))score+=3;
+  }else if(part==="evening"){
+    if(/sunrise|temple|shrine|museum|garden|market|lookout|viewpoint|hike|trail|photography|park/.test(text))score-=4;
+    if(/night|sunset|bar|club|food|market|show|music|harbor|waterfront/.test(text))score+=4;
+  }
+  return score;
+}
+
+function routeAnchorLabel(kind, stay, meal){
+  if(kind==="stay"&&stay&&stay.name)return stay.name;
+  if(meal&&meal.name)return meal.name;
+  if(stay&&stay.neighborhood)return stay.neighborhood;
+  return "";
+}
+
+function formatPoiStop(poi, anchorLabel, prefix){
+  if(!poi)return null;
+  var poiName=String(poi&&poi.name||"").trim()||"Local highlight";
+  var base=String(prefix||"Explore").trim();
+  return anchorLabel?(base+" "+poiName+" near "+anchorLabel):(base+" "+poiName);
 }
 
 function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, totalTripDays, startDateIso, durationPerDestination){
@@ -1663,12 +1700,38 @@ function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approve
   });
   var poiCursor={};
   var mealCursor={};
-  function nextPoi(dest){
+  function nextPoi(dest, dayPart){
     var list=poisByDest[dest]||[];
     if(list.length===0)return null;
-    var idx=Number(poiCursor[dest]||0)%list.length;
-    poiCursor[dest]=idx+1;
-    return list[idx];
+    var state=poiCursor[dest];
+    if(!(state&&typeof state==="object"))state={used:{}};
+    var bestIdx=-1;
+    var bestScore=-999;
+    list.forEach(function(poi,idx){
+      if(state.used[idx])return;
+      var score=poiDayPartScore(poi,dayPart);
+      if(score>bestScore){
+        bestScore=score;
+        bestIdx=idx;
+      }
+    });
+    if(bestIdx<0){
+      state.used={};
+      bestIdx=0;
+      bestScore=poiDayPartScore(list[0],dayPart);
+      list.forEach(function(poi,idx){
+        var score=poiDayPartScore(poi,dayPart);
+        if(score>bestScore){
+          bestScore=score;
+          bestIdx=idx;
+        }
+      });
+    }
+    if(dayPart==="afternoon"&&bestScore<=0)return null;
+    if(dayPart==="evening"&&bestScore<=0)return null;
+    state.used[bestIdx]=true;
+    poiCursor[dest]=state;
+    return list[bestIdx];
   }
   function nextMeal(dest, fallbackType){
     var list=mealsByDest[dest]||[];
@@ -1702,29 +1765,51 @@ function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approve
     var breakfast=nextMeal(dest,"breakfast");
     var lunch=nextMeal(dest,"lunch");
     var dinner=nextMeal(dest,"dinner");
-    var act1=nextPoi(dest);
-    var act2=nextPoi(dest);
+    var actMorning=nextPoi(dest,"morning");
+    var actAfternoon=nextPoi(dest,"afternoon");
+    var actEvening=nextPoi(dest,"evening");
     var items=[];
     if(entry.kind==="travel"){
       items.push({time:"09:00",type:"checkout",title:"Check out and depart previous city",cost:0});
       items.push({time:"11:30",type:"travel",title:"Travel to "+dest,cost:0});
       items.push({time:"15:00",type:"checkin",title:"Check in"+(stay&&stay.name?(" at "+stay.name):""),cost:0});
+      if(actEvening){
+        items.push({time:"16:30",type:"activity",title:formatPoiStop(actEvening,routeAnchorLabel("stay",stay,dinner),"Ease into"),cost:Number(actEvening&&actEvening.cost||0)||0});
+      }
       items.push({time:"18:30",type:"meal",title:(dinner&&dinner.name)||("Dinner in "+dest),cost:Number(dinner&&dinner.cost||30)||30});
     }else if(entry.kind==="buffer"){
       items.push({time:"09:00",type:"meal",title:(breakfast&&breakfast.name)||("Breakfast in "+dest),cost:Number(breakfast&&breakfast.cost||20)||20});
-      items.push({time:"11:00",type:"rest",title:"Flexible time, shopping, or rest",cost:0});
-      items.push({time:"14:00",type:"activity",title:(act1&&act1.name)||("Last walk around "+dest),cost:Number(act1&&act1.cost||0)||0});
+      if(actMorning){
+        items.push({time:"10:15",type:"activity",title:formatPoiStop(actMorning,routeAnchorLabel("stay",stay,breakfast),"Walk from breakfast to"),cost:Number(actMorning&&actMorning.cost||0)||0});
+      }else{
+        items.push({time:"11:00",type:"rest",title:"Flexible time, shopping, or rest",cost:0});
+      }
+      if(lunch){
+        items.push({time:"13:00",type:"meal",title:lunch.name||("Lunch in "+dest),cost:Number(lunch&&lunch.cost||25)||25});
+      }
+      items.push({time:"14:30",type:(actAfternoon?"activity":"rest"),title:actAfternoon?formatPoiStop(actAfternoon,routeAnchorLabel("meal",stay,lunch||dinner),"Continue to"):("Last walk around "+dest),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
       items.push({time:"19:00",type:"meal",title:(dinner&&dinner.name)||("Farewell dinner in "+dest),cost:Number(dinner&&dinner.cost||40)||40});
     }else{
       if(dayNum===1){
         items.push({time:"09:00",type:"flight",title:"Arrive in "+dest,cost:0});
         items.push({time:"11:00",type:"checkin",title:"Check in"+(stay&&stay.name?(" at "+stay.name):""),cost:0});
+        if(actAfternoon){
+          items.push({time:"14:00",type:"activity",title:formatPoiStop(actAfternoon,routeAnchorLabel("stay",stay,lunch),"Start with"),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
+        }
       }else{
         items.push({time:"08:30",type:"meal",title:(breakfast&&breakfast.name)||("Breakfast in "+dest),cost:Number(breakfast&&breakfast.cost||18)||18});
+        if(actMorning){
+          items.push({time:"10:00",type:"activity",title:formatPoiStop(actMorning,routeAnchorLabel("meal",stay,breakfast),"Walk from breakfast to"),cost:Number(actMorning&&actMorning.cost||0)||0});
+        }
       }
-      items.push({time:"10:00",type:"activity",title:(act1&&act1.name)||("Explore "+dest),cost:Number(act1&&act1.cost||0)||0});
+      if(dayNum===1&&!actAfternoon){
+        items.push({time:"13:00",type:"rest",title:"Settle in and explore the area around your stay",cost:0});
+      }
       items.push({time:"13:00",type:"meal",title:(lunch&&lunch.name)||("Lunch in "+dest),cost:Number(lunch&&lunch.cost||25)||25});
-      items.push({time:"15:30",type:(act2?"activity":"rest"),title:(act2&&act2.name)||("Free time in "+dest),cost:Number(act2&&act2.cost||0)||0});
+      items.push({time:"15:30",type:(actAfternoon?"activity":"rest"),title:actAfternoon?formatPoiStop(actAfternoon,routeAnchorLabel("meal",stay,lunch),"Head to"):("Free time in "+dest),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
+      if(actEvening){
+        items.push({time:"17:30",type:"activity",title:formatPoiStop(actEvening,routeAnchorLabel("meal",stay,dinner),"See"),cost:Number(actEvening&&actEvening.cost||0)||0});
+      }
       items.push({time:"19:00",type:"meal",title:(dinner&&dinner.name)||("Dinner in "+dest),cost:Number(dinner&&dinner.cost||35)||35});
     }
     return {
