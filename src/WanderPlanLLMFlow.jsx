@@ -6,7 +6,8 @@ var MOFUL=["January","February","March","April","May","June","July","August","Se
 var CATS=[{id:"hiking",q:"Hiking & nature?"},{id:"food",q:"Food & cooking?"},{id:"culture",q:"Temples & history?"},{id:"photo",q:"Photography?"},{id:"adventure",q:"Water sports?"},{id:"nightlife",q:"Nightlife?"},{id:"shopping",q:"Markets & shopping?"},{id:"wellness",q:"Spa & wellness?"}];
 var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-range",r:"$120-250/day"},{id:"premium",l:"Premium",r:"$250-400/day"},{id:"luxury",l:"Luxury",r:"$400+/day"}];
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
-var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","POI Voting","Budget","Duration","Availability","Flights","Stays","Dining","Itinerary","Confirmed"];
+var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
+var WIZARD_ORDER_VERSION=2;
 
 function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"none":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
 function Avi(props){var s=props.size||28;return(<div title={props.name||""} style={{width:s,height:s,borderRadius:999,background:props.color||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:s*.4,fontWeight:700,color:"#fff",flexShrink:0,border:"1.5px solid "+C.surface}}>{props.ini||"?"}</div>);}
@@ -613,8 +614,20 @@ function buildCurrentVoteActor(token,userState,tripId){
 
 function wizardSyncIntervalMs(stepNum){
   var step=Number(stepNum||0);
-  if(step===1||step===2||step===3||step===5||step===6||step===9||step===11||step===12)return 1200;
+  if(step===1||step===2||step===3||step===5||step===6||step===9||step===10||step===11||step===12||step===13)return 1200;
   return 3000;
+}
+
+function normalizeWizardStepIndex(stepNum, orderVersion){
+  var step=Math.min(Math.max(0,Number(stepNum)||0),Math.max(WIZ.length-1,0));
+  var version=Math.max(0,Number(orderVersion)||0);
+  if(version>=WIZARD_ORDER_VERSION)return step;
+  if(step===9)return 12;
+  if(step===10)return 13;
+  if(step===11)return 9;
+  if(step===12)return 10;
+  if(step===13)return 11;
+  return step;
 }
 
 function inclusiveIsoDays(startIso, endIso){
@@ -1617,7 +1630,7 @@ export function normalizeDiningPlan(rows){
 async function askItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, budgetTier, days, groupSize, startDateIso) {
   var dNames = (destinations || []).map(function(d) { return d.name; });
   var destStr = dNames.join(", ") || "the destinations";
-  var actList = (acceptedPOIs || []).slice(0, 8).map(function(p) { return p.name + " in " + (p.destination || ""); }).join(", ") || "sightseeing";
+  var actList = (acceptedPOIs || []).map(function(p) { return p.name + " in " + (p.destination || ""); }).join(", ") || "sightseeing";
   var stayList = (pickedStays || []).map(function(s) { return s.name + " (" + (s.destination || "") + ")"; }).join(", ") || "hotel";
   var mealList = (approvedMeals || []).slice(0, 6).map(function(m) { return m.type + " at " + m.name; }).join(", ") || "local restaurants";
   var numDays = Math.max(1, Number(days || 5) || 5);
@@ -1627,8 +1640,8 @@ async function askItinerary(destinations, acceptedPOIs, pickedStays, approvedMea
   if(!hasIsoStart)startDate="";
   var dateRule = startDate
     ? ("Start date is " + startDate + ". Increment one day for each itinerary day.")
-    : "Use consecutive ISO dates in YYYY-MM-DD format.";
-  var sys = "Build a " + showDays + "-day travel itinerary. Return ONLY a JSON array. No markdown.\n\nFormat: [{\"day\":1,\"date\":\"YYYY-MM-DD\",\"destination\":\"City\",\"theme\":\"Theme\",\"items\":[{\"time\":\"09:00\",\"type\":\"activity\",\"title\":\"Name\",\"cost\":0}]}]\n\ntype must be one of: flight, checkin, checkout, activity, meal, travel, rest\nPlan " + showDays + " days for " + destStr + ".\n" + dateRule + "\nUse these activities: " + actList + "\nStays: " + stayList + "\nMeals: " + mealList + "\nRules:\n- breakfast is the first stop on every full day\n- place morning-friendly POIs after breakfast and before lunch\n- place afternoon/evening POIs after lunch and before dinner\n- use the hotel and lunch/dinner restaurants as routing anchors so POIs feel geographically grouped\n- do not push sunrise/garden/market/temple/viewpoint style POIs into late-afternoon if better in the morning\n- make sure approved POIs actually appear in the itinerary\n5-6 items per day. Day 1 starts with arrival. ONLY JSON array.";
+    : "Use Day 1, Day 2, etc. in the date field until exact travel dates are locked.";
+  var sys = "Build a " + showDays + "-day travel itinerary. Return ONLY a JSON array. No markdown.\n\nFormat: [{\"day\":1,\"date\":\"YYYY-MM-DD or Day N\",\"destination\":\"City\",\"theme\":\"Theme\",\"items\":[{\"time\":\"09:00\",\"type\":\"activity\",\"title\":\"Name\",\"cost\":0}]}]\n\ntype must be one of: flight, checkin, checkout, activity, meal, travel, rest\nPlan " + showDays + " days for " + destStr + ".\n" + dateRule + "\nUse these activities: " + actList + "\nStays: " + stayList + "\nMeals: " + mealList + "\nRules:\n- breakfast is the first stop on every full day\n- place morning-friendly POIs after breakfast and before lunch\n- place afternoon/evening POIs after lunch and before dinner\n- use the hotel and lunch/dinner restaurants as routing anchors so POIs feel geographically grouped\n- include travel items with approximate minutes between the hotel, breakfast, POIs, lunch, dinner, and airport/rail transfers\n- do not push sunrise/garden/market/temple/viewpoint style POIs into late-afternoon if better in the morning\n- make sure approved POIs actually appear in the itinerary\n5-8 items per day. Day 1 starts with arrival. ONLY JSON array.";
   var msg = "Create " + showDays + "-day itinerary for " + (groupSize || 2) + " people visiting " + destStr + (startDate?(". Start on "+startDate+"."):"");
   var res = await callLLM(sys, msg, 1500);
   return Array.isArray(res) ? res : [];
@@ -1669,6 +1682,64 @@ function formatPoiStop(poi, anchorLabel, prefix){
   var poiName=String(poi&&poi.name||"").trim()||"Local highlight";
   var base=String(prefix||"Explore").trim();
   return anchorLabel?(base+" "+poiName+" near "+anchorLabel):(base+" "+poiName);
+}
+
+function addClockMinutes(timeText, minutes){
+  var text=String(timeText||"").trim();
+  var match=text.match(/^(\d{1,2}):(\d{2})$/);
+  if(!match)return text;
+  var hours=Number(match[1]||0)||0;
+  var mins=Number(match[2]||0)||0;
+  var total=(hours*60)+mins+(Number(minutes)||0);
+  if(total<0)total=0;
+  var nextHours=Math.floor(total/60)%24;
+  var nextMins=total%60;
+  return String(nextHours).padStart(2,"0")+":"+String(nextMins).padStart(2,"0");
+}
+
+function routeTokens(text){
+  return String(text||"").toLowerCase().split(/[^a-z0-9]+/).filter(function(token){
+    return token&&token.length>2;
+  });
+}
+
+function estimateTransitMinutes(fromLabel, toLabel){
+  var from=String(fromLabel||"").trim();
+  var to=String(toLabel||"").trim();
+  if(!from||!to)return 0;
+  if(from.toLowerCase()===to.toLowerCase())return 0;
+  var combined=(from+" "+to).toLowerCase();
+  if(/airport|terminal/.test(combined))return 45;
+  if(/station|harbor|ferry|port/.test(combined))return 30;
+  var fromTokens=routeTokens(from);
+  var toTokens=routeTokens(to);
+  var shared=fromTokens.filter(function(token){return toTokens.indexOf(token)>=0;}).length;
+  if(shared>=2)return 10;
+  if(shared===1)return 15;
+  return 25;
+}
+
+function buildTransitItem(timeText, fromLabel, toLabel){
+  var minutes=estimateTransitMinutes(fromLabel,toLabel);
+  if(!minutes)return null;
+  return {
+    time:String(timeText||"").trim()||"00:00",
+    type:"travel",
+    title:minutes+" min transit from "+fromLabel+" to "+toLabel,
+    cost:0
+  };
+}
+
+function materializeItineraryDates(rows, startDateIso){
+  var start=String(startDateIso||"").trim().slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(start))return Array.isArray(rows)?rows:[];
+  var changed=false;
+  var mapped=(Array.isArray(rows)?rows:[]).map(function(day,idx){
+    var nextDate=addIsoDays(start,idx);
+    if(String(day&&day.date||"")!==nextDate)changed=true;
+    return Object.assign({},day,{date:nextDate});
+  });
+  return changed?mapped:(Array.isArray(rows)?rows:[]);
 }
 
 function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, totalTripDays, startDateIso, durationPerDestination){
@@ -1768,49 +1839,74 @@ function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approve
     var actMorning=nextPoi(dest,"morning");
     var actAfternoon=nextPoi(dest,"afternoon");
     var actEvening=nextPoi(dest,"evening");
+    var stayLabel=(stay&&stay.name)||((stay&&stay.neighborhood)?(stay.neighborhood+" stay"):("Stay in "+dest));
+    var breakfastLabel=(breakfast&&breakfast.name)||("Breakfast in "+dest);
+    var lunchLabel=(lunch&&lunch.name)||("Lunch in "+dest);
+    var dinnerLabel=(dinner&&dinner.name)||("Dinner in "+dest);
+    function pushTransit(timeText, fromLabel, toLabel){
+      var leg=buildTransitItem(timeText,fromLabel,toLabel);
+      if(leg)items.push(leg);
+    }
     var items=[];
     if(entry.kind==="travel"){
       items.push({time:"09:00",type:"checkout",title:"Check out and depart previous city",cost:0});
       items.push({time:"11:30",type:"travel",title:"Travel to "+dest,cost:0});
       items.push({time:"15:00",type:"checkin",title:"Check in"+(stay&&stay.name?(" at "+stay.name):""),cost:0});
       if(actEvening){
+        pushTransit("16:00",stayLabel,String(actEvening&&actEvening.name||"Local highlight"));
         items.push({time:"16:30",type:"activity",title:formatPoiStop(actEvening,routeAnchorLabel("stay",stay,dinner),"Ease into"),cost:Number(actEvening&&actEvening.cost||0)||0});
       }
-      items.push({time:"18:30",type:"meal",title:(dinner&&dinner.name)||("Dinner in "+dest),cost:Number(dinner&&dinner.cost||30)||30});
+      pushTransit("18:00",String((actEvening&&actEvening.name)||stayLabel),dinnerLabel);
+      items.push({time:"18:30",type:"meal",title:dinnerLabel,cost:Number(dinner&&dinner.cost||30)||30});
+      pushTransit("20:00",dinnerLabel,stayLabel);
     }else if(entry.kind==="buffer"){
-      items.push({time:"09:00",type:"meal",title:(breakfast&&breakfast.name)||("Breakfast in "+dest),cost:Number(breakfast&&breakfast.cost||20)||20});
+      items.push({time:"09:00",type:"meal",title:breakfastLabel,cost:Number(breakfast&&breakfast.cost||20)||20});
       if(actMorning){
+        pushTransit("09:35",breakfastLabel,String(actMorning&&actMorning.name||"Local highlight"));
         items.push({time:"10:15",type:"activity",title:formatPoiStop(actMorning,routeAnchorLabel("stay",stay,breakfast),"Walk from breakfast to"),cost:Number(actMorning&&actMorning.cost||0)||0});
       }else{
         items.push({time:"11:00",type:"rest",title:"Flexible time, shopping, or rest",cost:0});
       }
       if(lunch){
-        items.push({time:"13:00",type:"meal",title:lunch.name||("Lunch in "+dest),cost:Number(lunch&&lunch.cost||25)||25});
+        pushTransit("12:30",String((actMorning&&actMorning.name)||stayLabel),lunchLabel);
+        items.push({time:"13:00",type:"meal",title:lunchLabel,cost:Number(lunch&&lunch.cost||25)||25});
       }
+      pushTransit("14:00",lunchLabel,String((actAfternoon&&actAfternoon.name)||stayLabel));
       items.push({time:"14:30",type:(actAfternoon?"activity":"rest"),title:actAfternoon?formatPoiStop(actAfternoon,routeAnchorLabel("meal",stay,lunch||dinner),"Continue to"):("Last walk around "+dest),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
-      items.push({time:"19:00",type:"meal",title:(dinner&&dinner.name)||("Farewell dinner in "+dest),cost:Number(dinner&&dinner.cost||40)||40});
+      pushTransit("18:15",String((actAfternoon&&actAfternoon.name)||stayLabel),dinnerLabel);
+      items.push({time:"19:00",type:"meal",title:dinnerLabel,cost:Number(dinner&&dinner.cost||40)||40});
+      pushTransit("20:15",dinnerLabel,stayLabel);
     }else{
       if(dayNum===1){
         items.push({time:"09:00",type:"flight",title:"Arrive in "+dest,cost:0});
         items.push({time:"11:00",type:"checkin",title:"Check in"+(stay&&stay.name?(" at "+stay.name):""),cost:0});
+        items.push({time:"12:30",type:"meal",title:lunchLabel,cost:Number(lunch&&lunch.cost||25)||25});
         if(actAfternoon){
+          pushTransit("13:20",lunchLabel,String(actAfternoon&&actAfternoon.name||"Local highlight"));
           items.push({time:"14:00",type:"activity",title:formatPoiStop(actAfternoon,routeAnchorLabel("stay",stay,lunch),"Start with"),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
         }
       }else{
-        items.push({time:"08:30",type:"meal",title:(breakfast&&breakfast.name)||("Breakfast in "+dest),cost:Number(breakfast&&breakfast.cost||18)||18});
+        items.push({time:"08:30",type:"meal",title:breakfastLabel,cost:Number(breakfast&&breakfast.cost||18)||18});
         if(actMorning){
+          pushTransit("09:15",breakfastLabel,String(actMorning&&actMorning.name||"Local highlight"));
           items.push({time:"10:00",type:"activity",title:formatPoiStop(actMorning,routeAnchorLabel("meal",stay,breakfast),"Walk from breakfast to"),cost:Number(actMorning&&actMorning.cost||0)||0});
         }
       }
       if(dayNum===1&&!actAfternoon){
         items.push({time:"13:00",type:"rest",title:"Settle in and explore the area around your stay",cost:0});
+      }else if(dayNum!==1){
+        pushTransit("12:20",String((actMorning&&actMorning.name)||stayLabel),lunchLabel);
+        items.push({time:"13:00",type:"meal",title:lunchLabel,cost:Number(lunch&&lunch.cost||25)||25});
       }
-      items.push({time:"13:00",type:"meal",title:(lunch&&lunch.name)||("Lunch in "+dest),cost:Number(lunch&&lunch.cost||25)||25});
+      pushTransit("14:50",lunchLabel,String((actAfternoon&&actAfternoon.name)||stayLabel));
       items.push({time:"15:30",type:(actAfternoon?"activity":"rest"),title:actAfternoon?formatPoiStop(actAfternoon,routeAnchorLabel("meal",stay,lunch),"Head to"):("Free time in "+dest),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
       if(actEvening){
+        pushTransit("17:10",String((actAfternoon&&actAfternoon.name)||stayLabel),String(actEvening&&actEvening.name||"Local highlight"));
         items.push({time:"17:30",type:"activity",title:formatPoiStop(actEvening,routeAnchorLabel("meal",stay,dinner),"See"),cost:Number(actEvening&&actEvening.cost||0)||0});
       }
-      items.push({time:"19:00",type:"meal",title:(dinner&&dinner.name)||("Dinner in "+dest),cost:Number(dinner&&dinner.cost||35)||35});
+      pushTransit("18:25",String((actEvening&&actEvening.name)||(actAfternoon&&actAfternoon.name)||stayLabel),dinnerLabel);
+      items.push({time:"19:00",type:"meal",title:dinnerLabel,cost:Number(dinner&&dinner.cost||35)||35});
+      pushTransit("20:15",dinnerLabel,stayLabel);
     }
     return {
       day:dayNum,
@@ -2505,11 +2601,11 @@ export default function WanderPlan(){
       if(!ps)return;
       var updatedAt=String(ps.updated_at||"");
       if(updatedAt)planningStateUpdatedAtRef.current=updatedAt;
+      var st=(ps&&ps.state&&typeof ps.state==="object")?ps.state:{};
       if(typeof ps.current_step==="number"&&sc==="wizard"){
-        var remoteStep=Math.min(Math.max(0,Number(ps.current_step)||0),Math.max(WIZ.length-1,0));
+        var remoteStep=normalizeWizardStepIndex(ps.current_step,st.wizard_order_version);
         if(remoteStep!==wizStep)setWS(remoteStep);
       }
-      var st=(ps&&ps.state&&typeof ps.state==="object")?ps.state:{};
       if(st.duration_days_locked!==undefined){
         setSDD(Math.max(0,Number(st.duration_days_locked)||0));
       }
@@ -2526,7 +2622,7 @@ export default function WanderPlan(){
         var planningTripDays=Math.max(0,Number(st.duration_days_locked!==undefined?st.duration_days_locked:sharedDurationDays)||0);
         setFD(function(prev){
           return sanitizeFlightDatesForTrip(
-            mergeSharedFlightDates(prev,st.flight_dates,wizStep===10),
+            mergeSharedFlightDates(prev,st.flight_dates,wizStep===13),
             planningTripDays
           );
         });
@@ -2540,6 +2636,12 @@ export default function WanderPlan(){
             manual_date:!!(stop&&stop.manual_date)
           };
         }));
+      }
+      if(st.flights_confirmed!==undefined){
+        setFC(!!st.flights_confirmed);
+      }
+      if(Array.isArray(st.flight_booking_links)){
+        setFBL(st.flight_booking_links.slice());
       }
       setDMV(normalizeDestinationVoteState(st.dest_member_votes));
       setPV(normalizePoiStateMap(st.poi_votes,pois,st.poi_option_pool));
@@ -2625,7 +2727,7 @@ export default function WanderPlan(){
           var returnedTripDays=Math.max(0,Number(state.duration_days_locked!==undefined?state.duration_days_locked:sharedDurationDays)||0);
           setFD(function(prev){
             return sanitizeFlightDatesForTrip(
-              mergeSharedFlightDates(prev,state.flight_dates,wizStep===10),
+              mergeSharedFlightDates(prev,state.flight_dates,wizStep===13),
               returnedTripDays
             );
           });
@@ -2636,10 +2738,12 @@ export default function WanderPlan(){
               destination:String(stop&&stop.destination||"").trim(),
               airport:String(stop&&stop.airport||stop&&stop.to_airport||"").trim(),
               travel_date:String(stop&&stop.travel_date||stop&&stop.depart_date||"").slice(0,10),
-              manual_date:!!(stop&&stop.manual_date)
-            };
-          }));
-        }
+            manual_date:!!(stop&&stop.manual_date)
+          };
+        }));
+      }
+      if(state.flights_confirmed!==undefined)setFC(!!state.flights_confirmed);
+      if(Array.isArray(state.flight_booking_links))setFBL(state.flight_booking_links.slice());
         if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
         if(state.stay_votes&&typeof state.stay_votes==="object")setStayVotes(state.stay_votes);
         if(state.stay_final_choices&&typeof state.stay_final_choices==="object")setSFC(state.stay_final_choices);
@@ -2713,7 +2817,7 @@ export default function WanderPlan(){
   function setWizardStepShared(nextStep){
     var n=Math.min(Math.max(0,Number(nextStep)||0),Math.max(WIZ.length-1,0));
     setWS(n);
-    saveTripPlanningState({current_step:n});
+    saveTripPlanningState({current_step:n,state:{wizard_order_version:WIZARD_ORDER_VERSION}});
   }
   function consensusStageKeyForStep(stepNum){
     var map={
@@ -2818,7 +2922,7 @@ export default function WanderPlan(){
   },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,user.email,wizStep]);
   useEffect(function(){
     var activeTripId=resolveWizardTripId(currentTripId,newTrip);
-    if(!loaded||!authToken||sc!=="wizard"||wizStep!==9||!activeTripId||!isUuidLike(activeTripId))return;
+    if(!loaded||!authToken||sc!=="wizard"||wizStep!==12||!activeTripId||!isUuidLike(activeTripId))return;
     function run(){
       fetchAvailabilityOverlap(activeTripId,authToken).then(function(res){
         if(!res)return;
@@ -2838,7 +2942,7 @@ export default function WanderPlan(){
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,wizStep,currentTripId,newTrip&&newTrip.id,flightDates.depart,flightDates.ret]);
   useEffect(function(){
-    if(!loaded||sc!=="wizard"||wizStep!==10)return;
+    if(!loaded||sc!=="wizard"||wizStep!==13)return;
     var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")
       ? availabilityData.locked_window
       : ((flightDates.depart&&flightDates.ret)?{start:String(flightDates.depart||"").slice(0,10),end:String(flightDates.ret||"").slice(0,10)}:null);
@@ -2872,6 +2976,17 @@ export default function WanderPlan(){
     flightDates.ret,
     flightDates.origin,
     flightDates.final_airport
+  ]);
+  useEffect(function(){
+    var startDate=(availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start)||flightDates.depart||"";
+    if(!itinDone||!startDate)return;
+    setItin(function(prev){
+      return materializeItineraryDates(prev,startDate);
+    });
+  },[
+    itinDone,
+    availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start,
+    flightDates.depart
   ]);
   useEffect(function(){
     var grouped={};
@@ -3700,7 +3815,7 @@ export default function WanderPlan(){
             {tripShareMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:8}}>{tripShareMsg}</p>}
           </div>
           <div style={{display:"flex",gap:10}}>
-            {tr.status==="planning"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(tr.step||0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Continue Planning</button>}
+            {tr.status==="planning"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Continue Planning</button>}
             {tr.status==="active"&&isUuidLike(tr.id)&&<button onClick={function(){setCTID(tr.id||"");setVT(tr);setCompanionErr("");setCompanionData(null);go("companion");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.grn+","+C.teal+")",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><span style={{width:8,height:8,borderRadius:999,background:"#fff",animation:"pulse 1.5s infinite"}}/>Open Live Companion</button>}
             {tr.status==="invited"&&(<>
               <button onClick={function(){
@@ -3754,12 +3869,12 @@ export default function WanderPlan(){
     var splitDefaultIds=defaultExpenseSplitMemberIds(members,currentUserVoteId);
     var companionReady=(comp.is_ready!==false)&&!!(today||currentItem||nextItem||upcoming.length);
     var readinessCopy=companionReadinessCopy(comp.readiness_reason);
-    var companionActions=[
-      {label:"Open Flights",step:10,color:C.sky},
-      {label:"Open Stays",step:11,color:C.goldT},
-      {label:"Open Dining",step:12,color:C.coral},
-      {label:"Open Itinerary",step:13,color:C.tealL}
-    ];
+      var companionActions=[
+      {label:"Open Flights",step:13,color:C.sky},
+      {label:"Open Stays",step:9,color:C.goldT},
+      {label:"Open Dining",step:10,color:C.coral},
+      {label:"Open Itinerary",step:11,color:C.tealL}
+      ];
     function openCompanionWizardStep(stepIndex){
       var tid=String((tr&&tr.id)||currentTripId||"").trim();
       var fallbackDests=(Array.isArray(tr.dests)&&tr.dests.length)?tr.dests:String(tr.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
@@ -4047,8 +4162,8 @@ export default function WanderPlan(){
         <h2 style={{fontSize:22,fontWeight:700,marginBottom:8}}>{readinessCopy.title}</h2>
         <p style={{fontSize:14,color:C.tx2,marginBottom:14}}>{readinessCopy.body}</p>
         <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          <button onClick={function(){openCompanionWizardStep(13);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.tealL+"35",background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Itinerary</button>
-          <button onClick={function(){openCompanionWizardStep(6);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.goldT+"35",background:C.goldDim,color:C.goldT,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Availability</button>
+          <button onClick={function(){openCompanionWizardStep(11);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.tealL+"35",background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Itinerary</button>
+          <button onClick={function(){openCompanionWizardStep(12);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.goldT+"35",background:C.goldDim,color:C.goldT,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Availability</button>
         </div>
       </div></Fade>)}
       {!companionLoad&&(currentItem||nextItem)&&(<Fade delay={130}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
@@ -4970,7 +5085,7 @@ export default function WanderPlan(){
           final_airport:flightDates.final_airport||"",
           depart:String(flightDates.depart||"").slice(0,10),
           ret:String(flightDates.ret||"").slice(0,10)
-        },flight_route_plan:normalizedFlightRoutePlan()}});
+        },flight_route_plan:normalizedFlightRoutePlan(),flights_confirmed:true,flight_booking_links:links}});
         links.forEach(function(link){
           try{window.open(link.url,"_blank","noopener,noreferrer");}catch(e){}
         });
@@ -4981,6 +5096,7 @@ export default function WanderPlan(){
       });
     }
     function buildItineraryWithBackend(accPois,pStays,appMeals,totalDays,grpSize){
+      var itineraryStartDate=(availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start)||flightDates.depart||"";
       var itineraryDurations=fillMissingDurationPerDestination(
         dests,
         durPerDest,
@@ -4995,7 +5111,8 @@ export default function WanderPlan(){
       function finalizeItineraryResult(res){
         var rows=(Array.isArray(res)&&res.length>0)
           ? res
-          : buildFallbackItinerary(dests,accPois,pStays,appMeals,totalDays,flightDates.depart,itineraryDurations);
+          : buildFallbackItinerary(dests,accPois,pStays,appMeals,totalDays,itineraryStartDate,itineraryDurations);
+        rows=materializeItineraryDates(rows,itineraryStartDate);
         persistItineraryRows(rows).then(function(){
           setItinErr("");
           setItin(rows);
@@ -5036,15 +5153,35 @@ export default function WanderPlan(){
             setID(true);
             return;
           }
-          return askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(finalizeItineraryResult);
+          return askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
         }).catch(function(){
-          askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(finalizeItineraryResult);
+          askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
         });
       }else{
-        askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,flightDates.depart).then(finalizeItineraryResult);
+        askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
       }
     }
-    function approveItineraryThenAdvance(){
+    function saveItineraryThenAdvance(){
+      var rows=materializeItineraryDates(itin,(availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start)||flightDates.depart||"");
+      if(authToken&&currentTripId){
+        setIL(true);
+        setItinErr("");
+        apiJson("/trips/"+currentTripId+"/itinerary",{method:"POST",body:buildItinerarySavePayload(rows)},authToken)
+          .then(function(){
+            setItin(rows);
+            setIL(false);
+            adv();
+          })
+          .catch(function(e){
+            setIL(false);
+            setItinErr(String(e&&e.message||"Could not save itinerary before continuing"));
+          });
+      }else{
+        setItin(rows);
+        adv();
+      }
+    }
+    function confirmTripAndActivate(){
       function approveSavedItinerary(){
         return apiJson("/trips/"+currentTripId+"/itinerary/approve",{method:"POST",body:{approved:true}},authToken).then(function(res){
           var nextStatus=String(res&&res.trip&&res.trip.status||"").trim().toLowerCase();
@@ -5073,20 +5210,19 @@ export default function WanderPlan(){
       if(authToken&&currentTripId){
         setIL(true);
         setItinErr("");
-        apiJson("/trips/"+currentTripId+"/itinerary",{method:"POST",body:buildItinerarySavePayload(itin)},authToken)
+        apiJson("/trips/"+currentTripId+"/itinerary",{method:"POST",body:buildItinerarySavePayload(materializeItineraryDates(itin,(availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start)||flightDates.depart||""))},authToken)
           .then(function(){
             return approveSavedItinerary();
           })
           .then(function(){
             setIL(false);
-            adv();
           })
           .catch(function(e){
             setIL(false);
-            setItinErr(String(e&&e.message||"Could not save itinerary before confirmation"));
+            setItinErr(String(e&&e.message||"Could not confirm trip"));
           });
       }else{
-        adv();
+        setItinErr("Trip confirmation requires a saved trip.");
       }
     }
 
@@ -5806,7 +5942,9 @@ export default function WanderPlan(){
           duration_revision_signature:nextSignature,
           duration_per_destination:resolvedDurations,
           availability_locked_window:shouldResetTravel?null:((availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null),
-          flight_dates:nextFlightDates
+          flight_dates:nextFlightDates,
+          flights_confirmed:shouldResetTravel?false:flightConfirmed,
+          flight_booking_links:shouldResetTravel?[]:flightBookLinks
         }}).finally(function(){adv();});
       }
 
@@ -5828,7 +5966,7 @@ export default function WanderPlan(){
         <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",color:C.tx3,fontSize:13}}><span>Travel between destinations</span><span>{travelDays}d</span></div>
         <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",color:C.tx3,fontSize:13}}><span>Buffer / rest</span><span>1d</span></div>
         <div style={{display:"flex",justifyContent:"space-between",padding:"14px 0 0",borderTop:"2px solid "+C.gold+"20",marginTop:6}}><span style={{fontWeight:700,fontSize:18,color:C.goldT}}>Total</span><span style={{fontWeight:700,fontSize:18,color:C.goldT}}>{totalCalc} days</span></div>
-        {(flightDates.depart||flightDates.ret)&&<div style={{marginTop:10,padding:"10px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"15"}}><p style={{fontSize:12,color:C.tealL}}>Exact travel dates captured: {String(flightDates.depart||"").slice(0,10)||"--"} to {String(flightDates.ret||"").slice(0,10)||"--"}. Next step asks each traveler to confirm a matching {totalCalc}-day window.</p></div>}
+        {(flightDates.depart||flightDates.ret)&&<div style={{marginTop:10,padding:"10px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"15"}}><p style={{fontSize:12,color:C.tealL}}>Exact travel dates captured: {String(flightDates.depart||"").slice(0,10)||"--"} to {String(flightDates.ret||"").slice(0,10)||"--"}. Later steps can refresh these once the itinerary and exact crew availability are locked.</p></div>}
         {tooLong&&(<div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:C.wrnBg,border:"1px solid "+C.wrn+"20"}}><p style={{fontSize:13,color:C.wrn,fontWeight:600}}>This trip is {totalCalc} days. Consider reducing days per destination above, or go back to Activities to trim some.</p><button onClick={function(){setWizardStepShared(5);}} style={{marginTop:8,padding:"8px 16px",borderRadius:8,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
         {!feasible&&(<div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:C.redBg,border:"1px solid "+C.red+"20"}}><p style={{fontSize:13,color:C.red}}>Over 21 days may not be feasible. Reduce time per destination or remove activities.</p></div>)}
         {feasible&&!tooLong&&<button onClick={approveDurationAndContinue} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{"Approve "+totalCalc+" days"}</button>}
@@ -5836,7 +5974,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===9&&(function(){
+    {wizStep===12&&(function(){
       var requiredTripDays=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays(flightDates.depart,flightDates.ret)||Number(tr.days)||10);
       var myUserId=String(userIdFromToken(authToken)||"").trim();
       var overlapData=sanitizeAvailabilityOverlapData((availabilityData&&typeof availabilityData==="object")?availabilityData:{},requiredTripDays);
@@ -5970,7 +6108,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===10&&(function(){
+    {wizStep===13&&(function(){
       var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
       var routePlan=normalizedFlightRoutePlan();
       var displayedRoutePlan=displayedRoundTripRoutePlan(routePlan);
@@ -6108,7 +6246,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===11&&(function(){
+    {wizStep===9&&(function(){
       var grpSize=(jc||0)+1;
       var totalN=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays((availabilityData&&availabilityData.locked_window||{}).start,(availabilityData&&availabilityData.locked_window||{}).end)||10);
       var voteMembers=[{
@@ -6438,7 +6576,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===12&&(function(){
+    {wizStep===10&&(function(){
       var grpSize=(jc||0)+1;var dietStr=(user.dietary||[]).join(", ")||"none";
       var totalDays=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays((availabilityData&&availabilityData.locked_window||{}).start,(availabilityData&&availabilityData.locked_window||{}).end)||10);
       var voteMembers=[{
@@ -6702,7 +6840,7 @@ export default function WanderPlan(){
       </div>);
     }())}
 
-    {wizStep===13&&(function(){
+    {wizStep===11&&(function(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var grpSize=(jc||0)+1;
       var totalDays=0;dests.forEach(function(d){var dd=durPerDest[d.name];totalDays+=dd!==undefined?dd:2;});totalDays=Math.max(totalDays+Math.max(0,dests.length-1)+1,3);
@@ -6717,12 +6855,55 @@ export default function WanderPlan(){
       var appMeals=[];meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,itineraryVoteMembers);if(summary.up>=itineraryMajorityNeeded&&summary.up>summary.down)appMeals.push(m);});});
       var typeIcons={flight:"F",checkin:"C",checkout:"O",activity:"A",meal:"M",travel:"T",rest:"R"};
       var typeColors={flight:C.sky,checkin:C.grn,checkout:C.wrn,activity:C.coral,meal:C.teal,travel:C.purp,rest:"#6366F1"};
+      var itineraryStartDate=(availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start)||flightDates.depart||"";
+      var itineraryDurations=fillMissingDurationPerDestination(dests,durPerDest,totalDays);
 
       return(<div>
         {ab("Itinerary Builder",itinDone?"Your complete day-by-day schedule:":"Building your itinerary from approved activities, stays, and meals...")}
         {itinErr&&<div style={{marginBottom:12,padding:"10px 14px",borderRadius:10,background:C.redBg,border:"1px solid "+C.red+"22"}}><p style={{fontSize:12,color:C.red}}>{itinErr}</p></div>}
+        <div style={{marginBottom:12}}>
+          <p style={{fontSize:11,color:C.tx3,marginBottom:6}}>Debug panel compares approved POIs, routing anchors, trip days, and the saved itinerary rows.</p>
+          <button onClick={function(){setSVD(function(v){return !v;});}} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.goldT+"35",background:C.goldDim,color:C.goldT,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            {showVoteDebug?"Hide Debug":"Show Debug"}
+          </button>
+        </div>
+        {showVoteDebug&&<div style={{background:C.surface,borderRadius:16,padding:"18px",border:"1px solid "+C.border,marginBottom:14}}>
+          <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:10}}>Itinerary Debug</p>
+          <div style={{display:"grid",gridTemplateColumns:isPhone?"1fr":"repeat(3,minmax(0,1fr))",gap:10,marginBottom:12}}>
+            {[
+              {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"--"},
+              {l:"Locked / start date",v:String(itineraryStartDate||"Day labels until dates are locked")},
+              {l:"Total trip days",v:String(totalDays)},
+              {l:"Approved POIs",v:String(accPois.length)},
+              {l:"Selected stays",v:String(pStays.length)},
+              {l:"Approved meals",v:String(appMeals.length)},
+              {l:"Duration per destination",v:JSON.stringify(itineraryDurations||{})},
+              {l:"Itinerary rows",v:String((itin||[]).length)},
+              {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"--"}
+            ].map(function(row){
+              return(<div key={row.l} style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{row.l}</p>
+                <p style={{fontSize:12,color:"#fff",lineHeight:1.5,wordBreak:"break-word"}}>{row.v}</p>
+              </div>);
+            })}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:isPhone?"1fr":"repeat(2,minmax(0,1fr))",gap:10}}>
+            <div style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Approved POIs</p>
+              <pre style={{whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:11,color:"#fff",maxHeight:240,overflow:"auto"}}>{JSON.stringify(accPois,null,2)}</pre>
+            </div>
+            <div style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+              <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Selected stays + meals</p>
+              <pre style={{whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:11,color:"#fff",maxHeight:240,overflow:"auto"}}>{JSON.stringify({stays:pStays,meals:appMeals},null,2)}</pre>
+            </div>
+          </div>
+          <div style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border,marginTop:10}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Built itinerary rows</p>
+            <pre style={{whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:11,color:"#fff",maxHeight:260,overflow:"auto"}}>{JSON.stringify(itin||[],null,2)}</pre>
+          </div>
+        </div>}
         {!itinDone&&!itinLoad&&(<div>
-          <p style={{fontSize:14,color:C.tx2,marginBottom:10}}>The agent assembles everything into a day-by-day schedule:</p>
+          <p style={{fontSize:14,color:C.tx2,marginBottom:10}}>The agent assembles everything into a day-by-day schedule, including travel time between the hotel, meals, and POIs. Exact dates can be locked afterward.</p>
           <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:14}}>
             <div style={{display:"flex",gap:8,fontSize:12,color:C.tx3}}><span style={{color:C.coral}}>{accPois.length} activities</span><span style={{color:C.teal}}>{pStays.length} stays</span><span style={{color:C.grn}}>{appMeals.length} meals</span><span>{dests.length} destinations</span></div>
           </div>
@@ -6753,8 +6934,9 @@ export default function WanderPlan(){
           })}
           <div style={{padding:"12px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"15",marginTop:8}}>
             <p style={{fontSize:12,color:C.tealL}}>Total trip cost: ${itin.reduce(function(s,d){return s+(d.items||[]).reduce(function(s2,it){return s2+(it.cost||0);},0);},0)} across {itin.length} days</p>
+            {!itineraryStartDate&&<p style={{fontSize:11,color:C.tx2,marginTop:4}}>Dates are still placeholders. Availability and flights will lock exact dates after this itinerary is approved.</p>}
           </div>
-          <button onClick={approveItineraryThenAdvance} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Approve Itinerary</button>
+          <button onClick={saveItineraryThenAdvance} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{itinLoad?"Saving...":"Lock Itinerary & Continue"}</button>
         </div>)}
         {itinDone&&itin.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"20px 0"}}>Could not build itinerary. You may need more activities or meals approved.</p><button onClick={function(){setWizardStepShared(5);}} style={{padding:"10px 18px",borderRadius:10,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
       </div>);
@@ -6774,11 +6956,13 @@ export default function WanderPlan(){
       var appMeals=[];meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,finalVoteMembers);if(summary.up>=finalMajorityNeeded&&summary.up>summary.down)appMeals.push(m);});});
       var totalItinCost=itin.reduce(function(s,d){return s+(d.items||[]).reduce(function(s2,it){return s2+(it.cost||0);},0);},0);
       var stayTotal=pStays.reduce(function(s,st){return s+(st.ratePerNight||0)*(st.totalNights||3);},0);
+      var nextStatus=String((viewTrip&&viewTrip.status)||(newTrip&&newTrip.status)||(tr&&tr.status)||"").trim().toLowerCase();
+      var tripActive=nextStatus==="active"||nextStatus==="completed";
 
       return(<div style={{textAlign:"center",padding:"20px 0"}}>
         <div style={{fontSize:48,marginBottom:16}}>!</div>
-        <h2 style={{fontSize:24,fontWeight:700,color:C.grn,marginBottom:8}}>Trip Confirmed!</h2>
-        <p style={{fontSize:15,color:C.tx2,marginBottom:20}}>Calendar synced for all {grpSize} members. Booking confirmations sent.</p>
+        <h2 style={{fontSize:24,fontWeight:700,color:tripActive?C.grn:C.goldT,marginBottom:8}}>{tripActive?"Trip Confirmed!":"Final Review"}</h2>
+        <p style={{fontSize:15,color:C.tx2,marginBottom:20}}>{tripActive?("Calendar synced for all "+grpSize+" members. Booking confirmations sent."):("Review the itinerary, locked dates, and flight picks. Confirm when the trip is ready to go live for all "+grpSize+" members.")}</p>
         <div style={{background:C.teal+"12",borderRadius:14,padding:20,textAlign:"left",marginBottom:16,border:"1px solid "+C.teal+"20"}}>
           <h3 style={{fontWeight:700,fontSize:18,marginBottom:12}}>{tr.name||"Your Trip"}</h3>
           {[
@@ -6788,10 +6972,16 @@ export default function WanderPlan(){
             {l:"Activities",v:accPois.length+" approved"},
             {l:"Stays",v:pStays.map(function(s){return s.name;}).join(" + ")||"--"},
             {l:"Meals",v:appMeals.length+" meals planned"},
+            {l:"Trip dates",v:(flightDates.depart&&flightDates.ret)?(String(flightDates.depart).slice(0,10)+" to "+String(flightDates.ret).slice(0,10)):"--"},
+            {l:"Flights",v:flightConfirmed?"Confirmed":"Needs confirmation"},
             {l:"Est. Total",v:"$"+(totalItinCost+stayTotal)+"/person"},
           ].map(function(r){return(<div key={r.l} style={{display:"flex",justifyContent:"space-between",fontSize:14,marginBottom:4}}><span style={{color:C.tx3}}>{r.l}</span><span style={{fontWeight:600}}>{r.v}</span></div>);})}
         </div>
-        <button onClick={function(){go("dash");}} style={{fontSize:15,fontWeight:600,color:C.bg,padding:"14px 40px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Back to My Trips</button>
+        {!tripActive&&<button onClick={confirmTripAndActivate} disabled={itinLoad||!flightConfirmed} style={{fontSize:15,fontWeight:600,color:C.bg,padding:"14px 40px",borderRadius:12,background:(itinLoad||!flightConfirmed)?C.border:("linear-gradient(135deg,"+C.gold+","+C.goldT+")"),border:"none",cursor:(itinLoad||!flightConfirmed)?"default":"pointer"}}>
+          {itinLoad?"Confirming...":"Confirm Trip"}
+        </button>}
+        {!tripActive&&!flightConfirmed&&<p style={{fontSize:12,color:C.wrn,marginTop:10}}>Confirm flights before activating the trip.</p>}
+        {tripActive&&<button onClick={function(){go("dash");}} style={{fontSize:15,fontWeight:600,color:C.bg,padding:"14px 40px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Back to My Trips</button>}
       </div>);
     }())}
 
@@ -6805,6 +6995,6 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, companionCheckinMeta, dedupeVoteVoters, emptyUserState, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, addClockMinutes, addIsoDays, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePoiStateMap, normalizePersonalBucketItems, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, voteKeyAliasesFor, wizardSyncIntervalMs };
 
 

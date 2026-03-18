@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   accountCacheKey,
   availabilityWindowMatchesTripDays,
+  buildTransitItem,
   buildCurrentVoteActor,
   buildDurationPlanSignature,
   buildFallbackItinerary,
@@ -20,12 +21,14 @@ import {
   companionCheckinMeta,
   dedupeVoteVoters,
   emptyUserState,
+  estimateTransitMinutes,
   findDuplicatePoiKeys,
   fillMissingDurationPerDestination,
   formatMoney,
   inclusiveIsoDays,
   isCurrentVoteVoter,
   makeVoteUserId,
+  materializeItineraryDates,
   mergeAvailabilityDraft,
   mergeProfileIntoUser,
   mergeSharedFlightDates,
@@ -35,6 +38,7 @@ import {
   normalizeDiningPlan,
   normalizePoiStateMap,
   normalizePersonalBucketItems,
+  normalizeWizardStepIndex,
   readDestinationVoteRow,
   readMealVoteRow,
   readPoiVoteRow,
@@ -118,9 +122,10 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(wizardSyncIntervalMs(5)).toBe(1200);
     expect(wizardSyncIntervalMs(6)).toBe(1200);
     expect(wizardSyncIntervalMs(9)).toBe(1200);
+    expect(wizardSyncIntervalMs(10)).toBe(1200);
     expect(wizardSyncIntervalMs(11)).toBe(1200);
     expect(wizardSyncIntervalMs(12)).toBe(1200);
-    expect(wizardSyncIntervalMs(10)).toBe(3000);
+    expect(wizardSyncIntervalMs(13)).toBe(1200);
     expect(wizardSyncIntervalMs(4)).toBe(3000);
   });
 
@@ -344,6 +349,65 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(lunchIndex).toBeGreaterThan(breakfastIndex);
     expect(bambooIndex).toBeGreaterThan(breakfastIndex);
     expect(bambooIndex).toBeLessThan(lunchIndex);
+  });
+
+  test("buildFallbackItinerary inserts travel legs around meals and POIs", () => {
+    const rows = buildFallbackItinerary(
+      [{ name: "Kyoto" }],
+      [
+        { name: "Arashiyama Bamboo Grove", destination: "Kyoto", cost: 0, category: "Nature", tags: ["garden", "photography"] },
+        { name: "Nishiki Market", destination: "Kyoto", cost: 15, category: "Food", tags: ["market", "food"] },
+      ],
+      [{ name: "Riverside Inn", destination: "Kyoto", neighborhood: "Gion" }],
+      [
+        { name: "Morning Table", destination: "Kyoto", type: "Breakfast", cost: 18 },
+        { name: "Market Lunch", destination: "Kyoto", type: "Lunch", cost: 24 },
+        { name: "Lantern Dinner", destination: "Kyoto", type: "Dinner", cost: 36 },
+      ],
+      3,
+      "2026-04-10",
+      { Kyoto: 2 }
+    );
+    const fullDay = rows.find((day) => day.items.some((item) => item.title === "Morning Table"));
+    expect(fullDay.items.some((item) => item.type === "travel")).toBe(true);
+    expect(
+      fullDay.items.some((item) =>
+        String(item.title).includes("transit from Morning Table to Arashiyama Bamboo Grove")
+      )
+    ).toBe(true);
+  });
+
+  test("materializeItineraryDates assigns locked dates to day labels", () => {
+    expect(
+      materializeItineraryDates(
+        [
+          { day: 1, date: "Day 1", items: [] },
+          { day: 2, date: "Day 2", items: [] },
+        ],
+        "2026-03-22"
+      )
+    ).toEqual([
+      { day: 1, date: "2026-03-22", items: [] },
+      { day: 2, date: "2026-03-23", items: [] },
+    ]);
+  });
+
+  test("normalizeWizardStepIndex migrates legacy post-duration steps to the new order", () => {
+    expect(normalizeWizardStepIndex(9, 0)).toBe(12);
+    expect(normalizeWizardStepIndex(10, 0)).toBe(13);
+    expect(normalizeWizardStepIndex(11, 0)).toBe(9);
+    expect(normalizeWizardStepIndex(13, 0)).toBe(11);
+    expect(normalizeWizardStepIndex(11, 2)).toBe(11);
+  });
+
+  test("estimateTransitMinutes and buildTransitItem provide a practical travel leg", () => {
+    expect(estimateTransitMinutes("Morning Table", "Arashiyama Bamboo Grove")).toBeGreaterThan(0);
+    expect(buildTransitItem("09:15", "Morning Table", "Arashiyama Bamboo Grove")).toEqual(
+      expect.objectContaining({
+        time: "09:15",
+        type: "travel",
+      })
+    );
   });
 
   test("buildItinerarySavePayload maps itinerary rows into backend save shape", () => {
