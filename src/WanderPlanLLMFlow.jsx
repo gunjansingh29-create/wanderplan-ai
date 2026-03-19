@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { BUILD_INFO } from "./buildInfo";
 
 var C = {bg:"#08070d",bg2:"#110f1a",surface:"#161322",border:"rgba(255,255,255,0.06)",gold:"#E8A838",goldDim:"rgba(232,168,56,0.12)",goldT:"#f0c060",coral:"#E8634A",teal:"#0D7377",tealL:"#1A9A9F",sky:"#4DA8DA",tx:"#fff",tx2:"rgba(255,255,255,0.52)",tx3:"rgba(255,255,255,0.28)",grn:"#22C55E",grnBg:"rgba(34,197,94,0.1)",red:"#EF4444",redBg:"rgba(239,68,68,0.1)",wrn:"#F59E0B",wrnBg:"rgba(245,158,11,0.1)",purp:"#8B5CF6"};
 var MO=["J","F","M","A","M","J","J","A","S","O","N","D"];
@@ -8,6 +9,8 @@ var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-rang
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
 var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
 var WIZARD_ORDER_VERSION=2;
+var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" • "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
+var BUILD_STAMP_DETAIL=String(BUILD_INFO&&BUILD_INFO.builtAt||"unknown");
 
 function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"none":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
 function Avi(props){var s=props.size||28;return(<div title={props.name||""} style={{width:s,height:s,borderRadius:999,background:props.color||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:s*.4,fontWeight:700,color:"#fff",flexShrink:0,border:"1.5px solid "+C.surface}}>{props.ini||"?"}</div>);}
@@ -7184,6 +7187,11 @@ export default function WanderPlan(){
     </div></Fade></div>);
   }())}
   </main>
+  <div title={BUILD_STAMP_DETAIL} style={{position:"fixed",right:isPhone?10:16,bottom:isPhone?10:16,zIndex:50,pointerEvents:"none"}}>
+    <div style={{padding:isPhone?"6px 8px":"7px 10px",borderRadius:999,background:"rgba(8,7,13,0.88)",border:"1px solid "+C.border,boxShadow:"0 12px 28px rgba(0,0,0,0.28)",backdropFilter:"blur(10px)"}}>
+      <p style={{fontSize:isPhone?10:11,color:C.tx3,fontWeight:700,letterSpacing:0.2}}>{BUILD_STAMP}</p>
+    </div>
+  </div>
 </div>)}
 
       </div>
