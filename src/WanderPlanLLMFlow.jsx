@@ -1774,7 +1774,7 @@ function buildTransitItem(timeText, fromLabel, toLabel){
   return {
     time:String(timeText||"").trim()||"00:00",
     type:"travel",
-    title:minutes+" min transit from "+fromLabel+" to "+toLabel,
+    title:"Approx. "+minutes+" min transit from "+fromLabel+" to "+toLabel,
     cost:0
   };
 }
@@ -7063,6 +7063,7 @@ export default function WanderPlan(){
         </div>
         {showVoteDebug&&<div style={{background:C.surface,borderRadius:16,padding:"18px",border:"1px solid "+C.border,marginBottom:14}}>
           <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:10}}>Itinerary Debug</p>
+          <p style={{fontSize:11,color:C.tx3,marginBottom:10}}>Transit rows are heuristic placeholders right now. They are marked as approximate until live routing is integrated.</p>
           <div style={{display:"grid",gridTemplateColumns:isPhone?"1fr":"repeat(3,minmax(0,1fr))",gap:10,marginBottom:12}}>
             {[
               {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"--"},

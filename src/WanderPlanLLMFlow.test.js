@@ -412,6 +412,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       expect.objectContaining({
         time: "09:15",
         type: "travel",
+        title: expect.stringContaining("Approx."),
       })
     );
   });
