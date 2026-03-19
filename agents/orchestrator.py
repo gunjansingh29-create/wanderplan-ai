@@ -7279,6 +7279,112 @@ def _cuisine_from_tags(tags: list[str], default_value: str = "Local") -> str:
     return first.replace("_", " ").replace("-", " ").title()
 
 
+_DINING_CITY_CATALOG: dict[str, dict[str, list[dict[str, Any]]]] = {
+    "auckland": {
+        "Breakfast": [
+            {"name": "Amano", "cuisine": "Bakery", "cost": 24.0, "rating": 4.6, "tags": ["breakfast", "bakery", "pastries"], "note": "Known for house pastries and a strong downtown breakfast."},
+            {"name": "Williams Eatery", "cuisine": "Cafe", "cost": 23.0, "rating": 4.5, "tags": ["breakfast", "cafe", "brunch"], "note": "Popular all-day spot with a polished but relaxed menu."},
+            {"name": "Odettes Eatery", "cuisine": "Brunch", "cost": 26.0, "rating": 4.5, "tags": ["breakfast", "brunch", "coffee"], "note": "Good choice for a slower breakfast before city exploring."},
+        ],
+        "Lunch": [
+            {"name": "Commercial Bay Dining Hall", "cuisine": "Food Hall", "cost": 28.0, "rating": 4.4, "tags": ["lunch", "food hall", "casual"], "note": "Easy central lunch with a lot of variety."},
+            {"name": "Depot Eatery", "cuisine": "Seafood", "cost": 34.0, "rating": 4.6, "tags": ["lunch", "seafood", "local"], "note": "One of the stronger downtown picks for share plates."},
+            {"name": "Federal Delicatessen", "cuisine": "Deli", "cost": 26.0, "rating": 4.5, "tags": ["lunch", "deli", "casual"], "note": "Fast, high-quality lunch near the city core."},
+        ],
+        "Dinner": [
+            {"name": "Culprit.", "cuisine": "Modern New Zealand", "cost": 48.0, "rating": 4.7, "tags": ["dinner", "modern", "chef-led"], "note": "Creative tasting-style plates without being too formal."},
+            {"name": "Cassia", "cuisine": "Indian", "cost": 44.0, "rating": 4.7, "tags": ["dinner", "indian", "spiced"], "note": "One of Auckland's stronger destination dinner rooms."},
+            {"name": "Onslow", "cuisine": "Modern", "cost": 52.0, "rating": 4.6, "tags": ["dinner", "modern", "city"], "note": "Good fit for a more polished city dinner."},
+        ],
+    },
+    "christchurch": {
+        "Breakfast": [
+            {"name": "Unknown Chapter", "cuisine": "Cafe", "cost": 21.0, "rating": 4.6, "tags": ["breakfast", "cafe", "coffee"], "note": "Reliable coffee stop in the central city."},
+            {"name": "Child Sister", "cuisine": "Brunch", "cost": 24.0, "rating": 4.5, "tags": ["breakfast", "brunch", "vegetarian"], "note": "Stylish brunch spot with strong local popularity."},
+            {"name": "Black Betty Cafe", "cuisine": "Cafe", "cost": 20.0, "rating": 4.4, "tags": ["breakfast", "cafe", "casual"], "note": "Good straightforward breakfast before gardens and museums."},
+        ],
+        "Lunch": [
+            {"name": "Riverside Market", "cuisine": "Market", "cost": 26.0, "rating": 4.6, "tags": ["lunch", "market", "casual"], "note": "High variety lunch stop that works well for groups."},
+            {"name": "Fiddlesticks", "cuisine": "Bistro", "cost": 32.0, "rating": 4.5, "tags": ["lunch", "bistro", "local"], "note": "Well-rated central lunch with a polished menu."},
+            {"name": "Little High Eatery", "cuisine": "Food Hall", "cost": 24.0, "rating": 4.4, "tags": ["lunch", "food hall", "casual"], "note": "Useful for quick lunches with lots of options."},
+        ],
+        "Dinner": [
+            {"name": "King of Snake", "cuisine": "Asian Fusion", "cost": 45.0, "rating": 4.6, "tags": ["dinner", "asian", "stylish"], "note": "Popular riverfront dinner spot with a stronger evening atmosphere."},
+            {"name": "Inati", "cuisine": "Chef's Table", "cost": 58.0, "rating": 4.8, "tags": ["dinner", "tasting", "chef-led"], "note": "Best when the group wants a special-occasion dinner."},
+            {"name": "Twenty Seven Steps", "cuisine": "New Zealand", "cost": 42.0, "rating": 4.6, "tags": ["dinner", "local", "heritage"], "note": "A well-known downtown choice for a classic sit-down dinner."},
+        ],
+    },
+    "wellington": {
+        "Breakfast": [
+            {"name": "Prefab", "cuisine": "Cafe", "cost": 22.0, "rating": 4.5, "tags": ["breakfast", "cafe", "coffee"], "note": "Strong breakfast and coffee option in the city core."},
+            {"name": "Maranui Cafe", "cuisine": "Beach Cafe", "cost": 24.0, "rating": 4.6, "tags": ["breakfast", "cafe", "views"], "note": "Great if the day starts near the coast."},
+            {"name": "Floriditas", "cuisine": "Brunch", "cost": 25.0, "rating": 4.6, "tags": ["breakfast", "brunch", "bakery"], "note": "Reliable Cuba Street breakfast anchor."},
+        ],
+        "Lunch": [
+            {"name": "Unity Books x Prefab Counter", "cuisine": "Cafe", "cost": 23.0, "rating": 4.4, "tags": ["lunch", "cafe", "light"], "note": "Works well for a quick central lunch."},
+            {"name": "Lucky", "cuisine": "Modern", "cost": 30.0, "rating": 4.5, "tags": ["lunch", "modern", "casual"], "note": "Good option for a smarter lunch in Te Aro."},
+            {"name": "Shed 5", "cuisine": "Seafood", "cost": 36.0, "rating": 4.5, "tags": ["lunch", "seafood", "waterfront"], "note": "A stronger waterfront lunch with harbor energy."},
+        ],
+        "Dinner": [
+            {"name": "Ortega Fish Shack", "cuisine": "Seafood", "cost": 46.0, "rating": 4.7, "tags": ["dinner", "seafood", "local"], "note": "One of Wellington's best-known dinner picks."},
+            {"name": "Kisa", "cuisine": "Middle Eastern", "cost": 39.0, "rating": 4.6, "tags": ["dinner", "middle eastern", "sharing"], "note": "Great for a lively group dinner with shared plates."},
+            {"name": "Rita", "cuisine": "Seasonal", "cost": 55.0, "rating": 4.8, "tags": ["dinner", "seasonal", "chef-led"], "note": "Best if the group wants a standout dinner reservation."},
+        ],
+    },
+    "queenstown": {
+        "Breakfast": [
+            {"name": "Yonder", "cuisine": "Brunch", "cost": 24.0, "rating": 4.6, "tags": ["breakfast", "brunch", "lake"], "note": "Popular breakfast close to the lakefront."},
+            {"name": "Vudu Cafe & Larder", "cuisine": "Cafe", "cost": 22.0, "rating": 4.5, "tags": ["breakfast", "cafe", "bakery"], "note": "Good all-round breakfast before an active day."},
+            {"name": "Bespoke Kitchen", "cuisine": "Cafe", "cost": 23.0, "rating": 4.5, "tags": ["breakfast", "cafe", "healthy"], "note": "Useful if the group wants a lighter breakfast start."},
+        ],
+        "Lunch": [
+            {"name": "Fergbaker", "cuisine": "Bakery", "cost": 18.0, "rating": 4.5, "tags": ["lunch", "bakery", "quick"], "note": "Good fast lunch for busy sightseeing days."},
+            {"name": "Botswana Butchery", "cuisine": "Steakhouse", "cost": 38.0, "rating": 4.6, "tags": ["lunch", "steak", "lakefront"], "note": "A stronger sit-down lunch option by the water."},
+            {"name": "Erik's Fish and Chips", "cuisine": "Fish and Chips", "cost": 20.0, "rating": 4.4, "tags": ["lunch", "casual", "local"], "note": "Classic casual lunch for a Queenstown stop."},
+        ],
+        "Dinner": [
+            {"name": "Blue Kanu", "cuisine": "Polynesian-Asian", "cost": 44.0, "rating": 4.7, "tags": ["dinner", "fusion", "sharing"], "note": "One of the more memorable group dinner spots in town."},
+            {"name": "Rata", "cuisine": "New Zealand", "cost": 52.0, "rating": 4.7, "tags": ["dinner", "local", "chef-led"], "note": "A polished dinner with strong local reputation."},
+            {"name": "Sherwood", "cuisine": "Seasonal", "cost": 40.0, "rating": 4.5, "tags": ["dinner", "seasonal", "design"], "note": "Good if the group wants a more design-forward dinner atmosphere."},
+        ],
+    },
+    "melbourne": {
+        "Breakfast": [
+            {"name": "Higher Ground", "cuisine": "Brunch", "cost": 27.0, "rating": 4.6, "tags": ["breakfast", "brunch", "design"], "note": "One of the city's better-known breakfast rooms."},
+            {"name": "Proud Mary", "cuisine": "Cafe", "cost": 24.0, "rating": 4.6, "tags": ["breakfast", "cafe", "coffee"], "note": "Strong fit if the group cares about coffee quality."},
+            {"name": "Rustica Canteen", "cuisine": "Bakery", "cost": 22.0, "rating": 4.5, "tags": ["breakfast", "bakery", "casual"], "note": "Good pastry-driven start to the day."},
+        ],
+        "Lunch": [
+            {"name": "Lune Croissanterie", "cuisine": "Bakery", "cost": 18.0, "rating": 4.7, "tags": ["lunch", "bakery", "quick"], "note": "Works best for a lighter lunch stop."},
+            {"name": "Supernormal", "cuisine": "Asian Fusion", "cost": 36.0, "rating": 4.6, "tags": ["lunch", "asian", "city"], "note": "A polished city lunch with consistent ratings."},
+            {"name": "Queen Victoria Market Deli Run", "cuisine": "Market", "cost": 22.0, "rating": 4.5, "tags": ["lunch", "market", "casual"], "note": "Flexible lunch near one of the city's classic anchors."},
+        ],
+        "Dinner": [
+            {"name": "Chin Chin", "cuisine": "Thai", "cost": 42.0, "rating": 4.6, "tags": ["dinner", "thai", "popular"], "note": "Lively, widely known dinner option for groups."},
+            {"name": "Gimlet", "cuisine": "European", "cost": 55.0, "rating": 4.8, "tags": ["dinner", "european", "special"], "note": "A stronger choice for a high-end evening."},
+            {"name": "Tipo 00", "cuisine": "Italian", "cost": 39.0, "rating": 4.7, "tags": ["dinner", "italian", "pasta"], "note": "Popular dinner choice if the group wants something cozy but excellent."},
+        ],
+    },
+    "sydney": {
+        "Breakfast": [
+            {"name": "Bills Surry Hills", "cuisine": "Brunch", "cost": 28.0, "rating": 4.6, "tags": ["breakfast", "brunch", "popular"], "note": "Classic Sydney breakfast anchor with broad appeal."},
+            {"name": "Single O", "cuisine": "Cafe", "cost": 22.0, "rating": 4.5, "tags": ["breakfast", "cafe", "coffee"], "note": "Strong coffee-first breakfast in the inner city."},
+            {"name": "AP Bakery", "cuisine": "Bakery", "cost": 20.0, "rating": 4.5, "tags": ["breakfast", "bakery", "pastries"], "note": "Good pastry stop before a big sightseeing day."},
+        ],
+        "Lunch": [
+            {"name": "Chat Thai", "cuisine": "Thai", "cost": 24.0, "rating": 4.5, "tags": ["lunch", "thai", "casual"], "note": "Easy reliable lunch option in central Sydney."},
+            {"name": "Muum Maam", "cuisine": "Thai", "cost": 28.0, "rating": 4.4, "tags": ["lunch", "thai", "casual"], "note": "Good if the group wants a flavorful but easy lunch."},
+            {"name": "Sydney Fish Market", "cuisine": "Seafood", "cost": 32.0, "rating": 4.5, "tags": ["lunch", "seafood", "market"], "note": "Best fit for a harbor-side lunch stop."},
+        ],
+        "Dinner": [
+            {"name": "Saint Peter", "cuisine": "Seafood", "cost": 58.0, "rating": 4.8, "tags": ["dinner", "seafood", "chef-led"], "note": "One of Sydney's stronger destination dinners."},
+            {"name": "Apollo", "cuisine": "Greek", "cost": 46.0, "rating": 4.6, "tags": ["dinner", "greek", "sharing"], "note": "Very solid group dinner choice with broad appeal."},
+            {"name": "Ho Jiak Town Hall", "cuisine": "Malaysian", "cost": 38.0, "rating": 4.5, "tags": ["dinner", "malaysian", "city"], "note": "Good if the group wants a more casual but distinct dinner."},
+        ],
+    },
+}
+
+
 def _fallback_meal_options(
     meal: str,
     city: str,
@@ -7286,6 +7392,30 @@ def _fallback_meal_options(
     near_poi: str,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
+    city_key = str(city or "").strip().lower()
+    city_catalog = _DINING_CITY_CATALOG.get(city_key, {})
+    seeded = list(city_catalog.get(meal, []))
+    if seeded:
+        out: list[dict[str, Any]] = []
+        for idx, row in enumerate(seeded):
+            if len(out) >= limit:
+                break
+            out.append(
+                {
+                    "option_id": f"fallback-{city_key or 'city'}-{meal.lower()}-{idx + 1}",
+                    "name": str(row.get("name") or "").strip(),
+                    "city": city,
+                    "country": country,
+                    "tags": list(row.get("tags") or [meal.lower(), "local"]),
+                    "cost": float(row.get("cost") or 0),
+                    "cuisine": str(row.get("cuisine") or "Local"),
+                    "near_poi": near_poi,
+                    "rating": float(row.get("rating") or 4.4),
+                    "note": str(row.get("note") or "").strip(),
+                }
+            )
+        return out[:limit]
+
     base_names = {
         "Breakfast": ["Sunrise Cafe", "Morning Bakery", "Local Breakfast House"],
         "Lunch": ["Market Bistro", "Street Kitchen", "Local Lunch Spot"],
@@ -7309,6 +7439,8 @@ def _fallback_meal_options(
                 "cost": cost,
                 "cuisine": "Local",
                 "near_poi": near_poi,
+                "rating": 4.2 + max(0.0, (len(out) * 0.15)),
+                "note": f"Fallback {meal.lower()} option near {near_poi or city or 'your route'}.",
             }
         )
     return out
@@ -7375,6 +7507,8 @@ def _select_meal_options(
                 "cost": float(row.get("cost") or 0),
                 "cuisine": _cuisine_from_tags(row.get("tags") or []),
                 "near_poi": near_poi,
+                "rating": float(row.get("rating") or 4.4),
+                "note": str(row.get("note") or "").strip(),
             }
         )
     if len(picked) < limit:
@@ -7635,6 +7769,8 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                         "cuisine": _cuisine_from_tags(tags),
                         "near_poi": near_poi,
                         "travel_minutes": int(travel_minutes),
+                        "rating": float(option.get("rating") or 4.4),
+                        "note": str(option.get("note") or "").strip(),
                     }
                 )
             if not enriched_options:
@@ -7660,6 +7796,8 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                     "near_poi": near_poi,
                     "travel_from_poi_minutes": int(top["travel_minutes"]),
                     "travel_between_pois_minutes": int(transfer_between_pois),
+                    "rating": float(top["rating"]),
+                    "note": str(top.get("note") or "").strip(),
                     "options": enriched_options,
                 }
             )

@@ -582,6 +582,40 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     );
   });
 
+  test("normalizeDiningPlan preserves selected option notes and travel minutes", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 2,
+        destination: "Wellington",
+        meals: [
+          {
+            type: "Dinner",
+            selectedOption: 0,
+            options: [
+              {
+                name: "Ortega Fish Shack",
+                city: "Wellington",
+                cuisine: "Seafood",
+                cost: 46,
+                rating: 4.7,
+                note: "One of Wellington's better-known dinner spots.",
+                travel_minutes: 14,
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(out[0].meals[0]).toEqual(
+      expect.objectContaining({
+        name: "Ortega Fish Shack",
+        rating: 4.7,
+        note: "One of Wellington's better-known dinner spots.",
+        travelMinutes: 14,
+      })
+    );
+  });
+
   test("receipt helpers total parsed items and format budget values", () => {
     expect(
       receiptItemsTotal([

@@ -6984,20 +6984,21 @@ export default function WanderPlan(){
                     tags:s.tags||[],
                     near_poi:s.near_poi||"",
                     travel_minutes:s.travel_from_poi_minutes||0
-                  }]).map(function(o,oi){
-                    return {
-                      option_id:o.option_id||("opt-"+d+"-"+oi),
-                      name:o.name||"Restaurant",
-                      city:o.city||"",
-                      cuisine:o.cuisine||((o.tags&&o.tags[0])||"Local"),
-                      cost:Number((o.cost!==undefined)?o.cost:0)||0,
-                      rating:Number((o.rating!==undefined)?o.rating:4.5)||4.5,
-                      tags:Array.isArray(o.tags)?o.tags:[],
-                      near_poi:o.near_poi||s.near_poi||"",
-                      travel_minutes:Number((o.travel_minutes!==undefined)?o.travel_minutes:0)||0
-                    };
-                  });
-                  var top=options[0]||{};
+                   }]).map(function(o,oi){
+                     return {
+                       option_id:o.option_id||("opt-"+d+"-"+oi),
+                       name:o.name||"Restaurant",
+                       city:o.city||"",
+                       cuisine:o.cuisine||((o.tags&&o.tags[0])||"Local"),
+                       cost:Number((o.cost!==undefined)?o.cost:0)||0,
+                       rating:Number((o.rating!==undefined)?o.rating:4.5)||4.5,
+                       tags:Array.isArray(o.tags)?o.tags:[],
+                       near_poi:o.near_poi||s.near_poi||"",
+                       travel_minutes:Number((o.travel_minutes!==undefined)?o.travel_minutes:0)||0,
+                       note:o.note||""
+                     };
+                   });
+                   var top=options[0]||{};
                   byDay[d].meals.push({
                     type:s.meal||"Meal",
                     time:s.time||"",
@@ -7006,13 +7007,13 @@ export default function WanderPlan(){
                     selectedOption:0,
                     name:top.name||s.name||"Restaurant",
                     city:top.city||s.city||"",
-                    cuisine:top.cuisine||((s.tags&&s.tags[0])||"Local"),
-                    cost:Number((top.cost!==undefined)?top.cost:(s.cost||0))||0,
-                    rating:Number((top.rating!==undefined)?top.rating:(s.rating!==undefined)?s.rating:4.5)||4.5,
-                    dietaryOk:true,
-                    note:top.near_poi||s.near_poi||((s.tags||[]).join(", ")),
-                    travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s.travel_from_poi_minutes||0))||0
-                  });
+                     cuisine:top.cuisine||((s.tags&&s.tags[0])||"Local"),
+                     cost:Number((top.cost!==undefined)?top.cost:(s.cost||0))||0,
+                     rating:Number((top.rating!==undefined)?top.rating:(s.rating!==undefined)?s.rating:4.5)||4.5,
+                     dietaryOk:true,
+                     note:top.note||top.near_poi||s.note||s.near_poi||((s.tags||[]).join(", ")),
+                     travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s.travel_from_poi_minutes||0))||0
+                   });
                 });
                 var rows=normalizeDiningPlan(Object.keys(byDay).sort(function(a,b){return Number(a)-Number(b);}).map(function(k){return byDay[k];}));
                 setMeals(rows);setML(false);setMD(true);
