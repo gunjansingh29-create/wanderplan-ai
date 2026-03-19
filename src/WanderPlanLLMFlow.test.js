@@ -41,6 +41,7 @@ import {
   normalizeDestinationVoteState,
   normalizeDiningPlan,
   normalizePoiStateMap,
+  normalizeStays,
   normalizePersonalBucketItems,
   normalizeTripDestinationValue,
   normalizeWizardStepIndex,
@@ -520,6 +521,42 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         bookingSource: "Booking.com",
       })
     ).toContain("google.com/search?q=");
+  });
+
+  test("normalizeStays preserves backend stay metadata for richer previews", () => {
+    const out = normalizeStays(
+      [
+        {
+          name: "Britomart House",
+          destination: "Auckland",
+          type: "Boutique Hotel",
+          rating: 4.7,
+          ratePerNight: 220,
+          nights: 2,
+          amenities: ["WiFi", "Breakfast", "Harbor views"],
+          neighborhood: "Britomart",
+          bookingSource: "WanderPlan curated fallback",
+          whyThisOne: "Walkable to ferries, dining, and the waterfront.",
+          cancellation: "Free cancellation up to 48 hours",
+          bookingUrl: "https://example.test/britomart-house",
+        },
+      ],
+      [{ name: "Auckland" }],
+      "moderate",
+      2
+    );
+    expect(out[0]).toEqual(
+      expect.objectContaining({
+        name: "Britomart House",
+        destination: "Auckland",
+        amenities: ["WiFi", "Breakfast", "Harbor views"],
+        neighborhood: "Britomart",
+        bookingSource: "WanderPlan curated fallback",
+        whyThisOne: "Walkable to ferries, dining, and the waterfront.",
+        cancellation: "Free cancellation up to 48 hours",
+        bookingUrl: "https://example.test/britomart-house",
+      })
+    );
   });
 
   test("normalizeDiningPlan expands meal options and keeps ratings", () => {
@@ -1856,6 +1893,116 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     );
     expect(screen.queryByText(/Majority needed:/)).toBeNull();
   });
+
+  test("persists step 1 destination removals for saved trips", async () => {
+    const putBodies = [];
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const parsedUrl = new URL(String(url), "https://example.test");
+      const path = parsedUrl.pathname;
+      const tripId = "22222222-2222-4222-8222-222222222222";
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Organizer",
+            travel_styles: ["friends"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [
+            { id: "bucket-kyoto", destination: "Kyoto", name: "Kyoto", country: "Japan" },
+            { id: "bucket-osaka", destination: "Osaka", name: "Osaka", country: "Japan" },
+          ],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: tripId,
+              name: "Japan Sprint",
+              status: "planning",
+              my_status: "owner",
+              duration_days: 6,
+              members: [],
+              destinations: [{ name: "Kyoto" }, { name: "Osaka" }],
+              my_role: "owner",
+            },
+          ],
+        });
+      }
+      if (path === `/trips/${tripId}` && method === "GET") {
+        return jsonResponse({
+          trip: {
+            id: tripId,
+            name: "Japan Sprint",
+            status: "planning",
+            duration_days: 6,
+            members: [],
+          },
+        });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "GET") {
+        return jsonResponse({
+          destinations: [{ name: "Kyoto", votes: 0 }, { name: "Osaka", votes: 0 }],
+        });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "PUT") {
+        const body = JSON.parse((options && options.body) || "{}");
+        putBodies.push(body);
+        return jsonResponse({
+          destinations: (Array.isArray(body.destinations) ? body.destinations : []).map((name) => ({
+            name,
+            votes: 0,
+          })),
+        });
+      }
+      if (path === `/trips/${tripId}/pois` && method === "GET") return jsonResponse({ pois: [] });
+      if (path === `/trips/${tripId}/planning-state` && method === "GET") return jsonResponse({ state: {}, updated_at: "2026-06-01T10:00:00Z" });
+      if (path === `/trips/${tripId}/planning-state` && method === "PUT") {
+        const body = JSON.parse((options && options.body) || "{}");
+        return jsonResponse({ state: body.state || {}, updated_at: "2026-06-01T10:00:00Z" });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:organizer-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:organizer-user",
+      JSON.stringify({
+        name: "Organizer",
+        email: "organizer@test.com",
+        styles: ["friends"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Japan Sprint")).not.toBeNull());
+    fireEvent.click(screen.getByText("Japan Sprint"));
+    await waitFor(() => expect(screen.queryByText("Continue Planning")).not.toBeNull());
+    fireEvent.click(screen.getByText("Continue Planning"));
+
+    await waitFor(() => expect(screen.queryByText("Confirm 2 Destinations")).not.toBeNull());
+    fireEvent.click(screen.getAllByText("Remove")[0]);
+
+    await waitFor(() => {
+      expect(putBodies.length).toBeGreaterThan(0);
+      expect(putBodies[putBodies.length - 1].destinations).toEqual(["Osaka"]);
+    });
+  });
+
 });
 
 describe("WanderPlanLLMFlow Step 3 interest consensus", () => {

@@ -1524,11 +1524,25 @@ async function askStaysBackend(tripId,destinations,budgetTier,totalNights,token)
           rating:Number(s&&s.rating||4.3)||4.3,
           ratePerNight:Number(s&&s.price_per_night_usd||0)||0,
           totalNights:Number(s&&s.nights||nightsEach)||nightsEach,
-          amenities:["WiFi"],
-          neighborhood:"",
-          bookingSource:"WanderPlan Search",
-          whyThisOne:"Matches your trip budget and destination.",
-          cancellation:"Check provider policy",
+          amenities:Array.isArray(s&&s.amenities)?s.amenities.slice(0,6):["WiFi"],
+          neighborhood:String(s&&(
+            s.neighborhood||
+            s.area
+          )||"").trim(),
+          bookingSource:String(s&&(
+            s.bookingSource||
+            s.booking_source||
+            s.source
+          )||"WanderPlan Search").trim(),
+          whyThisOne:String(s&&(
+            s.whyThisOne||
+            s.why_this_one||
+            s.reason
+          )||"Matches your trip budget and destination.").trim(),
+          cancellation:String(s&&(
+            s.cancellation||
+            s.cancellation_policy
+          )||"Check provider policy").trim(),
           imageUrl:String(s&&(
             s.imageUrl||
             s.image_url||
@@ -2072,6 +2086,8 @@ export default function WanderPlan(){
   var[trips,setTrips]=useState([]);
   var[newTrip,setNT]=useState({name:"",dests:[],members:[],step:0});
   var[newTripDestInput,setNTDI]=useState("");
+  var[tripDestSearchLoad,setTDSL]=useState(false);
+  var[destinationMsg,setDSM]=useState("");
   var[tripFilter,setTF]=useState("all");
   var[viewTrip,setVT]=useState(null);
   var[wizStep,setWS]=useState(0);
@@ -3412,29 +3428,132 @@ export default function WanderPlan(){
     return nm+"|"+ct;
   }
 
+  function applyTripDestinationValuesLocal(nextValues,tripIdOverride){
+    var normalizedNames=tripDestinationNamesFromValues(nextValues,bucket);
+    var normalizedValues=normalizedNames.slice();
+    var tid=String(tripIdOverride||resolveWizardTripId(currentTripId,newTrip)).trim();
+    setNT(function(prev){
+      return Object.assign({},prev||{},{
+        dests:normalizedValues.slice(),
+        destNames:normalizedNames.join(" + ")
+      });
+    });
+    if(tid){
+      setTrips(function(prev){
+        return (prev||[]).map(function(t){
+          if(!t||String(t.id||"")!==tid)return t;
+          return Object.assign({},t,{
+            dests:normalizedValues.slice(),
+            destNames:normalizedNames.join(" + "),
+            destinations:normalizedValues.slice()
+          });
+        });
+      });
+      setVT(function(prev){
+        if(!prev||String(prev.id||"")!==tid)return prev;
+        return Object.assign({},prev,{
+          dests:normalizedValues.slice(),
+          destNames:normalizedNames.join(" + "),
+          destinations:normalizedValues.slice()
+        });
+      });
+    }
+    return normalizedValues;
+  }
+
+  function persistTripDestinations(nextValues,tripIdOverride){
+    var tid=String(tripIdOverride||resolveWizardTripId(currentTripId,newTrip)).trim();
+    var destNames=tripDestinationNamesFromValues(nextValues,bucket);
+    if(!(authToken&&tid&&isUuidLike(tid)))return Promise.resolve(destNames);
+    return apiJson("/trips/"+tid+"/destinations",{method:"PUT",body:{destinations:destNames,votes:{}}},authToken).then(function(res){
+      var sharedNames=(res&&Array.isArray(res.destinations)?res.destinations:[]).map(function(row){
+        return String((row&&row.name)||row||"").trim();
+      }).filter(Boolean);
+      var resolvedNames=sharedNames.length>0?sharedNames:destNames;
+      applyTripDestinationValuesLocal(resolvedNames,tid);
+      setDSM("");
+      return resolvedNames;
+    }).catch(function(err){
+      setDSM("Could not sync destinations: "+String(err&&err.message||"error"));
+      throw err;
+    });
+  }
+
+  function addBucketSuggestionsToLocalBucket(items){
+    (Array.isArray(items)?items:[]).forEach(function(it,idx){
+      var name=String(it&&it.name||"").trim();
+      if(!name)return;
+      updateBucketItemLocal({
+        id:String(it&&it.id||("trip-ai-dest-"+Date.now()+"-"+idx)),
+        name:name,
+        country:String(it&&it.country||"").trim(),
+        bestMonths:Array.isArray(it&&it.bestMonths)?it.bestMonths:[],
+        costPerDay:Number(it&&it.costPerDay||0)||0,
+        tags:Array.isArray(it&&it.tags)?it.tags:[],
+        bestTimeDesc:String(it&&it.bestTimeDesc||"").trim(),
+        costNote:String(it&&it.costNote||"").trim()
+      });
+    });
+  }
+
+  function searchDestinationsForTrip(){
+    var msg=String(newTripDestInput||"").trim();
+    if(!msg||tripDestSearchLoad)return;
+    setTDSL(true);
+    setDSM("");
+    askLLM(msg,user.budget,blChat).then(function(res){
+      var items=(res&&res.type==="destinations"&&Array.isArray(res.items))?res.items:[];
+      if(items.length===0){
+        setDSM(String(res&&res.message||"Could not find destination suggestions. Try a city or country."));
+        setTDSL(false);
+        return;
+      }
+      addBucketSuggestionsToLocalBucket(items);
+      var currentValues=Array.isArray(newTrip&&newTrip.dests)?newTrip.dests.slice():[];
+      var nextValues=currentValues.slice();
+      items.forEach(function(it){
+        nextValues=addTripDestinationValue(nextValues,it&&it.name);
+      });
+      if(nextValues.length===currentValues.length){
+        setDSM("Those destinations are already on this trip.");
+        setTDSL(false);
+        return;
+      }
+      applyTripDestinationValuesLocal(nextValues);
+      setNTDI("");
+      setDSM("Added "+items.map(function(it){return String(it&&it.name||"").trim();}).filter(Boolean).join(", ")+" to this trip.");
+      persistTripDestinations(nextValues).catch(function(){});
+      setTDSL(false);
+    }).catch(function(err){
+      setDSM("Destination search failed: "+String(err&&err.message||"error"));
+      setTDSL(false);
+    });
+  }
+
   function addDestinationToNewTrip(value){
     var normalized=normalizeTripDestinationValue(value);
     if(!normalized)return false;
-    setNT(function(prev){
-      var p=prev||{};
-      return Object.assign({},p,{dests:addTripDestinationValue(p.dests,normalized)});
-    });
+    var currentValues=Array.isArray(newTrip&&newTrip.dests)?newTrip.dests:[];
+    var nextValues=addTripDestinationValue(currentValues,normalized);
+    applyTripDestinationValuesLocal(nextValues);
+    persistTripDestinations(nextValues).catch(function(){});
+    setDSM("");
     return true;
   }
 
   function removeDestinationFromNewTrip(value){
     var normalized=normalizeTripDestinationValue(value);
     if(!normalized)return;
-    setNT(function(prev){
-      var p=prev||{};
-      var nextDests=removeTripDestinationValue(p.dests,normalized);
-      (Array.isArray(bucket)?bucket:[]).forEach(function(item){
-        if(normalizeTripDestinationValue(item&&item.name).toLowerCase()===normalized.toLowerCase()){
-          nextDests=removeTripDestinationValue(nextDests,item.id);
-        }
-      });
-      return Object.assign({},p,{dests:nextDests});
+    var currentValues=Array.isArray(newTrip&&newTrip.dests)?newTrip.dests:[];
+    var nextDests=removeTripDestinationValue(currentValues,normalized);
+    (Array.isArray(bucket)?bucket:[]).forEach(function(item){
+      if(normalizeTripDestinationValue(item&&item.name).toLowerCase()===normalized.toLowerCase()){
+        nextDests=removeTripDestinationValue(nextDests,item.id);
+      }
     });
+    applyTripDestinationValuesLocal(nextDests);
+    persistTripDestinations(nextDests).catch(function(){});
+    setDSM("");
   }
 
   function pickDestinationForTrip(dest){
@@ -4763,7 +4882,9 @@ export default function WanderPlan(){
       <div style={{display:"flex",gap:8,marginBottom:10}}>
         <input placeholder="Add a destination directly (e.g. Kyoto)" value={newTripDestInput} onChange={function(e){setNTDI(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){if(addDestinationToNewTrip(newTripDestInput))setNTDI("");}}} style={{flex:1,padding:"10px 12px",borderRadius:9,background:C.bg,border:"1.5px solid "+C.border,fontSize:13,color:"#fff"}}/>
         <button onClick={function(){if(addDestinationToNewTrip(newTripDestInput))setNTDI("");}} style={{padding:"9px 14px",borderRadius:9,border:"none",background:C.teal,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Add</button>
+        <button onClick={searchDestinationsForTrip} disabled={!newTripDestInput.trim()||tripDestSearchLoad} style={{padding:"9px 14px",borderRadius:9,border:"1px solid "+C.goldT+"35",background:tripDestSearchLoad?C.border:C.goldDim,color:tripDestSearchLoad?C.tx3:C.goldT,fontSize:13,fontWeight:700,cursor:(!newTripDestInput.trim()||tripDestSearchLoad)?"default":"pointer"}}>{tripDestSearchLoad?"Searching...":"Search AI"}</button>
       </div>
+      {destinationMsg&&<p style={{fontSize:12,color:C.tx2,marginBottom:10}}>{destinationMsg}</p>}
       <p style={{fontSize:12,color:C.tx3,marginBottom:10}}>Bucket list is optional here. Add destinations directly, or quick-pick them below.</p>
       {newTrip.dests.length>0?(<div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>{tripDestinationNamesFromValues(newTrip.dests,bucket).map(function(destName){return(<div key={destName} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:999,background:C.bg,border:"1px solid "+C.border}}><span style={{fontSize:12,fontWeight:600,color:"#fff"}}>{destName}</span><button onClick={function(){removeDestinationFromNewTrip(destName);}} title="Remove destination" aria-label={"Remove "+destName} style={{padding:"3px 7px",borderRadius:999,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:10,fontWeight:700,cursor:"pointer"}}>Remove</button></div>);})}</div>):(<p style={{fontSize:13,color:C.tx3,marginBottom:12}}>Add at least one destination to start planning.</p>)}
       {bucket.length>0&&(<div style={{display:"flex",flexDirection:"column",gap:6}}>{bucket.map(function(d){var sel=tripDestinationNamesFromValues(newTrip.dests,bucket).some(function(name){return name.toLowerCase()===String(d.name||"").trim().toLowerCase();});return(<button key={d.id} onClick={function(){if(sel)removeDestinationFromNewTrip(d.name);else addDestinationToNewTrip(d.name);}} style={{display:"flex",justifyContent:"space-between",padding:"10px 14px",borderRadius:10,border:"2px solid "+(sel?C.gold+"50":C.border),background:sel?C.goldDim:"transparent",cursor:"pointer",color:C.tx}}><span style={{fontWeight:sel?600:400,color:sel?C.goldT:C.tx}}>{d.name} ({d.country})</span>{sel&&<span style={{color:C.gold}}>Y</span>}</button>);})}</div>)}
@@ -5373,7 +5494,9 @@ export default function WanderPlan(){
       <div style={{display:"flex",gap:8,marginBottom:12}}>
         <input value={newTripDestInput} onChange={function(e){setNTDI(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){if(addDestinationToNewTrip(newTripDestInput))setNTDI("");}}} placeholder="Add another destination directly" style={{flex:1,padding:"10px 12px",borderRadius:9,background:C.bg,border:"1.5px solid "+C.border,fontSize:13,color:"#fff"}}/>
         <button onClick={function(){if(addDestinationToNewTrip(newTripDestInput))setNTDI("");}} style={{padding:"9px 14px",borderRadius:9,border:"none",background:C.teal,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Add</button>
+        <button onClick={searchDestinationsForTrip} disabled={!newTripDestInput.trim()||tripDestSearchLoad} style={{padding:"9px 14px",borderRadius:9,border:"1px solid "+C.goldT+"35",background:tripDestSearchLoad?C.border:C.goldDim,color:tripDestSearchLoad?C.tx3:C.goldT,fontSize:13,fontWeight:700,cursor:(!newTripDestInput.trim()||tripDestSearchLoad)?"default":"pointer"}}>{tripDestSearchLoad?"Searching...":"Search AI"}</button>
       </div>
+      {destinationMsg&&<p style={{fontSize:12,color:C.tx2,marginBottom:10}}>{destinationMsg}</p>}
       {td.length===0&&<p style={{fontSize:13,color:C.tx3,marginBottom:10}}>Add at least one destination before continuing.</p>}
       {td.map(function(d){return(<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid "+C.border,gap:10}}><div><span style={{fontWeight:600}}>{d.name}</span><span style={{color:C.tx3,marginLeft:8,fontSize:13}}>{d.country}</span></div><div style={{textAlign:"right",display:"flex",alignItems:"center",gap:10}}><div><span style={{color:C.goldT,fontWeight:600,fontSize:13}}>~${d.costPerDay}/day</span>{d.bestTimeDesc&&<p style={{fontSize:11,color:C.tx3}}>{d.bestTimeDesc}</p>}</div><button onClick={function(){removeDestinationFromNewTrip(d.name);}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button></div></div>);})}
       {td.length>0&&goBtn("Confirm "+td.length+" Destination"+(td.length>1?"s":""))}
@@ -7199,6 +7322,6 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeTripDestinationValue, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
 
 

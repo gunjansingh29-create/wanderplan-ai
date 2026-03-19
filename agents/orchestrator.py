@@ -5786,11 +5786,77 @@ async def search_stays(trip_id: str, body: StaySearchRequest, user_id: str = Dep
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
     nights = max(1, (date.fromisoformat(body.check_out) - date.fromisoformat(body.check_in)).days)
-    stays = [
-        {"stay_id": "STAY-LUXURY-001", "name": f"Grand {body.city} Palace", "price_per_night_usd": 200.0, "rating": 4.8, "type": "Hotel", "nights": nights},
-        {"stay_id": "STAY-PLUS-001", "name": f"{body.city} Central Suites", "price_per_night_usd": 140.0, "rating": 4.4, "type": "Hotel", "nights": nights},
-        {"stay_id": "STAY-BASIC-001", "name": f"{body.city} Urban Lodge", "price_per_night_usd": 90.0, "rating": 4.1, "type": "Hostel", "nights": nights},
-    ]
+    city = str(body.city or "").strip()
+    city_slug = re.sub(r"[^a-z0-9]+", "-", city.lower()).strip("-")
+
+    fallback_catalog: dict[str, list[dict[str, Any]]] = {
+        "auckland": [
+            {"name": "Britomart House", "type": "Boutique Hotel", "rating": 4.7, "price": 220.0, "neighborhood": "Britomart", "amenities": ["WiFi", "Breakfast", "Harbor views"], "why": "Walkable to ferries, dining, and the waterfront.", "cancellation": "Free cancellation up to 48 hours"},
+            {"name": "Ponsonby Local Hotel", "type": "Design Hotel", "rating": 4.5, "price": 185.0, "neighborhood": "Ponsonby", "amenities": ["WiFi", "Cafe", "Parking"], "why": "Good base for nightlife and neighborhood restaurants.", "cancellation": "Flexible cancellation"},
+            {"name": "Mount Eden Retreat", "type": "Serviced Apartment", "rating": 4.4, "price": 155.0, "neighborhood": "Mount Eden", "amenities": ["Kitchen", "Laundry", "WiFi"], "why": "Quiet stay with fast access to the lookout and central city.", "cancellation": "Pay later option available"},
+            {"name": "Viaduct Quay Suites", "type": "Harbor Hotel", "rating": 4.6, "price": 205.0, "neighborhood": "Viaduct", "amenities": ["WiFi", "Gym", "Harbor views"], "why": "Strong fit for waterfront-heavy Auckland days.", "cancellation": "Free cancellation up to 72 hours"},
+        ],
+        "christchurch": [
+            {"name": "Avon River Pavilions", "type": "Boutique Hotel", "rating": 4.7, "price": 210.0, "neighborhood": "Central City", "amenities": ["WiFi", "Breakfast", "Garden"], "why": "Close to punting, riverside walks, and the botanic gardens.", "cancellation": "Free cancellation up to 48 hours"},
+            {"name": "Riccarton Garden Suites", "type": "Serviced Apartment", "rating": 4.4, "price": 160.0, "neighborhood": "Riccarton", "amenities": ["Kitchen", "Parking", "WiFi"], "why": "Useful if the group wants more space and easy parking.", "cancellation": "Flexible cancellation"},
+            {"name": "Cathedral Square Hotel", "type": "City Hotel", "rating": 4.3, "price": 145.0, "neighborhood": "Cathedral Square", "amenities": ["WiFi", "Restaurant", "Concierge"], "why": "Good central base for short Christchurch stops.", "cancellation": "Pay later option available"},
+            {"name": "Botanical Quarter Residence", "type": "Apartment Hotel", "rating": 4.6, "price": 190.0, "neighborhood": "Botanic District", "amenities": ["Kitchen", "Laundry", "WiFi"], "why": "Best fit for garden and museum days.", "cancellation": "Free cancellation up to 72 hours"},
+        ],
+        "wellington": [
+            {"name": "Te Aro Apartment", "type": "Serviced Apartment", "rating": 4.5, "price": 170.0, "neighborhood": "Te Aro", "amenities": ["Kitchen", "WiFi", "Laundry"], "why": "Walkable to Cuba Street and a strong dining base.", "cancellation": "Flexible cancellation"},
+            {"name": "Oriental Bay Hotel", "type": "Waterfront Hotel", "rating": 4.6, "price": 215.0, "neighborhood": "Oriental Bay", "amenities": ["WiFi", "Breakfast", "Harbor views"], "why": "Great for scenic harbor mornings and coastal walks.", "cancellation": "Free cancellation up to 48 hours"},
+            {"name": "Thorndon Townhouse", "type": "Townhouse Stay", "rating": 4.3, "price": 150.0, "neighborhood": "Thorndon", "amenities": ["WiFi", "Parking", "Garden"], "why": "Useful for quieter evenings with easy central access.", "cancellation": "Pay later option available"},
+            {"name": "Cuba Street Loft", "type": "Design Loft", "rating": 4.4, "price": 180.0, "neighborhood": "Cuba Quarter", "amenities": ["WiFi", "Kitchenette", "Cafe nearby"], "why": "Best fit when nightlife and indie food spots matter.", "cancellation": "Flexible cancellation"},
+        ],
+        "queenstown": [
+            {"name": "Lakefront Peaks Hotel", "type": "Lake Hotel", "rating": 4.8, "price": 255.0, "neighborhood": "Lakefront", "amenities": ["WiFi", "Breakfast", "Lake views"], "why": "Best base for lake walks and skyline-facing evenings.", "cancellation": "Free cancellation up to 72 hours"},
+            {"name": "Remarkables Lodge", "type": "Mountain Lodge", "rating": 4.5, "price": 210.0, "neighborhood": "Frankton", "amenities": ["Parking", "WiFi", "Shuttle"], "why": "Good value if the group wants easy airport and mountain access.", "cancellation": "Flexible cancellation"},
+            {"name": "Arrow Lane Suites", "type": "Serviced Apartment", "rating": 4.4, "price": 185.0, "neighborhood": "Queenstown Centre", "amenities": ["Kitchen", "Laundry", "WiFi"], "why": "Good fit for walkable central days with more room.", "cancellation": "Pay later option available"},
+            {"name": "Shotover View House", "type": "Guesthouse", "rating": 4.3, "price": 165.0, "neighborhood": "Arthurs Point", "amenities": ["WiFi", "Parking", "Hot tub"], "why": "A quieter base with strong evening views.", "cancellation": "Flexible cancellation"},
+        ],
+        "melbourne": [
+            {"name": "Southbank Suites", "type": "Apartment Hotel", "rating": 4.6, "price": 220.0, "neighborhood": "Southbank", "amenities": ["WiFi", "Gym", "Kitchen"], "why": "Easy access to river walks, galleries, and central dining.", "cancellation": "Free cancellation up to 48 hours"},
+            {"name": "Fitzroy Corner Hotel", "type": "Boutique Hotel", "rating": 4.5, "price": 195.0, "neighborhood": "Fitzroy", "amenities": ["WiFi", "Cafe", "Courtyard"], "why": "Strong fit for cafe culture and neighborhood exploration.", "cancellation": "Flexible cancellation"},
+            {"name": "Carlton Lane House", "type": "Townhouse Stay", "rating": 4.3, "price": 160.0, "neighborhood": "Carlton", "amenities": ["Kitchen", "WiFi", "Laundry"], "why": "Good value with easy tram access to the CBD.", "cancellation": "Pay later option available"},
+            {"name": "St Kilda Local Lodge", "type": "Beachside Hotel", "rating": 4.2, "price": 150.0, "neighborhood": "St Kilda", "amenities": ["WiFi", "Parking", "Beach access"], "why": "Works well for travelers prioritizing the coast over the CBD.", "cancellation": "Flexible cancellation"},
+        ],
+        "sydney": [
+            {"name": "Surry Hills House", "type": "Boutique Hotel", "rating": 4.6, "price": 235.0, "neighborhood": "Surry Hills", "amenities": ["WiFi", "Breakfast", "Cafe"], "why": "Strong base for dining and central Sydney access.", "cancellation": "Free cancellation up to 48 hours"},
+            {"name": "Circular Quay Hotel", "type": "Harbor Hotel", "rating": 4.7, "price": 285.0, "neighborhood": "Circular Quay", "amenities": ["WiFi", "Harbor views", "Gym"], "why": "Best fit for iconic harbor-focused days.", "cancellation": "Flexible cancellation"},
+            {"name": "Newtown Commons", "type": "Design Hotel", "rating": 4.4, "price": 175.0, "neighborhood": "Newtown", "amenities": ["WiFi", "Bar", "Courtyard"], "why": "Good if the group wants local nightlife and food.", "cancellation": "Pay later option available"},
+            {"name": "Paddington Terrace Stay", "type": "Apartment Hotel", "rating": 4.5, "price": 205.0, "neighborhood": "Paddington", "amenities": ["Kitchen", "WiFi", "Laundry"], "why": "Good balance of neighborhood feel and central access.", "cancellation": "Flexible cancellation"},
+        ],
+    }
+
+    if city_slug in fallback_catalog:
+        raw_stays = fallback_catalog[city_slug]
+    else:
+        raw_stays = [
+            {"name": f"{city} Old Town House", "type": "Boutique Hotel", "rating": 4.5, "price": 190.0, "neighborhood": "Old Town", "amenities": ["WiFi", "Breakfast", "Courtyard"], "why": "Walkable base near historic sights and restaurants.", "cancellation": "Flexible cancellation"},
+            {"name": f"{city} Station Quarter Suites", "type": "Serviced Apartment", "rating": 4.3, "price": 155.0, "neighborhood": "Station Quarter", "amenities": ["Kitchen", "Laundry", "WiFi"], "why": "Useful when the group wants more room and transit access.", "cancellation": "Pay later option available"},
+            {"name": f"{city} Harbor & Market Hotel", "type": "City Hotel", "rating": 4.6, "price": 225.0, "neighborhood": "Waterfront", "amenities": ["WiFi", "Gym", "Breakfast"], "why": "Good fit when most plans cluster near the center and dining districts.", "cancellation": "Free cancellation up to 48 hours"},
+            {"name": f"{city} Garden District Lodge", "type": "Guesthouse", "rating": 4.2, "price": 135.0, "neighborhood": "Garden District", "amenities": ["WiFi", "Garden", "Parking"], "why": "Quieter stay for travelers prioritizing value and slower evenings.", "cancellation": "Flexible cancellation"},
+        ]
+
+    stays = []
+    for idx, option in enumerate(raw_stays):
+        stay_name = str(option.get("name") or "").strip()
+        booking_query = quote_plus(f"{stay_name} {city} hotel")
+        stays.append({
+            "stay_id": f"STAY-{city_slug or 'CITY'}-{idx+1:03d}",
+            "name": stay_name,
+            "price_per_night_usd": float(option.get("price") or 0),
+            "rating": float(option.get("rating") or 4.3),
+            "type": str(option.get("type") or "Hotel"),
+            "nights": nights,
+            "amenities": list(option.get("amenities") or []),
+            "neighborhood": str(option.get("neighborhood") or "").strip(),
+            "booking_source": "WanderPlan curated fallback",
+            "why_this_one": str(option.get("why") or "").strip(),
+            "cancellation": str(option.get("cancellation") or "Flexible cancellation"),
+            "booking_url": f"https://www.google.com/search?q={booking_query}",
+            "image_url": "",
+        })
     if body.max_price is not None:
         stays = [s for s in stays if s["price_per_night_usd"] <= float(body.max_price)]
     return {"stays": stays}
