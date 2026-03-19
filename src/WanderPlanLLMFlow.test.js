@@ -587,6 +587,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       {
         day: 2,
         destination: "Wellington",
+        anchor: "Cuba Street",
         meals: [
           {
             type: "Dinner",
@@ -612,6 +613,13 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         rating: 4.7,
         note: "One of Wellington's better-known dinner spots.",
         travelMinutes: 14,
+      })
+    );
+    expect(out[0]).toEqual(
+      expect.objectContaining({
+        destination: "Wellington",
+        anchor: "Cuba Street",
+        locationLabel: "Wellington near Cuba Street",
       })
     );
   });

@@ -1448,8 +1448,10 @@ function summarizeStayVotes(votesMap, stay, idx, voters){
 }
 
 function canonicalMealVoteKey(day, meal, dayIndex, mealIndex){
+  var mealGroupKey=String(day&&day.locationLabel||day&&day.anchor||"").trim();
+  if(!mealGroupKey)mealGroupKey=String(day&&day.day||dayIndex+1);
   var raw=(
-    String(day&&day.day||dayIndex+1)+" "+
+    mealGroupKey+" "+
     String(day&&day.destination||meal&&meal.city||"")+" "+
     String(meal&&meal.type||"")+" "+
     String(meal&&meal.time||"")
@@ -1588,8 +1590,8 @@ async function askDining(destinations, budgetTier, dietary, days, groupSize) {
   var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
   var destStr = (destinations || []).map(function(d) { return d.name + ", " + d.country; }).join("; ") || "Kyoto, Japan";
   var dietStr = (dietary && dietary.length > 0) ? dietary.join(", ") : "none";
-  var sys = "You are WanderPlan Dining Agent. Plan meals for a " + (days || 10) + "-day trip.\n\nReturn ONLY a JSON array:\n[{\"day\":1,\"destination\":\"City\",\"meals\":[{\"type\":\"Breakfast\",\"time\":\"08:00\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":25,\"rating\":4.6,\"dietaryOk\":true,\"note\":\"Why go here\",\"options\":[{\"name\":\"Restaurant A\",\"cuisine\":\"Cafe\",\"cost\":22,\"rating\":4.7,\"note\":\"Known for pastries\"},{\"name\":\"Restaurant B\",\"cuisine\":\"Brunch\",\"cost\":26,\"rating\":4.5,\"note\":\"High-rated brunch spot\"},{\"name\":\"Restaurant C\",\"cuisine\":\"Bakery\",\"cost\":18,\"rating\":4.4,\"note\":\"Quick local favorite\"}]}]}]\n\n3 meals per day (Breakfast, Lunch, Dinner). Dietary: " + dietStr + ". Budget: " + (bd[budgetTier] || bd.moderate) + ". Plan first 4 days. Use authentic local restaurants. Give each meal 3 distinct rated restaurant options when possible.\nRules:\n- prefer real, highly rated restaurants or strong local specialties when known\n- avoid repeating the same style of restaurant names across cities\n- breakfast should be a realistic first stop near the stay or first POI of the day\n- lunch and dinner should reflect the destination's food culture, not generic placeholders\n- each option should feel meaningfully different in cuisine, price point, or atmosphere\n- notes should explain why the place is worth choosing\nONLY JSON array.";
-  var msg = "Plan meals for: " + destStr + ". " + (days || 10) + " days. " + (groupSize || 2) + " people. Dietary: " + dietStr;
+  var sys = "You are WanderPlan Dining Agent. Build a location-based restaurant plan for a trip.\n\nReturn ONLY a JSON array:\n[{\"destination\":\"City\",\"anchor\":\"Neighborhood or nearby attraction\",\"meals\":[{\"type\":\"Breakfast\",\"time\":\"08:00\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":25,\"rating\":4.6,\"dietaryOk\":true,\"note\":\"Why go here\",\"options\":[{\"name\":\"Restaurant A\",\"cuisine\":\"Cafe\",\"cost\":22,\"rating\":4.7,\"note\":\"Known for pastries\"},{\"name\":\"Restaurant B\",\"cuisine\":\"Brunch\",\"cost\":26,\"rating\":4.5,\"note\":\"High-rated brunch spot\"},{\"name\":\"Restaurant C\",\"cuisine\":\"Bakery\",\"cost\":18,\"rating\":4.4,\"note\":\"Quick local favorite\"}]}]}]\n\nFor each destination, suggest breakfast, lunch, and dinner options tied to a local anchor like the hotel neighborhood, waterfront, market, old town, museum district, or a nearby landmark. Dietary: " + dietStr + ". Budget: " + (bd[budgetTier] || bd.moderate) + ". Group size: " + (groupSize || 2) + ".\nRules:\n- prefer real, highly rated restaurants or strong local specialties when known\n- avoid repeating the same style of restaurant names across cities\n- breakfast should be a realistic first stop near the stay or a morning POI area\n- lunch and dinner should reflect the destination's food culture, not generic placeholders\n- each option should feel meaningfully different in cuisine, price point, or atmosphere\n- notes should explain why the place is worth choosing locally\n- do not assign days; itinerary will place meals into days later\nONLY JSON array.";
+  var msg = "Plan location-based meals for: " + destStr + ". " + (days || 10) + " trip days. " + (groupSize || 2) + " people. Dietary: " + dietStr;
   var res = await callLLM(sys, msg, 1000);
   return Array.isArray(res) ? res : [];
 }
@@ -1628,6 +1630,8 @@ export function normalizeDiningPlan(rows){
   var list=Array.isArray(rows)?rows:[];
   return list.map(function(day,dayIndex){
     var destination=String(day&&day.destination||"City").trim()||"City";
+    var anchor=String(day&&day.anchor||day&&day.locationLabel||"").trim();
+    var locationLabel=anchor?String(destination+" near "+anchor).trim():destination;
     var mealsIn=Array.isArray(day&&day.meals)?day.meals:[];
     var mealsOut=mealsIn.map(function(meal,mealIndex){
       var type=String(meal&&meal.type||"Meal").trim()||"Meal";
@@ -1684,12 +1688,14 @@ export function normalizeDiningPlan(rows){
         travelMinutes:Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0
       };
     });
-    return {
-      day:Number(day&&day.day||dayIndex+1)||dayIndex+1,
-      date:String(day&&day.date||"").trim(),
-      destination:destination,
-      meals:mealsOut
-    };
+      return {
+        day:Number(day&&day.day||dayIndex+1)||dayIndex+1,
+        date:String(day&&day.date||"").trim(),
+        destination:destination,
+        anchor:anchor,
+        locationLabel:locationLabel,
+        meals:mealsOut
+      };
   });
 }
 
@@ -6963,21 +6969,32 @@ export default function WanderPlan(){
       }
 
       return(<div>
-        {ab("Dining Agent",mealDone?(soloTripMode?"Solo trip detected. Review your meal plan, adjust anything you want, then continue. Dietary: "+dietStr+".":"Review your meal plan. Dietary: "+dietStr+". Chat to adjust."):"Planning meals across your destinations...")}
-        {!mealDone&&!mealLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent plans breakfast, lunch, and dinner for {totalDays} days, respecting all dietary needs and your approved budget.</p><button onClick={function(){
+        {ab("Dining Agent",mealDone?(soloTripMode?"Solo trip detected. Review your location-based meal options, adjust anything you want, then continue. Dietary: "+dietStr+".":"Review your location-based meal options. Dietary: "+dietStr+". Chat to adjust."):"Planning meals across your destinations...")}
+        {!mealDone&&!mealLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent finds breakfast, lunch, and dinner options by destination and local anchor, respecting dietary needs and your approved budget. Exact day placement happens later in the itinerary.</p><button onClick={function(){
           setML(true);
           if(authToken&&currentTripId){
             apiJson("/trips/"+currentTripId+"/dining/suggestions",{method:"GET"},authToken).then(function(r){
               var sug=(r&&r.suggestions)||[];
               if(sug.length>0){
-                var byDay={};
+                var byLocation={};
                 sug.forEach(function(s){
-                  var d=Number(s.day||1)||1;
-                  if(!byDay[d])byDay[d]={day:d,date:s.date||"",destination:s.city||s.poi_city||"City",meals:[]};
+                  var destination=String(s.city||s.poi_city||"City").trim()||"City";
+                  var anchor=String(s.near_poi||"").trim();
+                  var groupKey=(destination.toLowerCase()+"|"+anchor.toLowerCase());
+                  if(!byLocation[groupKey]){
+                    byLocation[groupKey]={
+                      day:Object.keys(byLocation).length+1,
+                      date:"",
+                      destination:destination,
+                      anchor:anchor,
+                      locationLabel:anchor?(destination+" near "+anchor):destination,
+                      meals:[]
+                    };
+                  }
                   var options=(Array.isArray(s.options)&&s.options.length>0?s.options:[{
-                    option_id:s.id||("meal-"+d+"-"+String(s.meal||"meal").toLowerCase()),
+                    option_id:s.id||("meal-"+groupKey.replace(/[^a-z0-9]+/gi,"-")+"-"+String(s.meal||"meal").toLowerCase()),
                     name:s.name||"Restaurant",
-                    city:s.city||"",
+                    city:destination,
                     cuisine:s.cuisine||((s.tags&&s.tags[0])||"Local"),
                     cost:s.cost||0,
                     rating:Number((s.rating!==undefined)?s.rating:4.5)||4.5,
@@ -6985,27 +7002,27 @@ export default function WanderPlan(){
                     near_poi:s.near_poi||"",
                     travel_minutes:s.travel_from_poi_minutes||0
                    }]).map(function(o,oi){
-                     return {
-                       option_id:o.option_id||("opt-"+d+"-"+oi),
-                       name:o.name||"Restaurant",
-                       city:o.city||"",
-                       cuisine:o.cuisine||((o.tags&&o.tags[0])||"Local"),
-                       cost:Number((o.cost!==undefined)?o.cost:0)||0,
-                       rating:Number((o.rating!==undefined)?o.rating:4.5)||4.5,
+                      return {
+                        option_id:o.option_id||("opt-"+groupKey.replace(/[^a-z0-9]+/gi,"-")+"-"+oi),
+                        name:o.name||"Restaurant",
+                        city:o.city||destination,
+                        cuisine:o.cuisine||((o.tags&&o.tags[0])||"Local"),
+                        cost:Number((o.cost!==undefined)?o.cost:0)||0,
+                        rating:Number((o.rating!==undefined)?o.rating:4.5)||4.5,
                        tags:Array.isArray(o.tags)?o.tags:[],
                        near_poi:o.near_poi||s.near_poi||"",
                        travel_minutes:Number((o.travel_minutes!==undefined)?o.travel_minutes:0)||0,
                        note:o.note||""
                      };
-                   });
-                   var top=options[0]||{};
-                  byDay[d].meals.push({
-                    type:s.meal||"Meal",
-                    time:s.time||"",
-                    date:s.date||"",
-                    options:options,
-                    selectedOption:0,
-                    name:top.name||s.name||"Restaurant",
+                  });
+                  var top=options[0]||{};
+                  byLocation[groupKey].meals.push({
+                     type:s.meal||"Meal",
+                     time:s.time||"",
+                     date:"",
+                     options:options,
+                     selectedOption:0,
+                     name:top.name||s.name||"Restaurant",
                     city:top.city||s.city||"",
                      cuisine:top.cuisine||((s.tags&&s.tags[0])||"Local"),
                      cost:Number((top.cost!==undefined)?top.cost:(s.cost||0))||0,
@@ -7014,8 +7031,8 @@ export default function WanderPlan(){
                      note:top.note||top.near_poi||s.note||s.near_poi||((s.tags||[]).join(", ")),
                      travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s.travel_from_poi_minutes||0))||0
                    });
-                });
-                var rows=normalizeDiningPlan(Object.keys(byDay).sort(function(a,b){return Number(a)-Number(b);}).map(function(k){return byDay[k];}));
+                 });
+                var rows=normalizeDiningPlan(Object.keys(byLocation).map(function(k){return byLocation[k];}));
                 setMeals(rows);setML(false);setMD(true);
                 saveTripPlanningState({state:{meal_plan:rows,meal_votes:{}}}).then(function(){
                   refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
@@ -7059,7 +7076,7 @@ export default function WanderPlan(){
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
               {[
                 {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"(missing)"},
-                {l:"Meal days",v:String(meals.length)},
+                {l:"Meal groups",v:String(meals.length)},
                 {l:"Vote member count",v:String(voteMembers.length)},
                 {l:"Majority needed",v:String(majorityNeeded)},
                 {l:"Approved / Pending / Rejected",v:String(approvedMeals.length)+" / "+String(pendingMeals.length)+" / "+String(rejectedMeals.length)},
@@ -7091,7 +7108,7 @@ export default function WanderPlan(){
                   var rowMeta=readMealVoteRow(mealVotes,day,m,di,mi);
                   var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);
                   return(<div key={"meal-debug-"+di+"-"+mi} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
-                    <p style={{fontSize:11,fontWeight:700,color:"#fff",marginBottom:4}}>{day.destination||("Day "+day.day)} {" Â· "} {m.type||"Meal"} {" Â· "} {m.name||"Unnamed"}</p>
+                    <p style={{fontSize:11,fontWeight:700,color:"#fff",marginBottom:4}}>{day.locationLabel||day.destination||("Group "+day.day)} {" · "} {m.type||"Meal"} {" · "} {m.name||"Unnamed"}</p>
                     <p style={{fontSize:10,color:C.tx3,marginBottom:6}}>key={rowMeta.key}</p>
                     <p style={{fontSize:10,color:C.tx2,marginBottom:6}}>summary: {summary.up} up / {summary.down} down / {summary.votedCount} voted / allVoted={String(summary.allVoted)} / majority={String(summary.majority)}</p>
                     <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:120,overflowY:"auto"}}>{JSON.stringify({row:summary.row},null,2)}</pre>
@@ -7102,7 +7119,7 @@ export default function WanderPlan(){
           </div>)}
           {meals.map(function(day,di){
             return(<div key={di} style={{marginBottom:16}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>Day {day.day}</span><span style={{fontSize:12,color:C.tx3}}>{day.destination}{day.date?(" Â· "+day.date):""}</span></div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>{day.locationLabel||day.destination||("Location "+day.day)}</span><span style={{fontSize:12,color:C.tx3}}>{day.anchor?("Near "+day.anchor):"Location-first dining cluster"}</span></div>
               {(day.meals||[]).map(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);var st=soloTripMode?"yes":((summary.up>=majorityNeeded&&summary.up>summary.down)?"yes":(summary.votedCount===voteMembers.length&&summary.down>=summary.up?"no":""));var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
                 var opts=Array.isArray(m.options)?m.options:[];
                 var selectedOpt=(m.selectedOption!==undefined&&m.selectedOption!==null)?m.selectedOption:0;
@@ -7145,7 +7162,7 @@ export default function WanderPlan(){
               })}
             </div>);
           })}
-          <div style={{fontSize:12,color:C.tx3,marginBottom:12}}>Showing first {meals.length} days. Full {totalDays}-day plan follows same pattern.</div>
+          <div style={{fontSize:12,color:C.tx3,marginBottom:12}}>Showing {meals.length} location-based meal clusters. Exact day placement happens in the itinerary step.</div>
 
           {/* Chat for modifications */}
           <div style={{background:C.bg,borderRadius:12,border:"1px solid "+C.border,overflow:"hidden",marginTop:4}}>
@@ -7324,5 +7341,6 @@ export default function WanderPlan(){
 }
 
 export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
+
 
 
