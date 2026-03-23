@@ -6035,20 +6035,22 @@ export default function WanderPlan(){
         setPMC({});
         setPois([]);
         setPD(false);
-        var replacementPoolPatch={};
-        Object.keys(poiOptionPool||{}).forEach(function(key){
-          replacementPoolPatch[key]=null;
-        });
-        setPOP(replacementPoolPatch);
-        saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:replacementPoolPatch,poi_request_signature:poiCurrentSignature}}).catch(function(){return null;});
+        setPOP({});
+        saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:{},poi_request_signature:poiCurrentSignature}}).catch(function(){return null;});
         askComprehensivePOIs(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs).then(function(res){
           var nextRows=Array.isArray(res)?res:[];
+          var nextPool=buildPoiOptionPoolPatch(nextRows,{});
           setPois(nextRows);
+          setPOP(nextPool);
           setPL(false);
           setPD(true);
           setPoiRequestSignature(poiCurrentSignature);
+          saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:nextPool,poi_request_signature:poiCurrentSignature}}).then(function(){
+            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+          }).catch(function(){return null;});
         }).catch(function(){
           setPois([]);
+          setPOP({});
           setPL(false);
           setPD(true);
           setPoiRequestSignature(poiCurrentSignature);
