@@ -5896,8 +5896,9 @@ export default function WanderPlan(){
     </div>)}
 
     {wizStep===5&&(function(){
+      var poiRows=mergePoiListsByCanonical(pois,poiOptionPool);
       function hasAnyCrewYesForIdx(idx){
-        var rowMeta=readPoiSelectionRow(poiMemberChoices,pois[idx],idx);
+        var rowMeta=readPoiSelectionRow(poiMemberChoices,poiRows[idx],idx);
         return hasAnyYesInPoiSelectionRow(rowMeta.row)||poiStatus[idx]==="yes";
       }
       function setPoiDecisionForCurrentUser(idx,decision){
@@ -5909,8 +5910,8 @@ export default function WanderPlan(){
         });
         if(!currentPlannerId)return;
         setPMC(function(prev){
-          var next=normalizePoiStateMap(prev,pois,poiOptionPool);
-          var rowMeta=readPoiSelectionRow(next,pois[idx],idx);
+          var next=normalizePoiStateMap(prev,poiRows,poiOptionPool);
+          var rowMeta=readPoiSelectionRow(next,poiRows[idx],idx);
           var row=Object.assign({},rowMeta.row||{});
           row[currentPlannerId]=decision;
           next[rowMeta.key]=row;
@@ -5920,11 +5921,11 @@ export default function WanderPlan(){
           return next;
         });
       }
-      var accepted=pois.filter(function(p,i){return poiStatus[i]==="yes";});
-      var rejected=pois.filter(function(p,i){return poiStatus[i]==="no";});
-      var pending=pois.filter(function(p,i){return !poiStatus[i];});
-      var combinedAccepted=pois.filter(function(_,i){return hasAnyCrewYesForIdx(i);});
-      var allDecided=poiDone&&pois.length>0&&pending.length===0&&!poiContextStale;
+      var accepted=poiRows.filter(function(p,i){return poiStatus[i]==="yes";});
+      var rejected=poiRows.filter(function(p,i){return poiStatus[i]==="no";});
+      var pending=poiRows.filter(function(p,i){return !poiStatus[i];});
+      var combinedAccepted=poiRows.filter(function(_,i){return hasAnyCrewYesForIdx(i);});
+      var allDecided=poiDone&&poiRows.length>0&&pending.length===0&&!poiContextStale;
       function revisePOISelection(){
         setPS({});
         if(authToken&&wizSessionId){
@@ -5951,13 +5952,13 @@ export default function WanderPlan(){
           });
         });
         var acceptedIdx=[];
-        pois.forEach(function(_,i){
+        poiRows.forEach(function(_,i){
           if(hasAnyCrewYesForIdx(i))acceptedIdx.push(i);
         });
         setPV(function(prev){
-          var next=normalizePoiStateMap(prev,pois,poiOptionPool);
+          var next=normalizePoiStateMap(prev,poiRows,poiOptionPool);
           acceptedIdx.forEach(function(idx){
-            var rowMeta=readPoiVoteRow(next,pois[idx],idx);
+            var rowMeta=readPoiVoteRow(next,poiRows[idx],idx);
             var voteKey=rowMeta.key;
             var row=Object.assign({},rowMeta.row||{});
             voteMembers.forEach(function(vm){
@@ -6005,9 +6006,9 @@ export default function WanderPlan(){
       }
       var poiGroupPrefs=buildPOIGroupPrefs();
       var poiCurrentSignature=buildPoiRequestSignature(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs);
-      var poiContextStale=poiListNeedsRefresh(poiRequestSignature,poiCurrentSignature,pois,dests);
+      var poiContextStale=poiListNeedsRefresh(poiRequestSignature,poiCurrentSignature,poiRows,dests);
       var profCount=poiGroupPrefs.memberSummaries.length;
-      var poiDebugDuplicates=findDuplicatePoiKeys(pois);
+      var poiDebugDuplicates=findDuplicatePoiKeys(poiRows);
       var poiVoteMembers=[{
         id:currentPlannerId,
         userId:userIdFromToken(authToken),
@@ -6080,7 +6081,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               {l:"Resolved trip id",v:syncedTripId||"(missing)"},
               {l:"Current planner id",v:currentPlannerId||"(missing)"},
               {l:"Planning updated_at",v:planningStateUpdatedAtRef.current||"(none)"},
-              {l:"POI count",v:String((pois||[]).length)},
+              {l:"POI count",v:String((poiRows||[]).length)},
               {l:"Shared pool count",v:String(Object.keys(poiOptionPool||{}).length)},
               {l:"Selection row count",v:String(Object.keys(poiMemberChoices||{}).length)},
               {l:"Vote row count",v:String(Object.keys(poiVotes||{}).length)},
@@ -6116,7 +6117,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:160,overflowY:"auto"}}>{JSON.stringify(poiVotes||{},null,2)}</pre>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {pois.map(function(p,idx){
+            {poiRows.map(function(p,idx){
               var selectionMeta=readPoiSelectionRow(poiMemberChoices,p,idx);
               var voteSummary=summarizePoiVotes(poiVotes,p,idx,poiVoteMembers);
               var yesCount=Object.keys(selectionMeta.row||{}).filter(function(k){return String(selectionMeta.row[k]||"").trim().toLowerCase()==="yes";}).length;
@@ -6131,9 +6132,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         </div>)}
         {(!poiDone||poiContextStale)&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>{poiContextStale?"Destinations, budget, or traveler profiles changed. Refresh the activity list so it matches the current trip.":("The agent searches "+dests.length+" destination"+(dests.length>1?"s":"")+" based on group interests and budget.")}</p><button onClick={runPoiSearch} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>{poiContextStale?"Refresh Activities for Updated Trip":"Find Activities"}</button></div>)}
         {poiLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Searching across {dests.map(function(d){return d.name;}).join(", ")}...</p></div>)}
-        {poiDone&&pois.length>0&&!poiContextStale&&(<div>
-          {pois.map(function(p,i){var st=poiStatus[i];var cc=p.category==="Nature"?C.grn:p.category==="Food"?C.teal:p.category==="Culture"?C.wrn:p.category==="Adventure"?C.coral:p.category==="Wellness"?C.purp:C.tealL;
-            return(<div key={i} style={{padding:"12px 0",borderBottom:i<pois.length-1?"1px solid "+C.border:"none",opacity:st==="no"?.4:1,transition:"opacity .2s"}}>
+        {poiDone&&poiRows.length>0&&!poiContextStale&&(<div>
+          {poiRows.map(function(p,i){var st=poiStatus[i];var cc=p.category==="Nature"?C.grn:p.category==="Food"?C.teal:p.category==="Culture"?C.wrn:p.category==="Adventure"?C.coral:p.category==="Wellness"?C.purp:C.tealL;
+            return(<div key={i} style={{padding:"12px 0",borderBottom:i<poiRows.length-1?"1px solid "+C.border:"none",opacity:st==="no"?.4:1,transition:"opacity .2s"}}>
               <div style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}><span style={{fontSize:10,padding:"1px 8px",borderRadius:999,background:cc+"18",color:cc,fontWeight:600}}>{p.category}</span><span style={{fontSize:11,color:C.wrn}}>{"*"+(p.rating||4.5)}</span><span style={{fontSize:11,color:C.tx3,marginLeft:"auto"}}>{p.destination}</span></div>
               <p style={{fontSize:14,fontWeight:600,marginBottom:2,textDecoration:st==="no"?"line-through":"none"}}>{p.name}</p>
               <div style={{display:"flex",gap:12,fontSize:12,color:C.tx3,marginBottom:4,flexWrap:"wrap"}}><span>{p.duration}</span><span>{p.cost>0?"$"+p.cost:"Free"}</span>{p.locationHint&&<span>{p.locationHint}</span>}{p.bestTime&&<span>Best {p.bestTime}</span>}{p.openingWindow&&<span>{p.openingWindow}</span>}</div>
@@ -6161,11 +6162,12 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             </div>
           </div>)}
         </div>)}
-        {poiDone&&pois.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"20px 0"}}>No activities found. Try asking for something specific below.</p><div style={{display:"flex",gap:8}}><input value={poiAsk} onChange={function(e){setPA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")addPOI();}} placeholder="e.g. 'hiking in Kyoto'" style={{flex:1,padding:"11px 14px",borderRadius:10,background:C.bg,border:"1.5px solid "+C.border,fontSize:14,color:"#fff"}}/><button onClick={addPOI} style={{padding:"10px 16px",borderRadius:10,border:"none",background:C.teal,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Add</button></div></div>)}
+        {poiDone&&poiRows.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"20px 0"}}>No activities found. Try asking for something specific below.</p><div style={{display:"flex",gap:8}}><input value={poiAsk} onChange={function(e){setPA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")addPOI();}} placeholder="e.g. 'hiking in Kyoto'" style={{flex:1,padding:"11px 14px",borderRadius:10,background:C.bg,border:"1.5px solid "+C.border,fontSize:14,color:"#fff"}}/><button onClick={addPOI} style={{padding:"10px 16px",borderRadius:10,border:"none",background:C.teal,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>Add</button></div></div>)}
       </div>);
     }())}
 
     {wizStep===6&&(function(){
+      var poiRows=mergePoiListsByCanonical(pois,poiOptionPool);
       var voteMembers=[{
         id:currentPlannerId,
         userId:userIdFromToken(authToken),
@@ -6185,14 +6187,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         });
       });
       var candidates=[];
-      pois.forEach(function(p,i){
+      poiRows.forEach(function(p,i){
         var rowMeta=readPoiSelectionRow(poiMemberChoices,p,i);
         if(hasAnyYesInPoiSelectionRow(rowMeta.row)||poiStatus[i]==="yes"){
           candidates.push({idx:i,poi:p});
         }
       });
       if(candidates.length===0){
-        pois.forEach(function(p,i){if(poiStatus[i]!=="no")candidates.push({idx:i,poi:p});});
+        poiRows.forEach(function(p,i){if(poiStatus[i]!=="no")candidates.push({idx:i,poi:p});});
       }
       var ranked=candidates.map(function(it){
         var voteSummary=summarizePoiVotes(poiVotes,it.poi,it.idx,voteMembers);
@@ -6207,8 +6209,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         var aliases=voteKeyAliasesFor(member);
         if(aliases.length===0)return;
         setPV(function(prev){
-          var next=normalizePoiStateMap(prev,pois,poiOptionPool);
-          var rowMeta=readPoiVoteRow(next,pois[idx],idx);
+          var next=normalizePoiStateMap(prev,poiRows,poiOptionPool);
+          var rowMeta=readPoiVoteRow(next,poiRows[idx],idx);
           var row=Object.assign({},rowMeta.row||{});
           aliases.forEach(function(k){row[k]=vote;});
           next[rowMeta.key]=row;
@@ -6269,7 +6271,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               {l:"Ranked count",v:String(ranked.length)},
               {l:"Vote row count",v:String(Object.keys(poiVotes||{}).length)},
               {l:"Selection row count",v:String(Object.keys(poiMemberChoices||{}).length)},
-              {l:"Duplicate canonical keys",v:String(findDuplicatePoiKeys(pois).length)}
+              {l:"Duplicate canonical keys",v:String(findDuplicatePoiKeys(poiRows).length)}
             ].map(function(item){
               return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
                 <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
