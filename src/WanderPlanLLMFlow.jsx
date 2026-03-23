@@ -2723,10 +2723,10 @@ export default function WanderPlan(){
       };
     });
   }
-  function syncTripPoisToBackend(statusMap){
+  function syncTripPoisToBackend(statusMap, rowsOverride){
     var tripIdForSync=resolveWizardTripId(currentTripId,newTrip);
     if(!(authToken&&tripIdForSync&&isUuidLike(tripIdForSync)))return Promise.resolve(null);
-    var rows=(pois||[]);
+    var rows=(Array.isArray(rowsOverride)?rowsOverride:(pois||[]));
     if(rows.length===0)return Promise.resolve(null);
     var status=statusMap||poiStatus||{};
     var payload=rows.map(function(p,idx){
@@ -6040,14 +6040,29 @@ export default function WanderPlan(){
         askComprehensivePOIs(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs).then(function(res){
           var nextRows=Array.isArray(res)?res:[];
           var nextPool=buildPoiOptionPoolPatch(nextRows,{});
-          setPois(nextRows);
-          setPOP(nextPool);
-          setPL(false);
-          setPD(true);
-          setPoiRequestSignature(poiCurrentSignature);
-          saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:nextPool,poi_request_signature:poiCurrentSignature}}).then(function(){
-            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
-          }).catch(function(){return null;});
+          syncTripPoisToBackend({},nextRows).then(function(syncRes){
+            var syncedRows=mapBackendPois((syncRes&&syncRes.pois)||[]);
+            var finalRows=syncedRows.length>0?syncedRows:nextRows;
+            var finalPool=buildPoiOptionPoolPatch(finalRows,{});
+            setPois(finalRows);
+            setPOP(finalPool);
+            setPL(false);
+            setPD(true);
+            setPoiRequestSignature(poiCurrentSignature);
+            saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:finalPool,poi_request_signature:poiCurrentSignature}}).then(function(){
+              refreshCurrentTripSharedState(authToken,currentTripId||tr.id).catch(function(){});
+              refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+            }).catch(function(){return null;});
+          }).catch(function(){
+            setPois(nextRows);
+            setPOP(nextPool);
+            setPL(false);
+            setPD(true);
+            setPoiRequestSignature(poiCurrentSignature);
+            saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:nextPool,poi_request_signature:poiCurrentSignature}}).then(function(){
+              refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+            }).catch(function(){return null;});
+          });
         }).catch(function(){
           setPois([]);
           setPOP({});
