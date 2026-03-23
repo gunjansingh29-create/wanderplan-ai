@@ -11,6 +11,7 @@ import {
   buildFallbackItinerary,
   buildFlightRoutePlan,
   buildItinerarySavePayload,
+  buildPoiRequestSignature,
   chooseBestItineraryRows,
   buildTripShareLink,
   buildTripShareSummary,
@@ -45,6 +46,7 @@ import {
   normalizePersonalBucketItems,
   normalizeTripDestinationValue,
   normalizeWizardStepIndex,
+  poiListNeedsRefresh,
   readDestinationVoteRow,
   readMealVoteRow,
   readPoiVoteRow,
@@ -120,6 +122,68 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
     ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+  });
+
+  test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
+    const base = buildPoiRequestSignature(
+      [{ name: "Kyoto", country: "Japan" }],
+      { culture: true, food: false },
+      "moderate",
+      ["Vegetarian"],
+      {
+        extraYes: ["temples"],
+        extraNo: [],
+        dietary: [],
+        memberSummaries: ["Crew: likes temples"],
+      }
+    );
+
+    const updated = buildPoiRequestSignature(
+      [
+        { name: "Kyoto", country: "Japan" },
+        { name: "Osaka", country: "Japan" },
+      ],
+      { culture: true, food: true },
+      "budget",
+      ["Vegetarian"],
+      {
+        extraYes: ["temples"],
+        extraNo: ["nightlife"],
+        dietary: [],
+        memberSummaries: ["Crew: likes temples; avoids nightlife"],
+      }
+    );
+
+    expect(updated).not.toBe(base);
+  });
+
+  test("poiListNeedsRefresh detects signature mismatch and destination drift", () => {
+    const rows = [
+      { name: "Fushimi Inari Shrine", destination: "Kyoto" },
+      { name: "Dotonbori Food Walk", destination: "Osaka" },
+    ];
+
+    expect(
+      poiListNeedsRefresh("sig-a", "sig-b", rows, [
+        { name: "Kyoto" },
+        { name: "Osaka" },
+      ])
+    ).toBe(true);
+
+    expect(
+      poiListNeedsRefresh("sig-a", "sig-a", rows, [
+        { name: "Kyoto" },
+        { name: "Osaka" },
+        { name: "Nara" },
+      ])
+    ).toBe(true);
+
+    expect(
+      poiListNeedsRefresh("sig-a", "sig-a", rows, [
+        { name: "Kyoto" },
+        { name: "Osaka" },
+      ])
+    ).toBe(false);
   });
 
   test("wizardSyncIntervalMs uses fast polling for collaborative steps", () => {

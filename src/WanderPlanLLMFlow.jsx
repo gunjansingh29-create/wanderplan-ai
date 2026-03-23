@@ -9,7 +9,7 @@ var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-rang
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
 var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
 var WIZARD_ORDER_VERSION=2;
-var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" • "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
+var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" | "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
 var BUILD_STAMP_DETAIL=String(BUILD_INFO&&BUILD_INFO.builtAt||"unknown");
 
 function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"none":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
@@ -1319,6 +1319,50 @@ async function askLLM(userMsg, budget, history) {
   return {type: "clarify", message: "Could you name a specific city or country?"};
 }
 
+function buildPoiRequestSignature(destinations, interests, budgetTier, dietary, groupPrefs){
+  var destList=(Array.isArray(destinations)?destinations:[]).map(function(d){
+    return {
+      name:String(d&&d.name||d||"").trim(),
+      country:String(d&&d.country||"").trim()
+    };
+  }).filter(function(d){return !!d.name;});
+  var ints=(interests&&typeof interests==="object")?interests:{};
+  var normalizedInterests={};
+  Object.keys(ints).sort().forEach(function(key){
+    if(typeof ints[key]==="boolean")normalizedInterests[key]=ints[key];
+  });
+  var gp=(groupPrefs&&typeof groupPrefs==="object")?groupPrefs:{};
+  function cleanList(list){
+    return (Array.isArray(list)?list:[]).map(function(v){return String(v||"").trim();}).filter(Boolean).sort();
+  }
+  return JSON.stringify({
+    destinations:destList,
+    interests:normalizedInterests,
+    budgetTier:String(budgetTier||"").trim().toLowerCase(),
+    dietary:cleanList(dietary),
+    extraYes:cleanList(gp.extraYes),
+    extraNo:cleanList(gp.extraNo),
+    groupDietary:cleanList(gp.dietary),
+    memberSummaries:cleanList(gp.memberSummaries)
+  });
+}
+
+function poiListNeedsRefresh(savedSignature, currentSignature, rows, destinations){
+  var list=Array.isArray(rows)?rows:[];
+  if(list.length===0)return false;
+  var saved=String(savedSignature||"").trim();
+  var current=String(currentSignature||"").trim();
+  if(saved&&current&&saved!==current)return true;
+  var destNames=(Array.isArray(destinations)?destinations:[]).map(function(d){return String(d&&d.name||d||"").trim().toLowerCase();}).filter(Boolean);
+  if(destNames.length===0)return false;
+  var poiDests={};
+  list.forEach(function(p){
+    var key=String(p&&p.destination||"").trim().toLowerCase();
+    if(key)poiDests[key]=1;
+  });
+  return destNames.some(function(name){return !poiDests[name];})||Object.keys(poiDests).some(function(name){return destNames.indexOf(name)<0;});
+}
+
 async function askPOI(destinations, interests, budgetTier, dietary, groupPrefs) {
   var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
   var destStr = (destinations || []).map(function(d) { return d.name + ", " + d.country; }).join("; ") || "Kyoto, Japan; Santorini, Greece";
@@ -1339,7 +1383,28 @@ async function askPOI(destinations, interests, budgetTier, dietary, groupPrefs) 
   if (groupPrefs && Array.isArray(groupPrefs.memberSummaries) && groupPrefs.memberSummaries.length > 0) {
     crewSummary = groupPrefs.memberSummaries.join(" | ");
   }
-  var sys = "You are WanderPlan POI Discovery Agent. Suggest 6-8 destination-specific activities spread across all destinations.\n\nReturn ONLY a JSON array:\n[{\"name\":\"Activity Name\",\"destination\":\"City\",\"category\":\"Nature\",\"duration\":\"3h\",\"cost\":0,\"rating\":4.8,\"matchReason\":\"Short reason\",\"tags\":[\"Hiking\"],\"locationHint\":\"Neighborhood, waterfront, district, or landmark area\",\"bestTime\":\"morning|afternoon|evening|flexible\",\"openingWindow\":\"Short note like 08:00-17:00 or sunrise to noon\"}]\n\ncategory: Nature, Food, Culture, Adventure, Wellness, Shopping, Nightlife, Photography\nBudget: " + (bd[budgetTier] || bd.moderate) + "\nPrioritize: " + (intYes.join(", ") || "culture, food") + "\nAvoid: " + (intNo.join(", ") || "none") + "\nDietary: " + dietStr + "\nCrew preferences: " + (crewSummary || "none provided") + "\nRules:\n- use real, recognizable activities or landmarks when possible\n- avoid generic placeholders like \"Explore City\", \"Local sightseeing\", or \"Food tour\" without a specific anchor\n- spread the list across all destinations; do not let one city dominate unless only one city was given\n- include at least one strong morning-friendly option and one food/culture option where relevant\n- provide a useful local area hint for each POI so itinerary routing can group nearby stops realistically\n- set bestTime honestly: morning for sunrise/garden/lookout/market/open-early places, evening for nightlife/show/sunset places, flexible otherwise\n- openingWindow should be brief and realistic when known; otherwise leave it empty\n- no duplicates or near-duplicates\n- match the budget and group preferences explicitly in matchReason\nReturn 6-8 items. ONLY JSON array.";
+  var sys = `You are WanderPlan POI Discovery Agent. Suggest 12-16 destination-specific activities spread across all destinations.
+
+Return ONLY a JSON array:
+[{"name":"Activity Name","destination":"City","category":"Nature","duration":"3h","cost":0,"rating":4.8,"matchReason":"Short reason","tags":["Hiking"],"locationHint":"Neighborhood, waterfront, district, or landmark area","bestTime":"morning|afternoon|evening|flexible","openingWindow":"Short note like 08:00-17:00 or sunrise to noon"}]
+
+category: Nature, Food, Culture, Adventure, Wellness, Shopping, Nightlife, Photography
+Budget: ${bd[budgetTier] || bd.moderate}
+Prioritize: ${intYes.join(", ") || "culture, food"}
+Avoid: ${intNo.join(", ") || "none"}
+Dietary: ${dietStr}
+Crew preferences: ${crewSummary || "none provided"}
+Rules:
+- use real, recognizable activities or landmarks when possible
+- avoid generic placeholders like "Explore City", "Local sightseeing", or "Food tour" without a specific anchor
+- spread the list across all destinations; aim for at least 2-3 strong options per destination when possible and do not let one city dominate unless only one city was given
+- include a strong mix of spiritual, culture, food, scenic, and locally distinctive options where relevant; include at least one strong morning-friendly option per destination when possible
+- provide a useful local area hint for each POI so itinerary routing can group nearby stops realistically
+- set bestTime honestly: morning for sunrise/garden/lookout/market/open-early places, evening for nightlife/show/sunset places, flexible otherwise
+- openingWindow should be brief and realistic when known; otherwise leave it empty
+- no duplicates or near-duplicates
+- match the budget and group preferences explicitly in matchReason
+Return 12-16 items. ONLY JSON array.`;
   var msg = "Find activities for: " + destStr;
   var res = await callLLM(sys, msg, 1000);
   return Array.isArray(res) ? res : [];
@@ -2158,6 +2223,7 @@ export default function WanderPlan(){
   var[poiVotes,setPV]=useState({});
   var[poiMemberChoices,setPMC]=useState({});
   var[poiOptionPool,setPOP]=useState({});
+  var[poiRequestSignature,setPoiRequestSignature]=useState("");
   var[poiAsk,setPA]=useState("");
   var[poiAskLoad,setPAL]=useState(false);
   var[flightDates,setFD]=useState({origin:"",depart:"",arrive:"",ret:"",final_airport:""});
@@ -2576,6 +2642,9 @@ export default function WanderPlan(){
         cost:Number((x&&x.cost_estimate_usd)!==undefined?(x&&x.cost_estimate_usd):((x&&x.cost)!==undefined?(x&&x.cost):0))||0,
         rating:Number((x&&x.rating)!==undefined?(x&&x.rating):4.5)||4.5,
         matchReason:String((x&&x.matchReason)||(((x&&Array.isArray(x.tags))?x.tags:[]).join(", "))),
+        locationHint:String((x&&x.location_hint)||(x&&x.locationHint)||(x&&x.neighborhood)||(x&&x.location_name)||"").trim(),
+        bestTime:String((x&&x.best_time)||(x&&x.bestTime)||"").trim().toLowerCase(),
+        openingWindow:String((x&&x.opening_window)||(x&&x.openingWindow)||(x&&x.open_hours)||(x&&x.hours)||"").trim(),
         tags:(x&&Array.isArray(x.tags))?x.tags:[],
         approved:typeof (x&&x.approved)==="boolean"?x.approved:null
       };
@@ -2799,6 +2868,9 @@ export default function WanderPlan(){
         setFBL(st.flight_booking_links.slice());
       }
       setDMV(normalizeDestinationVoteState(st.dest_member_votes));
+      if(st.poi_request_signature!==undefined){
+        setPoiRequestSignature(String(st.poi_request_signature||"").trim());
+      }
       setPV(normalizePoiStateMap(st.poi_votes,pois,st.poi_option_pool));
       if(st.poi_option_pool&&typeof st.poi_option_pool==="object"){
         setPOP(st.poi_option_pool);
@@ -2869,6 +2941,7 @@ export default function WanderPlan(){
       if(r&&r.updated_at)planningStateUpdatedAtRef.current=String(r.updated_at||"");
       var state=(r&&r.state&&typeof r.state==="object")?r.state:null;
       if(state){
+        if(state.poi_request_signature!==undefined)setPoiRequestSignature(String(state.poi_request_signature||"").trim());
         if(state.dest_member_votes&&typeof state.dest_member_votes==="object"){
           setDMV(normalizeDestinationVoteState(state.dest_member_votes));
         }
@@ -4465,7 +4538,7 @@ export default function WanderPlan(){
             <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:4}}>TODAY PROGRESS</p>
             <p style={{fontSize:12,color:C.tx3}}>
               {String(dayProgress.completed_items||0)} of {String(dayProgress.total_items||0)} items closed
-              {dayProgress.last_updated_at?(" • updated "+formatCompanionDate(String(dayProgress.last_updated_at||"").slice(0,10))):""}
+              {dayProgress.last_updated_at?(" - updated "+formatCompanionDate(String(dayProgress.last_updated_at||"").slice(0,10))):""}
             </p>
           </div>
           <div style={{padding:"8px 12px",borderRadius:999,background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700}}>
@@ -4527,7 +4600,7 @@ export default function WanderPlan(){
               <p style={{fontSize:14,fontWeight:700}}>{day.title||("Day "+(day.day_number||idx+1))}</p>
               <span style={{fontSize:11,color:C.tx3}}>{formatCompanionDate(day.date)||("Day "+(day.day_number||idx+1))}</span>
             </div>
-            <p style={{fontSize:12,color:C.tx2}}>{(day.items||[]).slice(0,2).map(function(item){return item.title;}).filter(Boolean).join(" • ")||"More itinerary items coming up"}</p>
+            <p style={{fontSize:12,color:C.tx2}}>{(day.items||[]).slice(0,2).map(function(item){return item.title;}).filter(Boolean).join(" | ")||"More itinerary items coming up"}</p>
           </div>);})}
         </div>
       </div></Fade>)}
@@ -4555,7 +4628,7 @@ export default function WanderPlan(){
                     <p style={{fontSize:14,fontWeight:700}}>{stay.name||stay.destination||"Stay"}</p>
                     {stay.rate_per_night? <span style={{fontSize:12,color:C.goldT,fontWeight:700}}>${Math.round(stay.rate_per_night)}/night</span> : null}
                   </div>
-                  <p style={{fontSize:12,color:C.tx2,marginBottom:4}}>{stay.destination}{stay.type?(" • "+stay.type):""}</p>
+                  <p style={{fontSize:12,color:C.tx2,marginBottom:4}}>{stay.destination}{stay.type?(" | "+stay.type):""}</p>
                   {stay.why_this_one&&<p style={{fontSize:11,color:C.tx3}}>{stay.why_this_one}</p>}
                 </div>);
               })}
@@ -4665,14 +4738,14 @@ export default function WanderPlan(){
                 <div style={{display:"flex",justifyContent:"space-between",gap:10,marginBottom:8}}>
                   <div>
                     <p style={{fontSize:13,fontWeight:700}}>{receiptParse.merchant||"Parsed receipt"}</p>
-                    <p style={{fontSize:11,color:C.tx3}}>{receiptParse.expense_date||today&&today.date||"Date TBD"}{receiptParse.parse_source?(" • "+receiptParse.parse_source):""}</p>
+                    <p style={{fontSize:11,color:C.tx3}}>{receiptParse.expense_date||today&&today.date||"Date TBD"}{receiptParse.parse_source?(" | "+receiptParse.parse_source):""}</p>
                   </div>
                   <p style={{fontSize:13,fontWeight:700,color:C.goldT}}>{formatMoney(receiptItemsTotal(receiptParse.items),receiptParse.currency||expenseSummary.currency||"USD")}</p>
                 </div>
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
                   {receiptParse.items.map(function(item,idx){
                     return(<div key={(item.category||"item")+"-"+idx} style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:12}}>
-                      <span style={{color:C.tx2}}>{item.merchant||receiptParse.merchant||"Expense"} <span style={{color:C.tx3}}>• {String(item.category||"misc")}</span></span>
+                      <span style={{color:C.tx2}}>{item.merchant||receiptParse.merchant||"Expense"} <span style={{color:C.tx3}}>| {String(item.category||"misc")}</span></span>
                       <span style={{fontWeight:700}}>{formatMoney(item.amount||0,item.currency||receiptParse.currency||expenseSummary.currency||"USD")}</span>
                     </div>);
                   })}
@@ -4767,8 +4840,8 @@ export default function WanderPlan(){
                     <div>
                       <p style={{fontSize:13,fontWeight:600}}>{expense.merchant||"Expense"}</p>
                       <p style={{fontSize:11,color:C.tx3}}>
-                        {expense.expense_date||"Date TBD"} • {String(expense.category||"misc")}
-                        {expense.split_count?(" • split "+expense.split_count+" ways"):""}
+                        {expense.expense_date||"Date TBD"} | {String(expense.category||"misc")}
+                        {expense.split_count?(" | split "+expense.split_count+" ways"):""}
                       </p>
                     </div>
                     <span style={{fontSize:12,fontWeight:700,color:C.goldT}}>{formatMoney(expense.amount||0,expense.currency||expenseSummary.currency||"USD")}</span>
@@ -5550,7 +5623,7 @@ export default function WanderPlan(){
           <p style={{fontSize:12,fontWeight:700,color:C.tx3}}>SELECT FROM MY CREW ({step2CrewPool.length})</p>
           <button onClick={function(){refreshCrewFromBackend();}} style={{padding:"5px 10px",borderRadius:8,border:"1px solid "+C.border,background:C.surface,color:C.tx2,fontSize:11,fontWeight:600,cursor:"pointer"}}>Reload My Crew</button>
         </div>
-        {pendingCrewCount>0&&(<p style={{fontSize:11,color:C.wrn,marginBottom:8}}>{pendingCrewCount} crew member{pendingCrewCount>1?"s":""} not yet registered — they must sign up before being invited to a trip.</p>)}
+        {pendingCrewCount>0&&(<p style={{fontSize:11,color:C.wrn,marginBottom:8}}>{pendingCrewCount} crew member{pendingCrewCount>1?"s":""} not yet registered - they must sign up before being invited to a trip.</p>)}
         {step2CrewPool.length===0?(<p style={{fontSize:12,color:C.tx3}}>{pendingCrewCount>0?"No registered crew members yet. Waiting for pending invites to be accepted.":"No crew members available. Invite people in My Crew first."}</p>):(
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
             {step2CrewPool.map(function(m){
@@ -5593,7 +5666,7 @@ export default function WanderPlan(){
         var links=tripInviteLinks[em]||{};
         var shareText="Join my trip on WanderPlan!\nAccept: "+links.accept_link+(links.reject_link?"\nDecline: "+links.reject_link:"");
         return(<div key={em} style={{marginTop:8,padding:"10px 12px",borderRadius:10,background:C.sky+"10",border:"1px solid "+C.sky+"30"}}>
-          <p style={{fontSize:12,fontWeight:600,color:C.sky,marginBottom:4}}>{m.name||em} — email not sent</p>
+          <p style={{fontSize:12,fontWeight:600,color:C.sky,marginBottom:4}}>{m.name||em} - email not sent</p>
           <p style={{fontSize:11,color:C.tx3,marginBottom:6,wordBreak:"break-all"}}>{links.accept_link}</p>
           <div style={{display:"flex",gap:6}}>
             <button onClick={function(){
@@ -5778,7 +5851,7 @@ export default function WanderPlan(){
       var rejected=pois.filter(function(p,i){return poiStatus[i]==="no";});
       var pending=pois.filter(function(p,i){return !poiStatus[i];});
       var combinedAccepted=pois.filter(function(_,i){return hasAnyCrewYesForIdx(i);});
-      var allDecided=poiDone&&pois.length>0&&pending.length===0;
+      var allDecided=poiDone&&pois.length>0&&pending.length===0&&!poiContextStale;
       function revisePOISelection(){
         setPS({});
         if(authToken&&wizSessionId){
@@ -5858,6 +5931,8 @@ export default function WanderPlan(){
         return {extraYes:Object.keys(yesMap),extraNo:Object.keys(noMap),dietary:Object.keys(dietMap),memberSummaries:summaries};
       }
       var poiGroupPrefs=buildPOIGroupPrefs();
+      var poiCurrentSignature=buildPoiRequestSignature(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs);
+      var poiContextStale=poiListNeedsRefresh(poiRequestSignature,poiCurrentSignature,pois,dests);
       var profCount=poiGroupPrefs.memberSummaries.length;
       var poiDebugDuplicates=findDuplicatePoiKeys(pois);
       var poiVoteMembers=[{
@@ -5879,17 +5954,44 @@ export default function WanderPlan(){
         });
       });
 
+      function runPoiSearch(){
+        setPL(true);
+        setPS({});
+        setPV({});
+        setPMC({});
+        var replacementPoolPatch={};
+        Object.keys(poiOptionPool||{}).forEach(function(key){
+          replacementPoolPatch[key]=null;
+        });
+        setPOP(replacementPoolPatch);
+        saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:replacementPoolPatch,poi_request_signature:poiCurrentSignature}}).catch(function(){return null;});
+        askPOI(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs).then(function(res){
+          var nextRows=Array.isArray(res)?res:[];
+          setPois(nextRows);
+          setPL(false);
+          setPD(true);
+          setPoiRequestSignature(poiCurrentSignature);
+        }).catch(function(){
+          setPois([]);
+          setPL(false);
+          setPD(true);
+          setPoiRequestSignature(poiCurrentSignature);
+        });
+      }
+
       function addPOI(){
         if(!poiAsk.trim()||poiAskLoad)return;var msg=poiAsk.trim();setPA("");setPAL(true);
         var destStr=dests.map(function(d){return d.name;}).join(", ")||"your destinations";
-        var sys="You are WanderPlan POI Agent. Add a specific activity. Return ONLY JSON:\n{\"name\":\"Activity\",\"destination\":\"City\",\"category\":\"Nature\",\"duration\":\"2h\",\"cost\":0,\"rating\":4.5,\"matchReason\":\"Why it fits\",\"tags\":[\"Tag1\"]}\nDestinations: "+destStr+". ONLY JSON.";
+        var sys=`You are WanderPlan POI Agent. Add a specific destination activity. Return ONLY JSON:
+{"name":"Activity","destination":"City","category":"Nature","duration":"2h","cost":0,"rating":4.5,"matchReason":"Why it fits","tags":["Tag1"],"locationHint":"Neighborhood or landmark area","bestTime":"morning|afternoon|evening|flexible","openingWindow":"08:00-17:00"}
+Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY JSON.`;
         callLLM(sys,msg,500).then(function(res){
           setPAL(false);if(res&&res.name){setPois(function(prev){return prev.concat([res]);});}
         }).catch(function(){setPAL(false);});
       }
 
       return(<div>
-        {ab("POI Discovery Agent",poiDone?(allDecided?accepted.length+" activities selected. Add more or continue.":"Accept or reject each activity:"):("Find activities matched to your group"+(profCount>0?(" ("+profCount+" crew profile"+(profCount>1?"s":"")+" included)"):".") ))}
+        {ab("POI Discovery Agent",poiContextStale?"Trip destinations or traveler profiles changed. Refresh activities to match the updated trip.":(poiDone?(allDecided?accepted.length+" activities selected. Add more or continue.":"Accept or reject each activity:"):("Find activities matched to your group"+(profCount>0?(" ("+profCount+" crew profile"+(profCount>1?"s":"")+" included)"):".") )))}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
           <p style={{fontSize:11,color:C.tx3}}>Debug panel helps compare organizer and crew POI shortlist state on this step.</p>
           <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
@@ -5907,7 +6009,10 @@ export default function WanderPlan(){
               {l:"Shared pool count",v:String(Object.keys(poiOptionPool||{}).length)},
               {l:"Selection row count",v:String(Object.keys(poiMemberChoices||{}).length)},
               {l:"Vote row count",v:String(Object.keys(poiVotes||{}).length)},
-              {l:"Duplicate canonical keys",v:String(poiDebugDuplicates.length)}
+              {l:"Duplicate canonical keys",v:String(poiDebugDuplicates.length)},
+              {l:"Saved request signature",v:poiRequestSignature||"(none)"},
+              {l:"Current request signature",v:poiCurrentSignature||"(none)"},
+              {l:"Context stale",v:poiContextStale?"yes":"no"}
             ].map(function(item){
               return(<div key={item.l} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
                 <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
@@ -5949,28 +6054,14 @@ export default function WanderPlan(){
             })}
           </div>
         </div>)}
-        {!poiDone&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent searches {dests.length} destination{dests.length>1?"s":""} based on group interests and budget.</p><button onClick={function(){
-          setPL(true);
-          setPS({});
-          askPOI(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs).then(function(res){
-            if(res&&res.length){setPois(res);setPL(false);setPD(true);return;}
-            if(authToken&&currentTripId){
-              apiJson("/trips/"+currentTripId+"/pois?limit=30",{method:"GET"},authToken).then(function(r){
-                var rows=mapBackendPois((r&&r.pois)||[]);
-                setPois(rows||[]);setPL(false);setPD(true);
-              }).catch(function(){setPois([]);setPL(false);setPD(true);});
-              return;
-            }
-            setPois([]);setPL(false);setPD(true);
-          }).catch(function(){setPois([]);setPL(false);setPD(true);});
-        }} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>Find Activities</button></div>)}
+        {(!poiDone||poiContextStale)&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>{poiContextStale?"Destinations, budget, or traveler profiles changed. Refresh the activity list so it matches the current trip.":("The agent searches "+dests.length+" destination"+(dests.length>1?"s":"")+" based on group interests and budget.")}</p><button onClick={runPoiSearch} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>{poiContextStale?"Refresh Activities for Updated Trip":"Find Activities"}</button></div>)}
         {poiLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Searching across {dests.map(function(d){return d.name;}).join(", ")}...</p></div>)}
         {poiDone&&pois.length>0&&(<div>
           {pois.map(function(p,i){var st=poiStatus[i];var cc=p.category==="Nature"?C.grn:p.category==="Food"?C.teal:p.category==="Culture"?C.wrn:p.category==="Adventure"?C.coral:p.category==="Wellness"?C.purp:C.tealL;
             return(<div key={i} style={{padding:"12px 0",borderBottom:i<pois.length-1?"1px solid "+C.border:"none",opacity:st==="no"?.4:1,transition:"opacity .2s"}}>
               <div style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}><span style={{fontSize:10,padding:"1px 8px",borderRadius:999,background:cc+"18",color:cc,fontWeight:600}}>{p.category}</span><span style={{fontSize:11,color:C.wrn}}>{"*"+(p.rating||4.5)}</span><span style={{fontSize:11,color:C.tx3,marginLeft:"auto"}}>{p.destination}</span></div>
               <p style={{fontSize:14,fontWeight:600,marginBottom:2,textDecoration:st==="no"?"line-through":"none"}}>{p.name}</p>
-              <div style={{display:"flex",gap:12,fontSize:12,color:C.tx3,marginBottom:4}}><span>{p.duration}</span><span>{p.cost>0?"$"+p.cost:"Free"}</span></div>
+              <div style={{display:"flex",gap:12,fontSize:12,color:C.tx3,marginBottom:4,flexWrap:"wrap"}}><span>{p.duration}</span><span>{p.cost>0?"$"+p.cost:"Free"}</span>{p.locationHint&&<span>{p.locationHint}</span>}{p.bestTime&&<span>Best {p.bestTime}</span>}{p.openingWindow&&<span>{p.openingWindow}</span>}</div>
               <p style={{fontSize:11,color:C.tx3,marginBottom:6}}>{Object.keys((readPoiSelectionRow(poiMemberChoices,p,i).row)||{}).filter(function(k){return String(readPoiSelectionRow(poiMemberChoices,p,i).row[k]||"").trim().toLowerCase()==="yes";}).length} crew accept{Object.keys((readPoiSelectionRow(poiMemberChoices,p,i).row)||{}).filter(function(k){return String(readPoiSelectionRow(poiMemberChoices,p,i).row[k]||"").trim().toLowerCase()==="yes";}).length===1?"":"s"}</p>
               {p.matchReason&&<p style={{fontSize:12,color:C.tealL,fontStyle:"italic",marginBottom:6}}>{p.matchReason}</p>}
               {!st&&(<div style={{display:"flex",gap:8}}><button onClick={function(){setPoiDecisionForCurrentUser(i,"yes");}} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid "+C.grn+"30",background:"transparent",color:C.grn,fontWeight:600,fontSize:13,cursor:"pointer"}}>Accept</button><button onClick={function(){setPoiDecisionForCurrentUser(i,"no");}} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid "+C.red+"30",background:"transparent",color:C.red,fontWeight:600,fontSize:13,cursor:"pointer"}}>Reject</button></div>)}
@@ -6071,7 +6162,7 @@ export default function WanderPlan(){
                 <p style={{fontSize:18,fontWeight:700,lineHeight:1.2}}>{r.poi.name}</p>
                 <span style={{fontSize:11,padding:"3px 10px",borderRadius:999,background:C.grnBg,color:C.grn,fontWeight:700}}>Selected</span>
               </div>
-              <p style={{fontSize:13,color:C.tx2,marginBottom:6}}>{r.poi.destination||"Destination"} · {r.poi.duration||"2h"} · {r.poi.cost>0?"$"+r.poi.cost:"Free"}</p>
+              <p style={{fontSize:13,color:C.tx2,marginBottom:6}}>{r.poi.destination||"Destination"} | {r.poi.duration||"2h"} | {r.poi.cost>0?"$"+r.poi.cost:"Free"}</p>
               {r.poi.matchReason&&<p style={{fontSize:12,color:C.tealL,fontStyle:"italic"}}>{r.poi.matchReason}</p>}
             </div>);
           })}
@@ -6221,7 +6312,7 @@ export default function WanderPlan(){
             })}
           </div>
           <div style={{padding:"12px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20",marginBottom:8}}><p style={{fontSize:13,color:C.tealL}}>Shared budget selected: <strong>{chosenBudgetDef.l} ({chosenBudgetDef.r})</strong></p><p style={{fontSize:12,color:C.tx2,marginTop:4}}>Shared allocation: Stays 40% / Food 25% / Activities 20% / Transport 10% / Buffer 5%</p><p style={{fontSize:12,color:C.tx3,marginTop:4}}>Flights are personal and selected later by each traveler.</p></div>
-          {!organizerMode&&<p style={{fontSize:12,color:C.tx3,marginBottom:8}}>Organizer chooses the shared trip budget after reviewing everyone’s profile preferences.</p>}
+          {!organizerMode&&<p style={{fontSize:12,color:C.tx3,marginBottom:8}}>Organizer chooses the shared trip budget after reviewing everyone's profile preferences.</p>}
         </>);
       }())}
       <div style={{display:"flex",flexDirection:"column",gap:4}}>{[{l:"Stays",p:40,c:C.teal},{l:"Food",p:25,c:C.coral},{l:"Activities",p:20,c:C.grn},{l:"Transport",p:10,c:C.sky},{l:"Buffer",p:5,c:C.wrn}].map(function(b){return(<div key={b.l} style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:12,color:C.tx3,width:70}}>{b.l}</span><div style={{flex:1,height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:b.p+"%",background:b.c,borderRadius:999}}/></div><span style={{fontSize:11,color:C.tx3,width:30}}>{b.p}%</span></div>);})}</div>
@@ -7143,7 +7234,7 @@ export default function WanderPlan(){
                   var rowMeta=readMealVoteRow(mealVotes,day,m,di,mi);
                   var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);
                   return(<div key={"meal-debug-"+di+"-"+mi} style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
-                    <p style={{fontSize:11,fontWeight:700,color:"#fff",marginBottom:4}}>{day.locationLabel||day.destination||("Group "+day.day)} {" � "} {m.type||"Meal"} {" � "} {m.name||"Unnamed"}</p>
+                    <p style={{fontSize:11,fontWeight:700,color:"#fff",marginBottom:4}}>{day.locationLabel||day.destination||("Group "+day.day)} {" | "} {m.type||"Meal"} {" | "} {m.name||"Unnamed"}</p>
                     <p style={{fontSize:10,color:C.tx3,marginBottom:6}}>key={rowMeta.key}</p>
                     <p style={{fontSize:10,color:C.tx2,marginBottom:6}}>summary: {summary.up} up / {summary.down} down / {summary.votedCount} voted / allVoted={String(summary.allVoted)} / majority={String(summary.majority)}</p>
                     <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:120,overflowY:"auto"}}>{JSON.stringify({row:summary.row},null,2)}</pre>
@@ -7375,7 +7466,6 @@ export default function WanderPlan(){
   );
 }
 
-export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
-
+export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPoiRequestSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
 
 
