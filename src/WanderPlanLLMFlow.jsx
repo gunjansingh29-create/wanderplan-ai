@@ -6036,7 +6036,7 @@ export default function WanderPlan(){
         setPois([]);
         setPD(false);
         setPOP({});
-        saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:{},poi_request_signature:poiCurrentSignature}}).catch(function(){return null;});
+        saveTripPlanningState({state:{poi_votes:null,poi_member_choices:null,poi_option_pool:null,poi_request_signature:poiCurrentSignature}}).catch(function(){return null;});
         askComprehensivePOIs(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs).then(function(res){
           var nextRows=Array.isArray(res)?res:[];
           var nextPool=buildPoiOptionPoolPatch(nextRows,{});
