@@ -1088,6 +1088,11 @@ function normalizePoiForSharedPool(poi){
     cost:Number((src.cost!==undefined)?src.cost:((src.cost_estimate_usd!==undefined)?src.cost_estimate_usd:0))||0,
     rating:Number((src.rating!==undefined)?src.rating:4.5)||4.5,
     matchReason:String(src.matchReason||""),
+      locationHint:String(src.locationHint||src.location_hint||src.near_poi||src.neighborhood||src.location_name||"").trim(),
+      bestTime:String(src.bestTime||src.best_time||"").trim().toLowerCase(),
+      openingWindow:String(src.openingWindow||src.opening_window||src.open_hours||src.hours||"").trim(),
+      lat:(src.lat!==undefined&&src.lat!==null)?Number(src.lat)||0:0,
+      lng:(src.lng!==undefined&&src.lng!==null)?Number(src.lng)||0:0,
     tags:Array.isArray(src.tags)?src.tags:[],
     approved:typeof src.approved==="boolean"?src.approved:null
   };
@@ -1334,7 +1339,7 @@ async function askPOI(destinations, interests, budgetTier, dietary, groupPrefs) 
   if (groupPrefs && Array.isArray(groupPrefs.memberSummaries) && groupPrefs.memberSummaries.length > 0) {
     crewSummary = groupPrefs.memberSummaries.join(" | ");
   }
-  var sys = "You are WanderPlan POI Discovery Agent. Suggest 6-8 destination-specific activities spread across all destinations.\n\nReturn ONLY a JSON array:\n[{\"name\":\"Activity Name\",\"destination\":\"City\",\"category\":\"Nature\",\"duration\":\"3h\",\"cost\":0,\"rating\":4.8,\"matchReason\":\"Short reason\",\"tags\":[\"Hiking\"]}]\n\ncategory: Nature, Food, Culture, Adventure, Wellness, Shopping, Nightlife, Photography\nBudget: " + (bd[budgetTier] || bd.moderate) + "\nPrioritize: " + (intYes.join(", ") || "culture, food") + "\nAvoid: " + (intNo.join(", ") || "none") + "\nDietary: " + dietStr + "\nCrew preferences: " + (crewSummary || "none provided") + "\nRules:\n- use real, recognizable activities or landmarks when possible\n- avoid generic placeholders like \"Explore City\", \"Local sightseeing\", or \"Food tour\" without a specific anchor\n- spread the list across all destinations; do not let one city dominate unless only one city was given\n- include at least one strong morning-friendly option and one food/culture option where relevant\n- no duplicates or near-duplicates\n- match the budget and group preferences explicitly in matchReason\nReturn 6-8 items. ONLY JSON array.";
+  var sys = "You are WanderPlan POI Discovery Agent. Suggest 6-8 destination-specific activities spread across all destinations.\n\nReturn ONLY a JSON array:\n[{\"name\":\"Activity Name\",\"destination\":\"City\",\"category\":\"Nature\",\"duration\":\"3h\",\"cost\":0,\"rating\":4.8,\"matchReason\":\"Short reason\",\"tags\":[\"Hiking\"],\"locationHint\":\"Neighborhood, waterfront, district, or landmark area\",\"bestTime\":\"morning|afternoon|evening|flexible\",\"openingWindow\":\"Short note like 08:00-17:00 or sunrise to noon\"}]\n\ncategory: Nature, Food, Culture, Adventure, Wellness, Shopping, Nightlife, Photography\nBudget: " + (bd[budgetTier] || bd.moderate) + "\nPrioritize: " + (intYes.join(", ") || "culture, food") + "\nAvoid: " + (intNo.join(", ") || "none") + "\nDietary: " + dietStr + "\nCrew preferences: " + (crewSummary || "none provided") + "\nRules:\n- use real, recognizable activities or landmarks when possible\n- avoid generic placeholders like \"Explore City\", \"Local sightseeing\", or \"Food tour\" without a specific anchor\n- spread the list across all destinations; do not let one city dominate unless only one city was given\n- include at least one strong morning-friendly option and one food/culture option where relevant\n- provide a useful local area hint for each POI so itinerary routing can group nearby stops realistically\n- set bestTime honestly: morning for sunrise/garden/lookout/market/open-early places, evening for nightlife/show/sunset places, flexible otherwise\n- openingWindow should be brief and realistic when known; otherwise leave it empty\n- no duplicates or near-duplicates\n- match the budget and group preferences explicitly in matchReason\nReturn 6-8 items. ONLY JSON array.";
   var msg = "Find activities for: " + destStr;
   var res = await callLLM(sys, msg, 1000);
   return Array.isArray(res) ? res : [];
@@ -1725,17 +1730,27 @@ function poiDayPartScore(poi, dayPart){
     String(poi&&poi.name||""),
     String(poi&&poi.category||""),
     Array.isArray(poi&&poi.tags)?poi.tags.join(" "):"",
-    String(poi&&poi.matchReason||"")
+    String(poi&&poi.matchReason||""),
+    String(poi&&poi.locationHint||""),
+    String(poi&&poi.bestTime||""),
+    String(poi&&poi.openingWindow||"")
   ].join(" ").toLowerCase();
+  var bestTime=String(poi&&poi.bestTime||"").trim().toLowerCase();
   var score=0;
   if(part==="morning"){
+    if(bestTime==="morning")score+=7;
+    if(bestTime==="evening")score-=6;
     if(/breakfast|brunch|nightlife|bar|club|cocktail|late/.test(text))score-=4;
     if(/sunrise|garden|market|temple|shrine|museum|lookout|viewpoint|park|walk|photo|photography|hike|trail|nature|culture/.test(text))score+=5;
     if(/beach|spa|shopping|food/.test(text))score+=1;
   }else if(part==="afternoon"){
+    if(bestTime==="afternoon")score+=6;
+    if(bestTime==="morning")score-=2;
     if(/sunrise|garden|temple|shrine|lookout|viewpoint|hike|trail|photography/.test(text))score-=4;
     if(/museum|gallery|market|food|shopping|culture|park|garden|harbor|waterfront|tour/.test(text))score+=3;
   }else if(part==="evening"){
+    if(bestTime==="evening")score+=7;
+    if(bestTime==="morning")score-=6;
     if(/sunrise|temple|shrine|museum|garden|market|lookout|viewpoint|hike|trail|photography|park/.test(text))score-=4;
     if(/night|sunset|bar|club|food|market|show|music|harbor|waterfront/.test(text))score+=4;
   }
@@ -1749,11 +1764,31 @@ function routeAnchorLabel(kind, stay, meal){
   return "";
 }
 
+function poiLocationHint(poi){
+  return String(poi&&(
+    poi.locationHint||
+    poi.location_hint||
+    poi.near_poi||
+    poi.neighborhood
+  )||"").trim();
+}
+
+function poiRoutingLabel(poi){
+  if(!poi)return "Local highlight";
+  var poiName=String(poi&&poi.name||"").trim()||"Local highlight";
+  var hint=poiLocationHint(poi);
+  return hint?(poiName+" ("+hint+")"):poiName;
+}
+
 function formatPoiStop(poi, anchorLabel, prefix){
   if(!poi)return null;
   var poiName=String(poi&&poi.name||"").trim()||"Local highlight";
   var base=String(prefix||"Explore").trim();
-  return anchorLabel?(base+" "+poiName+" near "+anchorLabel):(base+" "+poiName);
+  var hint=poiLocationHint(poi);
+  if(anchorLabel&&hint)return base+" "+poiName+" in "+hint+" via "+anchorLabel;
+  if(anchorLabel)return base+" "+poiName+" near "+anchorLabel;
+  if(hint)return base+" "+poiName+" in "+hint;
+  return base+" "+poiName;
 }
 
 function addClockMinutes(timeText, minutes){
@@ -1970,27 +2005,27 @@ function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approve
       items.push({time:"11:30",type:"travel",title:"Travel to "+dest,cost:0});
       items.push({time:"15:00",type:"checkin",title:"Check in"+(stay&&stay.name?(" at "+stay.name):""),cost:0});
       if(actEvening){
-        pushTransit("16:00",stayLabel,String(actEvening&&actEvening.name||"Local highlight"));
+        pushTransit("16:00",stayLabel,poiRoutingLabel(actEvening));
         items.push({time:"16:30",type:"activity",title:formatPoiStop(actEvening,routeAnchorLabel("stay",stay,dinner),"Ease into"),cost:Number(actEvening&&actEvening.cost||0)||0});
       }
-      pushTransit("18:00",String((actEvening&&actEvening.name)||stayLabel),dinnerLabel);
+      pushTransit("18:00",actEvening?poiRoutingLabel(actEvening):stayLabel,dinnerLabel);
       items.push({time:"18:30",type:"meal",title:dinnerLabel,cost:Number(dinner&&dinner.cost||30)||30});
       pushTransit("20:00",dinnerLabel,stayLabel);
     }else if(entry.kind==="buffer"){
       items.push({time:"09:00",type:"meal",title:breakfastLabel,cost:Number(breakfast&&breakfast.cost||20)||20});
       if(actMorning){
-        pushTransit("09:35",breakfastLabel,String(actMorning&&actMorning.name||"Local highlight"));
+        pushTransit("09:35",breakfastLabel,poiRoutingLabel(actMorning));
         items.push({time:"10:15",type:"activity",title:formatPoiStop(actMorning,routeAnchorLabel("stay",stay,breakfast),"Walk from breakfast to"),cost:Number(actMorning&&actMorning.cost||0)||0});
       }else{
         items.push({time:"11:00",type:"rest",title:"Flexible time, shopping, or rest",cost:0});
       }
       if(lunch){
-        pushTransit("12:30",String((actMorning&&actMorning.name)||stayLabel),lunchLabel);
+        pushTransit("12:30",actMorning?poiRoutingLabel(actMorning):stayLabel,lunchLabel);
         items.push({time:"13:00",type:"meal",title:lunchLabel,cost:Number(lunch&&lunch.cost||25)||25});
       }
-      pushTransit("14:00",lunchLabel,String((actAfternoon&&actAfternoon.name)||stayLabel));
+      pushTransit("14:00",lunchLabel,actAfternoon?poiRoutingLabel(actAfternoon):stayLabel);
       items.push({time:"14:30",type:(actAfternoon?"activity":"rest"),title:actAfternoon?formatPoiStop(actAfternoon,routeAnchorLabel("meal",stay,lunch||dinner),"Continue to"):("Last walk around "+dest),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
-      pushTransit("18:15",String((actAfternoon&&actAfternoon.name)||stayLabel),dinnerLabel);
+      pushTransit("18:15",actAfternoon?poiRoutingLabel(actAfternoon):stayLabel,dinnerLabel);
       items.push({time:"19:00",type:"meal",title:dinnerLabel,cost:Number(dinner&&dinner.cost||40)||40});
       pushTransit("20:15",dinnerLabel,stayLabel);
     }else{
@@ -1999,29 +2034,29 @@ function buildFallbackItinerary(destinations, acceptedPOIs, pickedStays, approve
         items.push({time:"11:00",type:"checkin",title:"Check in"+(stay&&stay.name?(" at "+stay.name):""),cost:0});
         items.push({time:"12:30",type:"meal",title:lunchLabel,cost:Number(lunch&&lunch.cost||25)||25});
         if(actAfternoon){
-          pushTransit("13:20",lunchLabel,String(actAfternoon&&actAfternoon.name||"Local highlight"));
+          pushTransit("13:20",lunchLabel,poiRoutingLabel(actAfternoon));
           items.push({time:"14:00",type:"activity",title:formatPoiStop(actAfternoon,routeAnchorLabel("stay",stay,lunch),"Start with"),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
         }
       }else{
         items.push({time:"08:30",type:"meal",title:breakfastLabel,cost:Number(breakfast&&breakfast.cost||18)||18});
         if(actMorning){
-          pushTransit("09:15",breakfastLabel,String(actMorning&&actMorning.name||"Local highlight"));
+          pushTransit("09:15",breakfastLabel,poiRoutingLabel(actMorning));
           items.push({time:"10:00",type:"activity",title:formatPoiStop(actMorning,routeAnchorLabel("meal",stay,breakfast),"Walk from breakfast to"),cost:Number(actMorning&&actMorning.cost||0)||0});
         }
       }
       if(dayNum===1&&!actAfternoon){
         items.push({time:"13:00",type:"rest",title:"Settle in and explore the area around your stay",cost:0});
       }else if(dayNum!==1){
-        pushTransit("12:20",String((actMorning&&actMorning.name)||stayLabel),lunchLabel);
+        pushTransit("12:20",actMorning?poiRoutingLabel(actMorning):stayLabel,lunchLabel);
         items.push({time:"13:00",type:"meal",title:lunchLabel,cost:Number(lunch&&lunch.cost||25)||25});
       }
-      pushTransit("14:50",lunchLabel,String((actAfternoon&&actAfternoon.name)||stayLabel));
+      pushTransit("14:50",lunchLabel,actAfternoon?poiRoutingLabel(actAfternoon):stayLabel);
       items.push({time:"15:30",type:(actAfternoon?"activity":"rest"),title:actAfternoon?formatPoiStop(actAfternoon,routeAnchorLabel("meal",stay,lunch),"Head to"):("Free time in "+dest),cost:Number(actAfternoon&&actAfternoon.cost||0)||0});
       if(actEvening){
-        pushTransit("17:10",String((actAfternoon&&actAfternoon.name)||stayLabel),String(actEvening&&actEvening.name||"Local highlight"));
+        pushTransit("17:10",actAfternoon?poiRoutingLabel(actAfternoon):stayLabel,poiRoutingLabel(actEvening));
         items.push({time:"17:30",type:"activity",title:formatPoiStop(actEvening,routeAnchorLabel("meal",stay,dinner),"See"),cost:Number(actEvening&&actEvening.cost||0)||0});
       }
-      pushTransit("18:25",String((actEvening&&actEvening.name)||(actAfternoon&&actAfternoon.name)||stayLabel),dinnerLabel);
+      pushTransit("18:25",actEvening?poiRoutingLabel(actEvening):(actAfternoon?poiRoutingLabel(actAfternoon):stayLabel),dinnerLabel);
       items.push({time:"19:00",type:"meal",title:dinnerLabel,cost:Number(dinner&&dinner.cost||35)||35});
       pushTransit("20:15",dinnerLabel,stayLabel);
     }

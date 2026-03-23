@@ -384,6 +384,54 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ).toBe(true);
   });
 
+  test("buildFallbackItinerary uses POI location hints in visible routing", () => {
+    const rows = buildFallbackItinerary(
+      [{ name: "Wellington" }],
+      [
+        { name: "Mount Victoria Lookout", destination: "Wellington", locationHint: "Mount Victoria", bestTime: "morning", cost: 0, category: "Nature", tags: ["lookout"] },
+        { name: "Courtenay Place Live Music", destination: "Wellington", locationHint: "Courtenay Place", bestTime: "evening", cost: 20, category: "Nightlife", tags: ["music", "night"] },
+      ],
+      [{ name: "Te Aro Apartment", destination: "Wellington", neighborhood: "Te Aro" }],
+      [
+        { name: "Olive Cafe", destination: "Wellington", type: "Breakfast", cost: 18 },
+        { name: "Harbor Lunch", destination: "Wellington", type: "Lunch", cost: 24 },
+        { name: "Dockside Dinner", destination: "Wellington", type: "Dinner", cost: 36 },
+      ],
+      3,
+      "2026-04-10",
+      { Wellington: 2 }
+    );
+    const fullDay = rows.find((day) => day.items.some((item) => item.title === "Olive Cafe"));
+    expect(fullDay.items.some((item) => String(item.title).includes("Mount Victoria Lookout in Mount Victoria"))).toBe(true);
+    expect(fullDay.items.some((item) => String(item.title).includes("Mount Victoria Lookout (Mount Victoria)"))).toBe(true);
+  });
+
+  test("buildFallbackItinerary honors explicit POI bestTime metadata", () => {
+    const rows = buildFallbackItinerary(
+      [{ name: "Wellington" }],
+      [
+        { name: "Botanic Garden Walk", destination: "Wellington", locationHint: "Botanic Garden", bestTime: "morning", cost: 0, category: "Nature", tags: ["garden"] },
+        { name: "Waterfront Sunset Cruise", destination: "Wellington", locationHint: "Wellington Waterfront", bestTime: "evening", cost: 35, category: "Culture", tags: ["sunset", "harbor"] },
+      ],
+      [{ name: "Te Aro Apartment", destination: "Wellington", neighborhood: "Te Aro" }],
+      [
+        { name: "Olive Cafe", destination: "Wellington", type: "Breakfast", cost: 18 },
+        { name: "Harbor Lunch", destination: "Wellington", type: "Lunch", cost: 24 },
+        { name: "Dockside Dinner", destination: "Wellington", type: "Dinner", cost: 36 },
+      ],
+      3,
+      "2026-04-10",
+      { Wellington: 2 }
+    );
+    const fullDay = rows.find((day) => day.items.some((item) => item.title === "Olive Cafe"));
+    const morningPoiIndex = fullDay.items.findIndex((item) => String(item.title).includes("Botanic Garden Walk"));
+    const eveningPoiIndex = fullDay.items.findIndex((item) => String(item.title).includes("Waterfront Sunset Cruise"));
+    const lunchIndex = fullDay.items.findIndex((item) => item.title === "Harbor Lunch");
+    expect(morningPoiIndex).toBeGreaterThanOrEqual(0);
+    expect(lunchIndex).toBeGreaterThan(morningPoiIndex);
+    expect(eveningPoiIndex).toBeGreaterThan(lunchIndex);
+  });
+
   test("materializeItineraryDates assigns locked dates to day labels", () => {
     expect(
       materializeItineraryDates(
