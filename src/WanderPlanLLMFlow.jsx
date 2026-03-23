@@ -1363,6 +1363,79 @@ function poiListNeedsRefresh(savedSignature, currentSignature, rows, destination
   return destNames.some(function(name){return !poiDests[name];})||Object.keys(poiDests).some(function(name){return destNames.indexOf(name)<0;});
 }
 
+function destinationsNeedingPoiCoverage(rows, destinations, minPerDestination){
+  var required=Math.max(1,Number(minPerDestination)||1);
+  var counts={};
+  (Array.isArray(rows)?rows:[]).forEach(function(p){
+    var dest=String(p&&p.destination||"").trim().toLowerCase();
+    if(!dest)return;
+    counts[dest]=(counts[dest]||0)+1;
+  });
+  return (Array.isArray(destinations)?destinations:[]).filter(function(d){
+    var name=String(d&&d.name||d||"").trim();
+    if(!name)return false;
+    return (counts[name.toLowerCase()]||0)<required;
+  });
+}
+
+async function askPOISupplement(destination, interests, budgetTier, dietary, groupPrefs){
+  var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
+  var destName=String(destination&&destination.name||destination||"").trim();
+  var country=String(destination&&destination.country||"").trim();
+  if(!destName)return [];
+  var intYes = []; var intNo = [];
+  if (interests) { Object.keys(interests).forEach(function(k) { if (interests[k] === true) intYes.push(k); else if (interests[k] === false) intNo.push(k); }); }
+  if (groupPrefs && Array.isArray(groupPrefs.extraYes)) {
+    groupPrefs.extraYes.forEach(function(k){ if (intYes.indexOf(k) < 0) intYes.push(k); });
+  }
+  if (groupPrefs && Array.isArray(groupPrefs.extraNo)) {
+    groupPrefs.extraNo.forEach(function(k){ if (intNo.indexOf(k) < 0) intNo.push(k); });
+  }
+  var dietaryAll = Array.isArray(dietary) ? dietary.slice() : [];
+  if (groupPrefs && Array.isArray(groupPrefs.dietary)) {
+    groupPrefs.dietary.forEach(function(d){ if (dietaryAll.indexOf(d) < 0) dietaryAll.push(d); });
+  }
+  var dietStr = dietaryAll.length > 0 ? dietaryAll.join(", ") : "none";
+  var crewSummary = "";
+  if (groupPrefs && Array.isArray(groupPrefs.memberSummaries) && groupPrefs.memberSummaries.length > 0) {
+    crewSummary = groupPrefs.memberSummaries.join(" | ");
+  }
+  var sys = `You are WanderPlan POI Coverage Agent. Suggest 5-7 additional destination-specific activities for ${destName}${country?", "+country:""}.
+
+Return ONLY a JSON array:
+[{"name":"Activity Name","destination":"${destName}","category":"Nature","duration":"3h","cost":0,"rating":4.8,"matchReason":"Short reason","tags":["Hiking"],"locationHint":"Neighborhood, waterfront, district, or landmark area","bestTime":"morning|afternoon|evening|flexible","openingWindow":"Short note like 08:00-17:00 or sunrise to noon"}]
+
+Budget: ${bd[budgetTier] || bd.moderate}
+Prioritize: ${intYes.join(", ") || "culture, food"}
+Avoid: ${intNo.join(", ") || "none"}
+Dietary: ${dietStr}
+Crew preferences: ${crewSummary || "none provided"}
+Rules:
+- only return activities for ${destName}
+- make the list rich and varied, not repetitive
+- use real, recognizable landmarks, walks, food experiences, viewpoints, rituals, markets, museums, and locally distinctive experiences when possible
+- include at least 2-3 morning-friendly options when they exist
+- include useful local area hints for every POI
+- avoid duplicates or near-duplicates of obvious temple-only variants unless the destination truly revolves around that theme
+- match the budget and group preferences in matchReason
+Return 5-7 items. ONLY JSON array.`;
+  var msg = "Find additional activities for " + destName + (country ? ", " + country : "");
+  var res = await callLLM(sys, msg, 800);
+  return Array.isArray(res) ? res : [];
+}
+
+async function askComprehensivePOIs(destinations, interests, budgetTier, dietary, groupPrefs){
+  var base=await askPOI(destinations, interests, budgetTier, dietary, groupPrefs);
+  var merged=mergePoiListsByCanonical(base, {});
+  var destCount=(Array.isArray(destinations)?destinations:[]).length;
+  var minPerDestination=destCount<=2?4:(destCount<=4?3:2);
+  var missing=destinationsNeedingPoiCoverage(merged, destinations, minPerDestination);
+  for(var i=0;i<missing.length;i++){
+    var extra=await askPOISupplement(missing[i], interests, budgetTier, dietary, groupPrefs);
+    merged=mergePoiListsByCanonical(merged.concat(extra||[]), {});
+  }
+  return merged;
+}
 async function askPOI(destinations, interests, budgetTier, dietary, groupPrefs) {
   var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
   var destStr = (destinations || []).map(function(d) { return d.name + ", " + d.country; }).join("; ") || "Kyoto, Japan; Santorini, Greece";
@@ -5959,13 +6032,15 @@ export default function WanderPlan(){
         setPS({});
         setPV({});
         setPMC({});
+        setPois([]);
+        setPD(false);
         var replacementPoolPatch={};
         Object.keys(poiOptionPool||{}).forEach(function(key){
           replacementPoolPatch[key]=null;
         });
         setPOP(replacementPoolPatch);
         saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:replacementPoolPatch,poi_request_signature:poiCurrentSignature}}).catch(function(){return null;});
-        askPOI(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs).then(function(res){
+        askComprehensivePOIs(dests,user.interests||{},effectiveTripBudgetTier,user.dietary,poiGroupPrefs).then(function(res){
           var nextRows=Array.isArray(res)?res:[];
           setPois(nextRows);
           setPL(false);
@@ -6056,7 +6131,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         </div>)}
         {(!poiDone||poiContextStale)&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>{poiContextStale?"Destinations, budget, or traveler profiles changed. Refresh the activity list so it matches the current trip.":("The agent searches "+dests.length+" destination"+(dests.length>1?"s":"")+" based on group interests and budget.")}</p><button onClick={runPoiSearch} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>{poiContextStale?"Refresh Activities for Updated Trip":"Find Activities"}</button></div>)}
         {poiLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Searching across {dests.map(function(d){return d.name;}).join(", ")}...</p></div>)}
-        {poiDone&&pois.length>0&&(<div>
+        {poiDone&&pois.length>0&&!poiContextStale&&(<div>
           {pois.map(function(p,i){var st=poiStatus[i];var cc=p.category==="Nature"?C.grn:p.category==="Food"?C.teal:p.category==="Culture"?C.wrn:p.category==="Adventure"?C.coral:p.category==="Wellness"?C.purp:C.tealL;
             return(<div key={i} style={{padding:"12px 0",borderBottom:i<pois.length-1?"1px solid "+C.border:"none",opacity:st==="no"?.4:1,transition:"opacity .2s"}}>
               <div style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}><span style={{fontSize:10,padding:"1px 8px",borderRadius:999,background:cc+"18",color:cc,fontWeight:600}}>{p.category}</span><span style={{fontSize:11,color:C.wrn}}>{"*"+(p.rating||4.5)}</span><span style={{fontSize:11,color:C.tx3,marginLeft:"auto"}}>{p.destination}</span></div>
@@ -7466,6 +7541,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPoiRequestSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
-
-
+export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPoiRequestSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };

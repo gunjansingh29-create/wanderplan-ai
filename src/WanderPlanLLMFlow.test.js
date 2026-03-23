@@ -24,6 +24,7 @@ import {
   canonicalStayVoteKey,
   companionCheckinMeta,
   dedupeVoteVoters,
+  destinationsNeedingPoiCoverage,
   emptyUserState,
   estimateTransitMinutes,
   findDuplicatePoiKeys,
@@ -184,6 +185,22 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { name: "Osaka" },
       ])
     ).toBe(false);
+  });
+
+  test("destinationsNeedingPoiCoverage flags newly added or under-covered destinations", () => {
+    const rows = [
+      { name: "Fushimi Inari Shrine", destination: "Kyoto" },
+      { name: "Arashiyama Bamboo Grove", destination: "Kyoto" },
+      { name: "Dotonbori Food Walk", destination: "Osaka" },
+    ];
+
+    expect(
+      destinationsNeedingPoiCoverage(rows, [
+        { name: "Kyoto" },
+        { name: "Osaka" },
+        { name: "Nara" },
+      ], 2).map((d) => d.name)
+    ).toEqual(["Osaka", "Nara"]);
   });
 
   test("wizardSyncIntervalMs uses fast polling for collaborative steps", () => {
