@@ -1109,9 +1109,22 @@ function normalizePoiForSharedPool(poi){
       openingWindow:String(src.openingWindow||src.opening_window||src.open_hours||src.hours||"").trim(),
       lat:(src.lat!==undefined&&src.lat!==null)?Number(src.lat)||0:0,
       lng:(src.lng!==undefined&&src.lng!==null)?Number(src.lng)||0:0,
+    source:String(src.source||"").trim().toLowerCase()||"unknown",
+    failureReason:String(src.failureReason||src.failure_reason||"").trim().toLowerCase(),
     tags:Array.isArray(src.tags)?src.tags:[],
     approved:typeof src.approved==="boolean"?src.approved:null
   };
+}
+
+function routeStopForDestination(routePlan, destination){
+  var destKey=canonicalTripDestinationName(destination&&destination.name||destination||"");
+  if(!destKey)return null;
+  var stops=Array.isArray(routePlan&&routePlan.destinations)?routePlan.destinations:[];
+  for(var i=0;i<stops.length;i++){
+    var stop=stops[i]||{};
+    if(canonicalTripDestinationName(stop.destination||stop.name||"")===destKey)return stop;
+  }
+  return null;
 }
 
 function mergePoiListsByCanonical(localRows, sharedPool){
@@ -1250,6 +1263,8 @@ async function callLLM(sysPrompt, userMsg, maxTok) {
     return null;
   }
 }
+
+var ROUTE_LLM_TIMEOUT_MS = 45000;
 
 function buildRoutePlanSignature(destinations, interests, budgetTier, dietary, styles, groupPrefs){
   var rows=(Array.isArray(destinations)?destinations:[]).map(function(dest){
@@ -1465,8 +1480,52 @@ Rules:
 - Keep the output practical for a real traveler
 - Return ONLY JSON object. No markdown.`;
   var msg="Create a realistic route plan for visiting "+destList.join(", ")+".";
-  var parsed=await callLLM(sys,msg,2200);
-  return normalizeRoutePlan(parsed,destinations);
+  async function runRouteRequest(systemPrompt,userPrompt,maxTokens){
+    try{
+      var data=await withAsyncTimeout(function(){
+        return llmReq({
+          model:"claude-sonnet-4-20250514",
+          max_tokens:maxTokens||2200,
+          system:systemPrompt,
+          messages:[{role:"user",content:userPrompt}]
+        });
+      },ROUTE_LLM_TIMEOUT_MS,{__routeTimeout:true});
+      if(data&&data.__routeTimeout){
+        return {plan:null,reason:"timed_out",error:"Route planner timed out waiting for Anthropic."};
+      }
+      var txt=extractLlmTextContent(data);
+      var parsed=parseJsonLoose(txt);
+      var normalized=normalizeRoutePlan(parsed,destinations);
+      if(normalized&&Array.isArray(normalized.destinations)&&normalized.destinations.length){
+        return {plan:normalized,reason:"ok",rawText:txt};
+      }
+      return {
+        plan:null,
+        reason:txt?"parse_failed":"empty_response",
+        rawText:txt,
+        error:txt
+          ?"Route planner returned a response, but it was not usable structured JSON."
+          :"Route planner returned an empty response."
+      };
+    }catch(e){
+      return {
+        plan:null,
+        reason:"provider_error",
+        error:trimRouteErrorDetail(e&&e.message||"Could not build a route plan")
+      };
+    }
+  }
+  var first=await runRouteRequest(sys,msg,2400);
+  if(first.plan)return first.plan;
+  var retrySys=sys+"\nAdditional rule: return one valid JSON object only. Do not include prose, tables, markdown, or commentary before or after the JSON.";
+  var retryMsg=msg+" Return just the JSON object.";
+  var retry=await runRouteRequest(retrySys,retryMsg,2800);
+  if(retry.plan)return retry.plan;
+  var finalError=retry.error||first.error||"Could not build a route plan yet. Try again in a moment.";
+  var err=new Error(finalError);
+  err.routeReason=retry.reason||first.reason||"provider_error";
+  err.routeRawText=retry.rawText||first.rawText||"";
+  throw err;
 }
 
 function extractLlmTextContent(data){
@@ -1796,11 +1855,13 @@ function primaryPoiTheme(interests, groupPrefs){
   return yes.length===1?yes[0].toLowerCase():"";
 }
 
-function buildDestinationFallbackPois(destination, interests, budgetTier, dietary, groupPrefs){
+function buildDestinationFallbackPois(destination, interests, budgetTier, dietary, groupPrefs, routePlan, failureReason){
   var destName=String(destination&&destination.name||destination||"").trim();
   var country=String(destination&&destination.country||"").trim();
   if(!destName)return [];
   var theme=primaryPoiTheme(interests,groupPrefs);
+   var routeStop=routeStopForDestination(routePlan,destination);
+   var nearbySites=Array.isArray(routeStop&&routeStop.nearbySites)?routeStop.nearbySites.filter(Boolean):[];
   var budgetCost={budget:0,moderate:15,premium:35,luxury:60};
   var paidCost=budgetCost[budgetTier]!==undefined?budgetCost[budgetTier]:15;
   var freeCost=0;
@@ -1830,7 +1891,22 @@ function buildDestinationFallbackPois(destination, interests, budgetTier, dietar
       {name:destName+" Signature Dinner District Crawl",category:"Food",duration:"2h",cost:paidCost+10,tags:["Dinner","Local specialties"],locationHint:"Dining district",bestTime:"evening",openingWindow:"18:00-22:00",matchReason:"Makes dinner itself part of the local experience."}
     ]
   };
-  var chosen=rowsByTheme[theme]||[
+  var chosen=(nearbySites.length>0?nearbySites.slice(0,4).map(function(site,idx){
+    var siteName=String(site||"").trim();
+    var lower=siteName.toLowerCase();
+    var templeLike=/temple|mandir|jyotirlinga|ghat|aarti|shrine|ashram|math|dham/.test(lower);
+    return {
+      name:siteName,
+      category:templeLike?"Culture":"Culture",
+      duration:templeLike?"90m":"2h",
+      cost:freeCost,
+      tags:templeLike?["Temple","Spiritual"]:["Nearby site","Culture"],
+      locationHint:destName+" area",
+      bestTime:templeLike?"morning":"flexible",
+      openingWindow:templeLike?"Sunrise to noon":"",
+      matchReason:"Highlighted in the route plan as an important nearby site for "+destName+"."
+    };
+  }):rowsByTheme[theme])||[
     {name:destName+" Landmark Orientation Walk",category:"Culture",duration:"90m",cost:freeCost,tags:["Walking","Highlights"],locationHint:"Historic center",bestTime:"morning",openingWindow:"Morning",matchReason:"Good first-pass overview of the destination."},
     {name:destName+" Signature Local Experience",category:"Culture",duration:"2h",cost:paidCost,tags:["Local","Experience"],locationHint:"Main cultural district",bestTime:"afternoon",openingWindow:"10:00-17:00",matchReason:"Adds a destination-specific cultural anchor."},
     {name:destName+" Market and Neighborhood Walk",category:"Shopping",duration:"2h",cost:paidCost,tags:["Market","Neighborhood"],locationHint:"Local market streets",bestTime:"afternoon",openingWindow:"11:00-18:00",matchReason:"Balances sightseeing with everyday local life."},
@@ -1842,12 +1918,14 @@ function buildDestinationFallbackPois(destination, interests, budgetTier, dietar
       destination:destName,
       country:country,
       rating:4.2-(idx*0.05),
-      approved:null
+      approved:null,
+      source:"fallback",
+      failureReason:String(failureReason||"fallback").trim().toLowerCase()
     },row);
   });
 }
 
-async function askPOISupplementDetailed(destination, interests, budgetTier, dietary, groupPrefs){
+async function askPOISupplementDetailed(destination, interests, budgetTier, dietary, groupPrefs, routePlan){
   var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
   var destName=String(destination&&destination.name||destination||"").trim();
   var country=String(destination&&destination.country||"").trim();
@@ -1870,6 +1948,8 @@ async function askPOISupplementDetailed(destination, interests, budgetTier, diet
     crewSummary = groupPrefs.memberSummaries.join(" | ");
   }
   var focusedTheme=intYes.length===1?intYes[0]:"";
+  var routeStop=routeStopForDestination(routePlan,destination);
+  var nearbyContext=Array.isArray(routeStop&&routeStop.nearbySites)?routeStop.nearbySites.filter(Boolean).slice(0,6):[];
   var sys = `You are WanderPlan POI Coverage Agent. Suggest 4-5 destination-specific activities for ${destName}${country?", "+country:""}.
 
 Return ONLY a JSON array:
@@ -1881,6 +1961,7 @@ Avoid: ${intNo.join(", ") || "none"}
 Dietary: ${dietStr}
 Crew preferences: ${crewSummary || "none provided"}
 ${focusedTheme?("Primary trip interest: "+focusedTheme+". Every option should feel clearly relevant to that interest while still staying destination-specific. "):""}
+${nearbyContext.length?("Route planner nearby sites to ground this destination: "+nearbyContext.join(", ")+". Use them directly or build around them with real, recognizable nearby spiritual or cultural stops. "):""}
 Rules:
 - only return activities for ${destName}
 - return exactly 4 or 5 strong options, not a huge list
@@ -1889,6 +1970,7 @@ Rules:
 - include at least 2-3 morning-friendly options when they exist
 - include useful local area hints for every POI
 - avoid duplicates or near-duplicates of obvious temple-only variants unless the destination truly revolves around that theme
+- if route planner nearby sites are provided, ground at least 2 options in those real sites or their immediate area
 - match the budget and group preferences in matchReason
 Return 4-5 items. ONLY JSON array.`;
   var msg = "Find additional activities for " + destName + (country ? ", " + country : "");
@@ -1896,14 +1978,20 @@ Return 4-5 items. ONLY JSON array.`;
     var data=await llmReq({
       model: "claude-sonnet-4-20250514",
       max_tokens: 800,
-      messages: [{role: "user", content: sys + "\n\n---\n\n" + msg}]
+      system: sys,
+      messages: [{role: "user", content: msg}]
     });
     var txt=extractLlmTextContent(data);
     var parsed=parseJsonLoose(txt);
     if(parsed===null){
       return {rows:[],reason:txt?"parse_failed":"empty_response"};
     }
-    var rows=Array.isArray(parsed)?parsed:[];
+    var rows=(Array.isArray(parsed)?parsed:[]).map(function(row){
+      return Object.assign({},row||{},{
+        source:"llm",
+        failureReason:""
+      });
+    });
     return {rows:rows,reason:rows.length>0?"ok":"empty_array"};
   }catch(e){
     return {rows:[],reason:"provider_error",error:String(e&&e.message||"provider_error")};
@@ -1948,7 +2036,14 @@ function trimPoiErrorDetail(errorText){
   return msg;
 }
 
-async function buildPoiCoverageForDestinations(destinations, interests, budgetTier, dietary, groupPrefs, minPerDestination, onProgress, onStatus){
+function trimRouteErrorDetail(errorText){
+  var msg=String(errorText||"").trim().replace(/^Error:\s*/,"");
+  if(!msg)return "Could not build a route plan yet. Try again in a moment.";
+  if(msg.length>240)return msg.substring(0,240)+"...";
+  return msg;
+}
+
+async function buildPoiCoverageForDestinations(destinations, interests, budgetTier, dietary, groupPrefs, routePlan, minPerDestination, onProgress, onStatus){
   var dests=(Array.isArray(destinations)?destinations:[]).filter(Boolean);
   var required=Math.max(1,Number(minPerDestination)||1);
   var mergedRows=[];
@@ -1986,7 +2081,7 @@ async function buildPoiCoverageForDestinations(destinations, interests, budgetTi
         destinationErrors:Object.assign({},destinationErrors)
       });
     var meta=await withAsyncTimeout(function(){
-      return askPOISupplementDetailed(current, interests, budgetTier, dietary, groupPrefs);
+      return askPOISupplementDetailed(current, interests, budgetTier, dietary, groupPrefs, routePlan);
     },POI_LLM_TIMEOUT_MS,{rows:[],reason:"timed_out",error:"Frontend POI timeout after "+Math.round(POI_LLM_TIMEOUT_MS/1000)+"s"});
     var rows=Array.isArray(meta&&meta.rows)?meta.rows:[];
     var errorText=trimPoiErrorDetail(meta&&meta.error||"");
@@ -2007,7 +2102,7 @@ async function buildPoiCoverageForDestinations(destinations, interests, budgetTi
       pending.push(current);
       continue;
     }
-    var fallbackRows=buildDestinationFallbackPois(current, interests, budgetTier, dietary, groupPrefs);
+    var fallbackRows=buildDestinationFallbackPois(current, interests, budgetTier, dietary, groupPrefs, routePlan, reason);
     if(fallbackRows.length>0){
       mergedRows=mergePoiListsByCanonical(mergedRows.concat(fallbackRows), {});
       if(fallbackDestinations.indexOf(destName)<0)fallbackDestinations.push(destName);
@@ -3330,6 +3425,8 @@ export default function WanderPlan(){
         locationHint:String((x&&x.location_hint)||(x&&x.locationHint)||(x&&x.neighborhood)||(x&&x.location_name)||"").trim(),
         bestTime:String((x&&x.best_time)||(x&&x.bestTime)||"").trim().toLowerCase(),
         openingWindow:String((x&&x.opening_window)||(x&&x.openingWindow)||(x&&x.open_hours)||(x&&x.hours)||"").trim(),
+        source:String((x&&x.source)||"").trim().toLowerCase()||"unknown",
+        failureReason:String((x&&x.failure_reason)||(x&&x.failureReason)||"").trim().toLowerCase(),
         tags:(x&&Array.isArray(x.tags))?x.tags:[],
         approved:typeof (x&&x.approved)==="boolean"?x.approved:null
       };
@@ -3355,6 +3452,8 @@ export default function WanderPlan(){
         location_hint:String(p&&p.locationHint||""),
         best_time:String(p&&p.bestTime||""),
         opening_window:String(p&&p.openingWindow||""),
+        source:String(p&&p.source||""),
+        failure_reason:String(p&&p.failureReason||""),
         approved:status[idx]==="yes"
       };
     }).filter(function(p){return !!p.name;});
@@ -3541,6 +3640,7 @@ export default function WanderPlan(){
       effectiveTripBudgetTierGlobal,
       user.dietary,
       wizardPoiGroupPrefs,
+      routePlanContextStaleGlobal?null:routePlan,
       targetPerDestination,
       appendRows,
       function(status){
@@ -8395,4 +8495,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };

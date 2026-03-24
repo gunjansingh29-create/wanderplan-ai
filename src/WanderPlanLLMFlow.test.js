@@ -57,6 +57,7 @@ import {
   normalizeWizardStepIndex,
   orderDestinationsByRoutePlan,
   POI_LLM_TIMEOUT_MS,
+  ROUTE_LLM_TIMEOUT_MS,
   poiListNeedsRefresh,
   readDestinationVoteRow,
   readMealVoteRow,
@@ -85,6 +86,7 @@ import {
   summarizeStayVotes,
   stayPreviewLink,
   trimPoiErrorDetail,
+  trimRouteErrorDetail,
   tripDestinationNamesFromValues,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
@@ -286,6 +288,14 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       "LLM proxy HTTP 504: LLM error: TimeoutError contacting Anthropic"
     );
     expect(POI_LLM_TIMEOUT_MS).toBeGreaterThan(30000);
+  });
+
+  test("trimRouteErrorDetail preserves readable provider detail and route timeout exceeds backend window", () => {
+    expect(trimRouteErrorDetail("Error: LLM proxy HTTP 504: LLM error: TimeoutError contacting Anthropic")).toBe(
+      "LLM proxy HTTP 504: LLM error: TimeoutError contacting Anthropic"
+    );
+    expect(trimRouteErrorDetail("")).toBe("Could not build a route plan yet. Try again in a moment.");
+    expect(ROUTE_LLM_TIMEOUT_MS).toBeGreaterThan(30000);
   });
 
   test("poiListNeedsRefresh ignores extra POIs from removed destinations when current ones are covered", () => {
