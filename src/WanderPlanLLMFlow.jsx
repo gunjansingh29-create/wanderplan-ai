@@ -447,8 +447,14 @@ async function apiJson(path, options, token){
 
 async function llmReq(payload){
   var r=await fetch(LLM_PROXY,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-  if(!r.ok)throw new Error("LLM proxy HTTP "+r.status);
-  return r.json();
+  var txt=await r.text();
+  var data=null;
+  try{data=txt?JSON.parse(txt):null;}catch(e){data=txt;}
+  if(!r.ok){
+    var detail=(data&&typeof data==="object"&&(data.detail||data.message))||(typeof data==="string"?data:"");
+    throw new Error("LLM proxy HTTP "+r.status+(detail?": "+detail:""));
+  }
+  return data;
 }
 
 function mapTripMemberStatus(rawStatus){
@@ -1707,6 +1713,21 @@ function withAsyncTimeout(task, timeoutMs, fallbackValue){
   ]);
 }
 
+var POI_LLM_TIMEOUT_MS = 35000;
+
+function classifyPoiFailureReason(reason, errorText){
+  var base=String(reason||"").trim().toLowerCase();
+  var msg=String(errorText||"").trim().toLowerCase();
+  if(base==="provider_error" && (msg.indexOf("timeout")>=0 || msg.indexOf("504")>=0))return "timed_out";
+  return base||"provider_error";
+}
+
+function trimPoiErrorDetail(errorText){
+  var msg=String(errorText||"").trim().replace(/^Error:\s*/,"");
+  if(msg.length>240)return msg.substring(0,240)+"...";
+  return msg;
+}
+
 async function buildPoiCoverageForDestinations(destinations, interests, budgetTier, dietary, groupPrefs, minPerDestination, onProgress, onStatus){
   var dests=(Array.isArray(destinations)?destinations:[]).filter(Boolean);
   var required=Math.max(1,Number(minPerDestination)||1);
@@ -1720,6 +1741,7 @@ async function buildPoiCoverageForDestinations(destinations, interests, budgetTi
   var failedDestinations=[];
   var parseFailedDestinations=[];
   var fallbackDestinations=[];
+  var destinationErrors={};
   onStatus=(typeof onStatus==="function")?onStatus:null;
   var maxAttemptsPerDestination=2;
   var batchIndex=0;
@@ -1736,23 +1758,27 @@ async function buildPoiCoverageForDestinations(destinations, interests, budgetTi
       batchCount:batchCount,
       activeDestinations:[destName],
       completedDestinations:completedDestinations.slice(),
-      timedOutDestinations:timedOutDestinations.slice(),
-      emptyDestinations:emptyDestinations.slice(),
-      failedDestinations:failedDestinations.slice(),
-      parseFailedDestinations:parseFailedDestinations.slice(),
-      fallbackDestinations:fallbackDestinations.slice()
-    });
+        timedOutDestinations:timedOutDestinations.slice(),
+        emptyDestinations:emptyDestinations.slice(),
+        failedDestinations:failedDestinations.slice(),
+        parseFailedDestinations:parseFailedDestinations.slice(),
+        fallbackDestinations:fallbackDestinations.slice(),
+        destinationErrors:Object.assign({},destinationErrors)
+      });
     var meta=await withAsyncTimeout(function(){
       return askPOISupplementDetailed(current, interests, budgetTier, dietary, groupPrefs);
-    },20000,{rows:[],reason:"timed_out"});
+    },POI_LLM_TIMEOUT_MS,{rows:[],reason:"timed_out",error:"Frontend POI timeout after "+Math.round(POI_LLM_TIMEOUT_MS/1000)+"s"});
     var rows=Array.isArray(meta&&meta.rows)?meta.rows:[];
-    var reason=String(meta&&meta.reason||"empty_array");
+    var errorText=trimPoiErrorDetail(meta&&meta.error||"");
+    var reason=classifyPoiFailureReason(meta&&meta.reason||"empty_array",errorText);
     if(rows.length>0){
       mergedRows=mergePoiListsByCanonical(mergedRows.concat(rows), {});
       if(completedDestinations.indexOf(destName)<0)completedDestinations.push(destName);
+      delete destinationErrors[destName];
       if(typeof onProgress==="function")onProgress(mergedRows.slice());
       continue;
     }
+    if(errorText)destinationErrors[destName]=errorText;
     if(reason==="timed_out"&&timedOutDestinations.indexOf(destName)<0)timedOutDestinations.push(destName);
     else if(reason==="provider_error"&&failedDestinations.indexOf(destName)<0)failedDestinations.push(destName);
     else if((reason==="parse_failed"||reason==="empty_response")&&parseFailedDestinations.indexOf(destName)<0)parseFailedDestinations.push(destName);
@@ -2633,7 +2659,7 @@ export default function WanderPlan(){
   var[poiVotes,setPV]=useState({});
   var[poiMemberChoices,setPMC]=useState({});
   var[poiOptionPool,setPOP]=useState({});
-  var[poiGenStatus,setPGS]=useState({phase:"idle",currentBatch:0,batchCount:0,activeDestinations:[],completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],parseFailedDestinations:[],fallbackDestinations:[],backendSync:"idle"});
+  var[poiGenStatus,setPGS]=useState({phase:"idle",currentBatch:0,batchCount:0,activeDestinations:[],completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],parseFailedDestinations:[],fallbackDestinations:[],destinationErrors:{},backendSync:"idle"});
   var[poiRequestSignature,setPoiRequestSignature]=useState("");
   var[poiAsk,setPA]=useState("");
   var[poiAskLoad,setPAL]=useState(false);
@@ -3249,7 +3275,7 @@ export default function WanderPlan(){
     var pendingDestinations=(Array.isArray(wizardPoiDests)?wizardPoiDests.slice():[]).filter(Boolean);
     var targetPerDestination=pendingDestinations.length<=2?5:4;
     setPL(true);
-    setPGS({phase:"starting",currentBatch:0,batchCount:Math.max(1,pendingDestinations.length),activeDestinations:pendingDestinations.map(function(d){return String(d&&d.name||d||"").trim();}).filter(Boolean),completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],parseFailedDestinations:[],fallbackDestinations:[],backendSync:"idle"});
+    setPGS({phase:"starting",currentBatch:0,batchCount:Math.max(1,pendingDestinations.length),activeDestinations:pendingDestinations.map(function(d){return String(d&&d.name||d||"").trim();}).filter(Boolean),completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],parseFailedDestinations:[],fallbackDestinations:[],destinationErrors:{},backendSync:"idle"});
     setPS({});
     setPV({});
     setPMC({});
@@ -3260,7 +3286,7 @@ export default function WanderPlan(){
     if(pendingDestinations.length===0){
       setPL(false);
       setPD(true);
-      setPGS({phase:"done",currentBatch:0,batchCount:0,activeDestinations:[],completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],parseFailedDestinations:[],fallbackDestinations:[],backendSync:"skipped"});
+      setPGS({phase:"done",currentBatch:0,batchCount:0,activeDestinations:[],completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],parseFailedDestinations:[],fallbackDestinations:[],destinationErrors:{},backendSync:"skipped"});
       setPoiRequestSignature(poiCurrentSignatureGlobal);
       return;
     }
@@ -6549,7 +6575,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           </div>
         </div>)}
         {(!poiDone||poiContextStale)&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>{poiContextStale?"Destinations, budget, or traveler profiles changed. Refresh the activity list so it matches the current trip.":("The agent searches "+dests.length+" destination"+(dests.length>1?"s":"")+" based on group interests and budget.")}</p><button onClick={runPoiSearch} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>{poiContextStale?"Refresh Activities for Updated Trip":"Find Activities"}</button></div>)}
-        {poiLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2,marginBottom:8}}>{poiGenStatus.phase==="syncing"?"Saving generated POIs to the trip...":("Searching across "+dests.map(function(d){return d.name;}).join(", ")+"...")}</p>{poiGenStatus.currentBatch>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>Destination {poiGenStatus.currentBatch} of {poiGenStatus.batchCount||1}{Array.isArray(poiGenStatus.activeDestinations)&&poiGenStatus.activeDestinations.length?": "+poiGenStatus.activeDestinations.join(", "):""}</p>}{Array.isArray(poiGenStatus.completedDestinations)&&poiGenStatus.completedDestinations.length>0&&<p style={{fontSize:12,color:C.grn,marginBottom:6}}>Completed: {poiGenStatus.completedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.timedOutDestinations)&&poiGenStatus.timedOutDestinations.length>0&&<p style={{fontSize:12,color:C.wrn,marginBottom:6}}>Anthropic timed out for: {poiGenStatus.timedOutDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.failedDestinations)&&poiGenStatus.failedDestinations.length>0&&<p style={{fontSize:12,color:C.red,marginBottom:6}}>Provider errors for: {poiGenStatus.failedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.parseFailedDestinations)&&poiGenStatus.parseFailedDestinations.length>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>Responses could not be parsed for: {poiGenStatus.parseFailedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.emptyDestinations)&&poiGenStatus.emptyDestinations.length>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>No usable POIs yet for: {poiGenStatus.emptyDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.fallbackDestinations)&&poiGenStatus.fallbackDestinations.length>0&&<p style={{fontSize:12,color:C.sky}}>Fallback POIs used for: {poiGenStatus.fallbackDestinations.join(", ")}</p>}</div>)}
+        {poiLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2,marginBottom:8}}>{poiGenStatus.phase==="syncing"?"Saving generated POIs to the trip...":("Searching across "+dests.map(function(d){return d.name;}).join(", ")+"...")}</p>{poiGenStatus.currentBatch>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>Destination {poiGenStatus.currentBatch} of {poiGenStatus.batchCount||1}{Array.isArray(poiGenStatus.activeDestinations)&&poiGenStatus.activeDestinations.length?": "+poiGenStatus.activeDestinations.join(", "):""}</p>}{Array.isArray(poiGenStatus.completedDestinations)&&poiGenStatus.completedDestinations.length>0&&<p style={{fontSize:12,color:C.grn,marginBottom:6}}>Completed: {poiGenStatus.completedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.timedOutDestinations)&&poiGenStatus.timedOutDestinations.length>0&&<p style={{fontSize:12,color:C.wrn,marginBottom:6}}>Anthropic timed out for: {poiGenStatus.timedOutDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.failedDestinations)&&poiGenStatus.failedDestinations.length>0&&<p style={{fontSize:12,color:C.red,marginBottom:6}}>Provider errors for: {poiGenStatus.failedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.parseFailedDestinations)&&poiGenStatus.parseFailedDestinations.length>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>Responses could not be parsed for: {poiGenStatus.parseFailedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.emptyDestinations)&&poiGenStatus.emptyDestinations.length>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>No usable POIs yet for: {poiGenStatus.emptyDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.fallbackDestinations)&&poiGenStatus.fallbackDestinations.length>0&&<p style={{fontSize:12,color:C.sky,marginBottom:6}}>Fallback POIs used for: {poiGenStatus.fallbackDestinations.join(", ")}</p>}{poiGenStatus.destinationErrors&&Object.keys(poiGenStatus.destinationErrors).length>0&&<div style={{marginTop:8,padding:"10px 12px",borderRadius:10,background:C.surface,border:"1px solid "+C.border,textAlign:"left"}}><p style={{fontSize:11,color:C.tx3,marginBottom:6}}>Provider details</p>{Object.keys(poiGenStatus.destinationErrors).map(function(dest){return <p key={dest} style={{fontSize:11,color:C.tx2,marginBottom:4}}><span style={{color:"#fff"}}>{dest}:</span> {poiGenStatus.destinationErrors[dest]}</p>;})}</div>}</div>)}
         {poiDone&&poiRows.length>0&&!poiContextStale&&(<div>
           {poiRows.map(function(p,i){var st=poiStatus[i];var cc=p.category==="Nature"?C.grn:p.category==="Food"?C.teal:p.category==="Culture"?C.wrn:p.category==="Adventure"?C.coral:p.category==="Wellness"?C.purp:C.tealL;
             return(<div key={i} style={{padding:"12px 0",borderBottom:i<poiRows.length-1?"1px solid "+C.border:"none",opacity:st==="no"?.4:1,transition:"opacity .2s"}}>
@@ -7961,4 +7987,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };

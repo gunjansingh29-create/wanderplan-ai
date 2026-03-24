@@ -14,6 +14,7 @@ import {
   buildItinerarySavePayload,
   buildPOIGroupPrefsFromCrew,
   buildPoiRequestSignature,
+  classifyPoiFailureReason,
   chooseBestItineraryRows,
   buildTripShareLink,
   buildTripShareSummary,
@@ -52,6 +53,7 @@ import {
   normalizePersonalBucketItems,
   normalizeTripDestinationValue,
   normalizeWizardStepIndex,
+  POI_LLM_TIMEOUT_MS,
   poiListNeedsRefresh,
   readDestinationVoteRow,
   readMealVoteRow,
@@ -78,6 +80,7 @@ import {
   summarizePoiVotes,
   summarizeStayVotes,
   stayPreviewLink,
+  trimPoiErrorDetail,
   tripDestinationNamesFromValues,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
@@ -260,6 +263,25 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { name: "Kedarnath" },
       ])
     ).toBe(false);
+  });
+
+  test("classifyPoiFailureReason treats backend timeout details as timed_out", () => {
+    expect(
+      classifyPoiFailureReason(
+        "provider_error",
+        "LLM proxy HTTP 504: LLM error: TimeoutError contacting Anthropic"
+      )
+    ).toBe("timed_out");
+    expect(classifyPoiFailureReason("provider_error", "LLM proxy HTTP 529")).toBe(
+      "provider_error"
+    );
+  });
+
+  test("trimPoiErrorDetail preserves readable provider detail and timeout exceeds backend window", () => {
+    expect(trimPoiErrorDetail("Error: LLM proxy HTTP 504: LLM error: TimeoutError contacting Anthropic")).toBe(
+      "LLM proxy HTTP 504: LLM error: TimeoutError contacting Anthropic"
+    );
+    expect(POI_LLM_TIMEOUT_MS).toBeGreaterThan(30000);
   });
 
   test("poiListNeedsRefresh ignores extra POIs from removed destinations when current ones are covered", () => {
