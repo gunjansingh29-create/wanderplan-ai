@@ -255,14 +255,14 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       shouldAutoGeneratePois("wizard", 5, [{ name: "Fushimi Inari" }], false, false, false, [{ name: "Kyoto" }])
     ).toBe(false);
     expect(
-      shouldAutoGeneratePois("wizard", 5, [], true, false, false, [{ name: "Kyoto" }])
-    ).toBe(false);
-    expect(
       shouldAutoGeneratePois("wizard", 5, [], false, true, false, [{ name: "Kyoto" }])
     ).toBe(false);
     expect(
       shouldAutoGeneratePois("wizard", 5, [], false, false, true, [{ name: "Kyoto" }])
     ).toBe(false);
+    expect(
+      shouldAutoGeneratePois("wizard", 5, [], true, false, false, [{ name: "Kyoto" }])
+    ).toBe(true);
   });
 
   test("wizardSyncIntervalMs uses fast polling for collaborative steps", () => {

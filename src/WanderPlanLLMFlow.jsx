@@ -1410,7 +1410,7 @@ function buildPOIGroupPrefsFromCrew(members){
 
 function shouldAutoGeneratePois(sc,wizStep,rows,done,loading,contextStale,destinations){
   if(sc!=="wizard"||wizStep!==5)return false;
-  if(loading||done||contextStale)return false;
+  if(loading||contextStale)return false;
   if(!Array.isArray(destinations)||destinations.length===0)return false;
   return !Array.isArray(rows)||rows.length===0;
 }
