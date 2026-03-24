@@ -1486,6 +1486,31 @@ async function askComprehensivePOIs(destinations, interests, budgetTier, dietary
   });
   return merged;
 }
+
+async function buildPoiCoverageForDestinations(destinations, interests, budgetTier, dietary, groupPrefs, minPerDestination, onProgress){
+  var dests=(Array.isArray(destinations)?destinations:[]).filter(Boolean);
+  var required=Math.max(1,Number(minPerDestination)||1);
+  var mergedRows=[];
+  var pending=dests.slice();
+  var attempts=0;
+  while(pending.length>0 && attempts<3){
+    var batches=await Promise.all(pending.map(function(dest){
+      return askPOISupplement(dest, interests, budgetTier, dietary, groupPrefs).catch(function(){return [];});
+    }));
+    var roundRows=[];
+    batches.forEach(function(batch){
+      roundRows=mergePoiListsByCanonical(roundRows.concat(batch||[]), {});
+    });
+    if(roundRows.length>0){
+      mergedRows=mergePoiListsByCanonical(mergedRows.concat(roundRows), {});
+      if(typeof onProgress==="function")onProgress(mergedRows.slice());
+    }
+    attempts+=1;
+    pending=destinationsNeedingPoiCoverage(mergedRows,dests,required);
+  }
+  return mergedRows;
+}
+
 async function askPOI(destinations, interests, budgetTier, dietary, groupPrefs) {
   var bd = {budget:"$50-120/day",moderate:"$120-250/day",premium:"$250-400/day",luxury:"$400+/day"};
   var destStr = (destinations || []).map(function(d) { return d.name + ", " + d.country; }).join("; ") || "Kyoto, Japan; Santorini, Greece";
@@ -2960,6 +2985,7 @@ export default function WanderPlan(){
   function runPoiSearchNow(){
     var activeTripId=resolveWizardTripId(currentTripId,newTrip);
     var pendingDestinations=(Array.isArray(wizardPoiDests)?wizardPoiDests.slice():[]).filter(Boolean);
+    var targetPerDestination=pendingDestinations.length<=2?5:4;
     setPL(true);
     setPS({});
     setPV({});
@@ -2984,18 +3010,15 @@ export default function WanderPlan(){
         setPD(true);
       }
     }
-    Promise.all(pendingDestinations.map(function(dest){
-      return askPOISupplement(dest,user.interests||{},effectiveTripBudgetTierGlobal,user.dietary,wizardPoiGroupPrefs).then(function(rows){
-        appendRows(rows);
-        return rows;
-      }).catch(function(){
-        return [];
-      });
-    })).then(function(batches){
-      var nextRows=[];
-      batches.forEach(function(batch){
-        nextRows=mergePoiListsByCanonical(nextRows.concat(batch||[]), {});
-      });
+    buildPoiCoverageForDestinations(
+      pendingDestinations,
+      user.interests||{},
+      effectiveTripBudgetTierGlobal,
+      user.dietary,
+      wizardPoiGroupPrefs,
+      targetPerDestination,
+      appendRows
+    ).then(function(nextRows){
       var nextPool=buildPoiOptionPoolPatch(nextRows,{});
       syncTripPoisToBackend({},nextRows).then(function(syncRes){
         var syncedRows=mapBackendPois((syncRes&&syncRes.pois)||[]);
