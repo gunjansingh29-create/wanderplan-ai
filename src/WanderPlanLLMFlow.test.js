@@ -7,6 +7,7 @@ import {
   addTripDestinationValue,
   buildTransitItem,
   buildCurrentVoteActor,
+  buildDestinationFallbackPois,
   buildDurationPlanSignature,
   buildFallbackItinerary,
   buildFlightRoutePlan,
@@ -318,6 +319,34 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         "Crew One: likes hiking; avoids nightlife; dietary Vegetarian; budget budget",
       ],
     });
+  });
+
+  test("buildDestinationFallbackPois stays destination-specific and returns themed rows", () => {
+    const rows = buildDestinationFallbackPois(
+      { name: "Kedarnath", country: "India" },
+      { spiritual: true },
+      "moderate",
+      [],
+      {}
+    );
+
+    expect(rows).toHaveLength(4);
+    expect(rows.every((row) => row.destination === "Kedarnath")).toBe(true);
+    expect(rows.some((row) => /Temple|Sacred|Aarti|Heritage/i.test(row.name))).toBe(true);
+  });
+
+  test("buildDestinationFallbackPois prefers food-forward options when food is the only selected interest", () => {
+    const rows = buildDestinationFallbackPois(
+      { name: "Osaka", country: "Japan" },
+      { food: true },
+      "budget",
+      [],
+      {}
+    );
+
+    expect(rows).toHaveLength(4);
+    expect(rows.some((row) => row.category === "Food")).toBe(true);
+    expect(rows.some((row) => /Food|Market|Cuisine|Dinner/i.test(row.name))).toBe(true);
   });
 
   test("shouldAutoGeneratePois only triggers for empty step 5 wizard state", () => {
