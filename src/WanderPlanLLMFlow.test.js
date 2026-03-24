@@ -11,6 +11,7 @@ import {
   buildFallbackItinerary,
   buildFlightRoutePlan,
   buildItinerarySavePayload,
+  buildPOIGroupPrefsFromCrew,
   buildPoiRequestSignature,
   chooseBestItineraryRows,
   buildTripShareLink,
@@ -63,6 +64,7 @@ import {
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
   sanitizeFlightDatesForTrip,
+  shouldAutoGeneratePois,
   shouldResetTravelPlanForDurationChange,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
@@ -201,6 +203,46 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { name: "Nara" },
       ], 2).map((d) => d.name)
     ).toEqual(["Osaka", "Nara"]);
+  });
+
+  test("buildPOIGroupPrefsFromCrew summarizes accepted traveler profile inputs for prompts", () => {
+    expect(
+      buildPOIGroupPrefsFromCrew([
+        {
+          name: "Crew One",
+          profile: {
+            interests: { hiking: true, nightlife: false },
+            dietary: ["Vegetarian"],
+            budget_tier: "budget",
+          },
+        },
+      ])
+    ).toEqual({
+      extraYes: ["hiking"],
+      extraNo: ["nightlife"],
+      dietary: ["Vegetarian"],
+      memberSummaries: [
+        "Crew One: likes hiking; avoids nightlife; dietary Vegetarian; budget budget",
+      ],
+    });
+  });
+
+  test("shouldAutoGeneratePois only triggers for empty step 5 wizard state", () => {
+    expect(
+      shouldAutoGeneratePois("wizard", 5, [], false, false, false, [{ name: "Kyoto" }])
+    ).toBe(true);
+    expect(
+      shouldAutoGeneratePois("wizard", 5, [{ name: "Fushimi Inari" }], false, false, false, [{ name: "Kyoto" }])
+    ).toBe(false);
+    expect(
+      shouldAutoGeneratePois("wizard", 5, [], true, false, false, [{ name: "Kyoto" }])
+    ).toBe(false);
+    expect(
+      shouldAutoGeneratePois("wizard", 5, [], false, true, false, [{ name: "Kyoto" }])
+    ).toBe(false);
+    expect(
+      shouldAutoGeneratePois("wizard", 5, [], false, false, true, [{ name: "Kyoto" }])
+    ).toBe(false);
   });
 
   test("wizardSyncIntervalMs uses fast polling for collaborative steps", () => {
