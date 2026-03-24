@@ -295,7 +295,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       "LLM proxy HTTP 504: LLM error: TimeoutError contacting Anthropic"
     );
     expect(trimRouteErrorDetail("")).toBe("Could not build a route plan yet. Try again in a moment.");
-    expect(ROUTE_LLM_TIMEOUT_MS).toBeGreaterThan(30000);
+    expect(ROUTE_LLM_TIMEOUT_MS).toBeGreaterThan(60000);
   });
 
   test("poiListNeedsRefresh ignores extra POIs from removed destinations when current ones are covered", () => {

@@ -1264,7 +1264,7 @@ async function callLLM(sysPrompt, userMsg, maxTok) {
   }
 }
 
-var ROUTE_LLM_TIMEOUT_MS = 45000;
+var ROUTE_LLM_TIMEOUT_MS = 70000;
 
 function buildRoutePlanSignature(destinations, interests, budgetTier, dietary, styles, groupPrefs){
   var rows=(Array.isArray(destinations)?destinations:[]).map(function(dest){
@@ -1469,17 +1469,14 @@ Avoid emphasizing: ${avoidText}
 Crew context: ${crewSummary}
 
 Rules:
-- The route planner should do most of the work, not just list POIs
+- Do the heavy lifting: choose the best starting city, group stops efficiently, reduce backtracking, and assign realistic days
 - Use every listed destination exactly once as a core stop
-- Optimize the route to reduce backtracking
-- Suggest the best starting city and ending city
-- Give each destination a realistic number of days
 - Include important nearby temples, spiritual sites, or major landmarks in nearbySites
 - Keep nearbySites real and recognizable when possible
-- For pilgrimage or theme-heavy trips, lean into the trip theme strongly
-- Keep the output practical for a real traveler
-- Return ONLY JSON object. No markdown.`;
-  var msg="Create a realistic route plan for visiting "+destList.join(", ")+".";
+- For pilgrimage or theme-heavy trips, lean strongly into the spiritual route
+- Keep output concise, practical, and efficient
+- Return ONLY JSON object. No markdown, no tables, no commentary.`;
+  var msg="I am interested in traveling to "+destList.join(", ")+". Build a realistic route plan with the best starting city, grouped phases, nearby important temples or landmarks, and practical days per stop. Return only the JSON object.";
   async function runRouteRequest(systemPrompt,userPrompt,maxTokens){
     try{
       var data=await withAsyncTimeout(function(){
@@ -1515,11 +1512,11 @@ Rules:
       };
     }
   }
-  var first=await runRouteRequest(sys,msg,2400);
+  var first=await runRouteRequest(sys,msg,1600);
   if(first.plan)return first.plan;
   var retrySys=sys+"\nAdditional rule: return one valid JSON object only. Do not include prose, tables, markdown, or commentary before or after the JSON.";
   var retryMsg=msg+" Return just the JSON object.";
-  var retry=await runRouteRequest(retrySys,retryMsg,2800);
+  var retry=await runRouteRequest(retrySys,retryMsg,2000);
   if(retry.plan)return retry.plan;
   var finalError=retry.error||first.error||"Could not build a route plan yet. Try again in a moment.";
   var err=new Error(finalError);

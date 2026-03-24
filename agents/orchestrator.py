@@ -281,6 +281,8 @@ class PoiSyncItemRequest(BaseModel):
     location_hint: Optional[str] = None
     best_time: Optional[str] = None
     opening_window: Optional[str] = None
+    source: Optional[str] = None
+    failure_reason: Optional[str] = None
     shortlisted: bool = False
     approved: bool = False
 
@@ -1925,6 +1927,14 @@ def _anthropic_extract_destinations(text: str) -> tuple[list[dict[str, str]], bo
         "messages": [{"role": "user", "content": prompt}],
     }
 
+    timeout_seconds = max(
+        10,
+        min(
+            int(os.getenv("ANTHROPIC_HTTP_TIMEOUT_SECONDS", "60") or 60),
+            180,
+        ),
+    )
+
     req = urllib_request.Request(
         "https://api.anthropic.com/v1/messages",
         data=json.dumps(payload).encode("utf-8"),
@@ -2033,7 +2043,7 @@ def _anthropic_messages_proxy(body: LLMMessageRequest) -> dict[str, Any]:
         method="POST",
     )
     try:
-        with urllib_request.urlopen(req, timeout=30) as resp:  # nosec B310
+        with urllib_request.urlopen(req, timeout=timeout_seconds) as resp:  # nosec B310
             raw = resp.read().decode("utf-8")
     except HTTPError as err:
         body_text = ""
@@ -2334,6 +2344,8 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
           location_hint TEXT,
           best_time TEXT,
           opening_window TEXT,
+          source TEXT,
+          failure_reason TEXT,
           shortlisted BOOLEAN DEFAULT FALSE,
           approved BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMPTZ DEFAULT NOW()
@@ -2565,6 +2577,8 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
     await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS location_hint TEXT")
     await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS best_time TEXT")
     await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS opening_window TEXT")
+    await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS source TEXT")
+    await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS failure_reason TEXT")
     await conn.execute("ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS paid_by_user_id UUID REFERENCES users(id)")
     await conn.execute("ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS split_with_user_ids UUID[] DEFAULT '{}'::uuid[]")
 
@@ -4468,7 +4482,7 @@ async def get_pois(
         await _require_trip_member(conn, trip_id, user_id)
         base_query = """
             SELECT id, name, category, city, country, lat, lng, tags, rating, cost_estimate_usd,
-                   match_reason, location_hint, best_time, opening_window, shortlisted, approved
+                   match_reason, location_hint, best_time, opening_window, source, failure_reason, shortlisted, approved
             FROM pois
             WHERE trip_id = $1
         """
@@ -4523,9 +4537,9 @@ async def get_pois(
                             """
                             INSERT INTO pois (
                                 trip_id, name, category, city, country, tags, rating, cost_estimate_usd,
-                                match_reason, location_hint, best_time, opening_window, shortlisted, approved
+                                match_reason, location_hint, best_time, opening_window, source, failure_reason, shortlisted, approved
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, '', '', '', '', false, false)
+                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, '', '', '', '', 'catalog', '', false, false)
                             ON CONFLICT DO NOTHING
                             """,
                             trip_id,
@@ -4544,9 +4558,9 @@ async def get_pois(
                             """
                             INSERT INTO pois (
                                 trip_id, name, category, city, country, tags, rating, cost_estimate_usd,
-                                match_reason, location_hint, best_time, opening_window, shortlisted, approved
+                                match_reason, location_hint, best_time, opening_window, source, failure_reason, shortlisted, approved
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, '', '', '', '', false, false)
+                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, '', '', '', '', 'catalog', '', false, false)
                             ON CONFLICT DO NOTHING
                             """,
                             trip_id,
@@ -4612,6 +4626,8 @@ async def get_pois(
                 "location_hint": row["location_hint"] or "",
                 "best_time": row["best_time"] or "",
                 "opening_window": row["opening_window"] or "",
+                "source": row["source"] or "",
+                "failure_reason": row["failure_reason"] or "",
                 "shortlisted": bool(row["shortlisted"]),
                 "approved": bool(row["approved"]),
                 "shortlist_counts": {
