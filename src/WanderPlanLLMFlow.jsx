@@ -1432,7 +1432,8 @@ async function askPOISupplement(destination, interests, budgetTier, dietary, gro
   if (groupPrefs && Array.isArray(groupPrefs.memberSummaries) && groupPrefs.memberSummaries.length > 0) {
     crewSummary = groupPrefs.memberSummaries.join(" | ");
   }
-  var sys = `You are WanderPlan POI Coverage Agent. Suggest 5-7 additional destination-specific activities for ${destName}${country?", "+country:""}.
+  var focusedTheme=intYes.length===1?intYes[0]:"";
+  var sys = `You are WanderPlan POI Coverage Agent. Suggest 4-5 destination-specific activities for ${destName}${country?", "+country:""}.
 
 Return ONLY a JSON array:
 [{"name":"Activity Name","destination":"${destName}","category":"Nature","duration":"3h","cost":0,"rating":4.8,"matchReason":"Short reason","tags":["Hiking"],"locationHint":"Neighborhood, waterfront, district, or landmark area","bestTime":"morning|afternoon|evening|flexible","openingWindow":"Short note like 08:00-17:00 or sunrise to noon"}]
@@ -1442,30 +1443,32 @@ Prioritize: ${intYes.join(", ") || "culture, food"}
 Avoid: ${intNo.join(", ") || "none"}
 Dietary: ${dietStr}
 Crew preferences: ${crewSummary || "none provided"}
+${focusedTheme?("Primary trip interest: "+focusedTheme+". Every option should feel clearly relevant to that interest while still staying destination-specific. "):""}
 Rules:
 - only return activities for ${destName}
+- return exactly 4 or 5 strong options, not a huge list
 - make the list rich and varied, not repetitive
 - use real, recognizable landmarks, walks, food experiences, viewpoints, rituals, markets, museums, and locally distinctive experiences when possible
 - include at least 2-3 morning-friendly options when they exist
 - include useful local area hints for every POI
 - avoid duplicates or near-duplicates of obvious temple-only variants unless the destination truly revolves around that theme
 - match the budget and group preferences in matchReason
-Return 5-7 items. ONLY JSON array.`;
+Return 4-5 items. ONLY JSON array.`;
   var msg = "Find additional activities for " + destName + (country ? ", " + country : "");
   var res = await callLLM(sys, msg, 800);
   return Array.isArray(res) ? res : [];
 }
 
 async function askComprehensivePOIs(destinations, interests, budgetTier, dietary, groupPrefs){
-  var base=await askPOI(destinations, interests, budgetTier, dietary, groupPrefs);
-  var merged=mergePoiListsByCanonical(base, {});
-  var destCount=(Array.isArray(destinations)?destinations:[]).length;
-  var minPerDestination=destCount<=2?4:(destCount<=4?3:2);
-  var missing=destinationsNeedingPoiCoverage(merged, destinations, minPerDestination);
-  for(var i=0;i<missing.length;i++){
-    var extra=await askPOISupplement(missing[i], interests, budgetTier, dietary, groupPrefs);
-    merged=mergePoiListsByCanonical(merged.concat(extra||[]), {});
-  }
+  var dests=Array.isArray(destinations)?destinations:[];
+  if(dests.length===0)return [];
+  var batches=await Promise.all(dests.map(function(dest){
+    return askPOISupplement(dest, interests, budgetTier, dietary, groupPrefs).catch(function(){return [];});
+  }));
+  var merged=[];
+  batches.forEach(function(batch){
+    merged=mergePoiListsByCanonical(merged.concat(batch||[]), {});
+  });
   return merged;
 }
 async function askPOI(destinations, interests, budgetTier, dietary, groupPrefs) {
@@ -2941,6 +2944,7 @@ export default function WanderPlan(){
   }
   function runPoiSearchNow(){
     var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    var pendingDestinations=(Array.isArray(wizardPoiDests)?wizardPoiDests.slice():[]).filter(Boolean);
     setPL(true);
     setPS({});
     setPV({});
@@ -2949,8 +2953,34 @@ export default function WanderPlan(){
     setPD(false);
     setPOP({});
     saveTripPlanningState({state:{poi_votes:null,poi_member_choices:null,poi_option_pool:null,poi_request_signature:poiCurrentSignatureGlobal}}).catch(function(){return null;});
-    askComprehensivePOIs(wizardPoiDests,user.interests||{},effectiveTripBudgetTierGlobal,user.dietary,wizardPoiGroupPrefs).then(function(res){
-      var nextRows=Array.isArray(res)?res:[];
+    if(pendingDestinations.length===0){
+      setPL(false);
+      setPD(true);
+      setPoiRequestSignature(poiCurrentSignatureGlobal);
+      return;
+    }
+    var mergedRows=[];
+    function appendRows(rows){
+      mergedRows=mergePoiListsByCanonical(mergedRows.concat(Array.isArray(rows)?rows:[]), {});
+      if(mergedRows.length>0){
+        var partialPool=buildPoiOptionPoolPatch(mergedRows,{});
+        setPois(mergedRows);
+        setPOP(partialPool);
+        setPD(true);
+      }
+    }
+    Promise.all(pendingDestinations.map(function(dest){
+      return askPOISupplement(dest,user.interests||{},effectiveTripBudgetTierGlobal,user.dietary,wizardPoiGroupPrefs).then(function(rows){
+        appendRows(rows);
+        return rows;
+      }).catch(function(){
+        return [];
+      });
+    })).then(function(batches){
+      var nextRows=[];
+      batches.forEach(function(batch){
+        nextRows=mergePoiListsByCanonical(nextRows.concat(batch||[]), {});
+      });
       var nextPool=buildPoiOptionPoolPatch(nextRows,{});
       syncTripPoisToBackend({},nextRows).then(function(syncRes){
         var syncedRows=mapBackendPois((syncRes&&syncRes.pois)||[]);
