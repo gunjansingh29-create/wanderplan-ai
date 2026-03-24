@@ -14,6 +14,7 @@ import {
   buildItinerarySavePayload,
   buildPOIGroupPrefsFromCrew,
   buildPoiRequestSignature,
+  buildRoutePlanSignature,
   classifyPoiFailureReason,
   chooseBestItineraryRows,
   buildTripShareLink,
@@ -49,10 +50,12 @@ import {
   normalizeDestinationVoteState,
   normalizeDiningPlan,
   normalizePoiStateMap,
+  normalizeRoutePlan,
   normalizeStays,
   normalizePersonalBucketItems,
   normalizeTripDestinationValue,
   normalizeWizardStepIndex,
+  orderDestinationsByRoutePlan,
   POI_LLM_TIMEOUT_MS,
   poiListNeedsRefresh,
   readDestinationVoteRow,
@@ -68,6 +71,7 @@ import {
   resolveTripBudgetTier,
   resolveWizardTripId,
   roundTripFlightRoutePlan,
+  routePlanDurationMap,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
   sanitizeFlightDatesForTrip,
@@ -371,21 +375,21 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(rows.some((row) => /Food|Market|Cuisine|Dinner/i.test(row.name))).toBe(true);
   });
 
-  test("shouldAutoGeneratePois only triggers for empty step 5 wizard state", () => {
+  test("shouldAutoGeneratePois only triggers for empty step 6 wizard state", () => {
     expect(
-      shouldAutoGeneratePois("wizard", 5, [], false, false, false, [{ name: "Kyoto" }])
+      shouldAutoGeneratePois("wizard", 6, [], false, false, false, [{ name: "Kyoto" }])
     ).toBe(true);
     expect(
-      shouldAutoGeneratePois("wizard", 5, [{ name: "Fushimi Inari" }], false, false, false, [{ name: "Kyoto" }])
+      shouldAutoGeneratePois("wizard", 6, [{ name: "Fushimi Inari" }], false, false, false, [{ name: "Kyoto" }])
     ).toBe(false);
     expect(
-      shouldAutoGeneratePois("wizard", 5, [], false, true, false, [{ name: "Kyoto" }])
+      shouldAutoGeneratePois("wizard", 6, [], false, true, false, [{ name: "Kyoto" }])
     ).toBe(false);
     expect(
-      shouldAutoGeneratePois("wizard", 5, [], false, false, true, [{ name: "Kyoto" }])
+      shouldAutoGeneratePois("wizard", 6, [], false, false, true, [{ name: "Kyoto" }])
     ).toBe(false);
     expect(
-      shouldAutoGeneratePois("wizard", 5, [], true, false, false, [{ name: "Kyoto" }])
+      shouldAutoGeneratePois("wizard", 6, [], true, false, false, [{ name: "Kyoto" }])
     ).toBe(true);
   });
 
@@ -401,7 +405,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(wizardSyncIntervalMs(3)).toBe(1200);
     expect(wizardSyncIntervalMs(5)).toBe(1200);
     expect(wizardSyncIntervalMs(6)).toBe(1200);
-    expect(wizardSyncIntervalMs(9)).toBe(1200);
+    expect(wizardSyncIntervalMs(9)).toBe(3000);
     expect(wizardSyncIntervalMs(10)).toBe(1200);
     expect(wizardSyncIntervalMs(11)).toBe(1200);
     expect(wizardSyncIntervalMs(12)).toBe(1200);
@@ -721,11 +725,64 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
   });
 
   test("normalizeWizardStepIndex migrates legacy post-duration steps to the new order", () => {
-    expect(normalizeWizardStepIndex(9, 0)).toBe(12);
-    expect(normalizeWizardStepIndex(10, 0)).toBe(13);
-    expect(normalizeWizardStepIndex(11, 0)).toBe(9);
-    expect(normalizeWizardStepIndex(13, 0)).toBe(11);
-    expect(normalizeWizardStepIndex(11, 2)).toBe(11);
+    expect(normalizeWizardStepIndex(9, 0)).toBe(13);
+    expect(normalizeWizardStepIndex(10, 0)).toBe(14);
+    expect(normalizeWizardStepIndex(11, 0)).toBe(10);
+    expect(normalizeWizardStepIndex(13, 0)).toBe(12);
+    expect(normalizeWizardStepIndex(11, 2)).toBe(12);
+  });
+
+  test("route planner helpers normalize, order, and map durations from route output", () => {
+    const signature = buildRoutePlanSignature(
+      [{ name: "Kedarnath", country: "India" }, { name: "Somnath", country: "India" }],
+      { culture: true },
+      "moderate",
+      ["Vegetarian"],
+      ["spiritual"],
+      { extraYes: ["temples"], extraNo: [], dietary: [], memberSummaries: ["Crew: likes temples"] }
+    );
+
+    expect(signature).toContain("kedarnath");
+    expect(signature).toContain("temples");
+
+    const plan = normalizeRoutePlan(
+      {
+        startingCity: "Delhi",
+        endingCity: "Ahmedabad",
+        summary: "North to west pilgrimage sweep.",
+        totalDays: 6,
+        phases: [{ title: "Phase 1", route: ["Kedarnath", "Somnath"], days: 6, notes: "Minimize backtracking" }],
+        destinations: [
+          {
+            destination: "Kedarnath",
+            days: 2,
+            nearbySites: ["Triyuginarayan Temple"],
+            reason: "High-altitude darshan first",
+            bestTime: "Morning",
+            travelNote: "Road plus trek"
+          },
+          {
+            destination: "Somnath",
+            days: 4,
+            nearbySites: ["Bhalka Tirth"],
+            reason: "West coast finish",
+            bestTime: "Evening aarti",
+            travelNote: "Rail or flight connection"
+          }
+        ]
+      },
+      [{ name: "Kedarnath", country: "India" }, { name: "Somnath", country: "India" }]
+    );
+
+    expect(orderDestinationsByRoutePlan(
+      [{ name: "Somnath" }, { name: "Kedarnath" }],
+      plan
+    ).map((d) => d.name)).toEqual(["Kedarnath", "Somnath"]);
+
+    expect(routePlanDurationMap(plan)).toEqual({
+      Kedarnath: 2,
+      Somnath: 4,
+    });
   });
 
   test("estimateTransitMinutes and buildTransitItem provide a practical travel leg", () => {

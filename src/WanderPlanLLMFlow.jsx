@@ -7,8 +7,8 @@ var MOFUL=["January","February","March","April","May","June","July","August","Se
 var CATS=[{id:"hiking",q:"Hiking & nature?"},{id:"food",q:"Food & cooking?"},{id:"culture",q:"Temples & history?"},{id:"photo",q:"Photography?"},{id:"adventure",q:"Water sports?"},{id:"nightlife",q:"Nightlife?"},{id:"shopping",q:"Markets & shopping?"},{id:"wellness",q:"Spa & wellness?"}];
 var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-range",r:"$120-250/day"},{id:"premium",l:"Premium",r:"$250-400/day"},{id:"luxury",l:"Luxury",r:"$400+/day"}];
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
-var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
-var WIZARD_ORDER_VERSION=2;
+var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Route Planner","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
+var WIZARD_ORDER_VERSION=3;
 var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" | "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
 var BUILD_STAMP_DETAIL=String(BUILD_INFO&&BUILD_INFO.builtAt||"unknown");
 
@@ -680,19 +680,21 @@ function buildCurrentVoteActor(token,userState,tripId){
 
 function wizardSyncIntervalMs(stepNum){
   var step=Number(stepNum||0);
-  if(step===1||step===2||step===3||step===5||step===6||step===9||step===10||step===11||step===12||step===13)return 1200;
+  if(step===1||step===2||step===3||step===5||step===6||step===7||step===10||step===11||step===12||step===13||step===14)return 1200;
   return 3000;
 }
 
 function normalizeWizardStepIndex(stepNum, orderVersion){
   var step=Math.min(Math.max(0,Number(stepNum)||0),Math.max(WIZ.length-1,0));
   var version=Math.max(0,Number(orderVersion)||0);
-  if(version>=WIZARD_ORDER_VERSION)return step;
-  if(step===9)return 12;
-  if(step===10)return 13;
-  if(step===11)return 9;
-  if(step===12)return 10;
-  if(step===13)return 11;
+  if(version<2){
+    if(step===9)step=12;
+    else if(step===10)step=13;
+    else if(step===11)step=9;
+    else if(step===12)step=10;
+    else if(step===13)step=11;
+  }
+  if(version<3&&step>=5)step+=1;
   return step;
 }
 
@@ -1249,6 +1251,224 @@ async function callLLM(sysPrompt, userMsg, maxTok) {
   }
 }
 
+function buildRoutePlanSignature(destinations, interests, budgetTier, dietary, styles, groupPrefs){
+  var rows=(Array.isArray(destinations)?destinations:[]).map(function(dest){
+    return {
+      name:canonicalTripDestinationName(dest&&dest.name||dest||""),
+      country:canonicalTripDestinationName(dest&&dest.country||"")
+    };
+  }).filter(function(row){return row.name;});
+  var yes=[],no=[];
+  var src=(interests&&typeof interests==="object")?interests:{};
+  Object.keys(src).sort().forEach(function(key){
+    if(src[key]===true)yes.push(key);
+    else if(src[key]===false)no.push(key);
+  });
+  return JSON.stringify({
+    destinations:rows,
+    yes:yes,
+    no:no,
+    budget:String(budgetTier||"moderate").trim().toLowerCase(),
+    dietary:(Array.isArray(dietary)?dietary:[]).map(function(item){return String(item||"").trim().toLowerCase();}).filter(Boolean).sort(),
+    styles:(Array.isArray(styles)?styles:[]).map(function(item){return String(item||"").trim().toLowerCase();}).filter(Boolean).sort(),
+    crew:Array.isArray(groupPrefs&&groupPrefs.memberSummaries)?groupPrefs.memberSummaries.slice().sort():[]
+  });
+}
+
+function normalizeRoutePlan(parsed, destinations){
+  if(!parsed||typeof parsed!=="object")return null;
+  var requested=(Array.isArray(destinations)?destinations:[]).map(function(dest){
+    return {
+      name:String(dest&&dest.name||dest||"").trim(),
+      country:String(dest&&dest.country||"").trim()
+    };
+  }).filter(function(dest){return dest.name;});
+  if(requested.length===0)return null;
+  var requestedByKey={};
+  requested.forEach(function(dest){
+    requestedByKey[canonicalTripDestinationName(dest.name)]=dest;
+  });
+  function normalizeStops(items){
+    return (Array.isArray(items)?items:[]).map(function(item){
+      if(!item||typeof item!=="object")return null;
+      var rawName=String(item.destination||item.name||item.stop||"").trim();
+      var key=canonicalTripDestinationName(rawName);
+      var requestedMatch=key&&requestedByKey[key]?requestedByKey[key]:null;
+      var name=requestedMatch?requestedMatch.name:rawName;
+      if(!name)return null;
+      var nearbyRaw=item.nearbySites||item.nearby_sites||item.nearbyTemples||item.nearby_temples||item.nearby||item.related_sites||[];
+      return {
+        destination:name,
+        country:requestedMatch&&requestedMatch.country||String(item.country||"").trim(),
+        days:Math.max(1,Number(item.days||item.nights||item.duration_days||1)||1),
+        nearbySites:(Array.isArray(nearbyRaw)?nearbyRaw:[]).map(function(site){return String(site||"").trim();}).filter(Boolean).slice(0,6),
+        reason:String(item.reason||item.why||item.summary||item.notes||"").trim(),
+        bestTime:String(item.bestTime||item.best_time||item.visit_window||"").trim(),
+        travelNote:String(item.travelNote||item.travel_note||item.logistics||"").trim()
+      };
+    }).filter(Boolean);
+  }
+  var normalizedStops=normalizeStops(parsed.destinations||parsed.stops||parsed.route||[]);
+  if(normalizedStops.length===0){
+    normalizedStops=requested.map(function(dest){
+      return {destination:dest.name,country:dest.country,days:1,nearbySites:[],reason:"",bestTime:"",travelNote:""};
+    });
+  }
+  var seen={};
+  normalizedStops=normalizedStops.filter(function(stop){
+    var key=canonicalTripDestinationName(stop.destination);
+    if(!key||seen[key])return false;
+    seen[key]=1;
+    return true;
+  });
+  requested.forEach(function(dest){
+    var key=canonicalTripDestinationName(dest.name);
+    if(key&&!seen[key]){
+      normalizedStops.push({destination:dest.name,country:dest.country,days:1,nearbySites:[],reason:"",bestTime:"",travelNote:""});
+      seen[key]=1;
+    }
+  });
+  var phases=(Array.isArray(parsed.phases)?parsed.phases:[]).map(function(phase,idx){
+    var route=Array.isArray(phase&&phase.route)?phase.route.map(function(stop){return String(stop||"").trim();}).filter(Boolean):[];
+    return {
+      title:String(phase&&phase.title||("Phase "+(idx+1))).trim()||("Phase "+(idx+1)),
+      route:route,
+      days:Math.max(1,Number(phase&&phase.days||route.length||1)||1),
+      notes:String(phase&&phase.notes||phase&&phase.summary||"").trim()
+    };
+  }).filter(function(phase){return phase.route.length>0||phase.notes;});
+  var totalDays=Math.max(
+    1,
+    Number(parsed.totalDays||parsed.total_days||0)||0,
+    normalizedStops.reduce(function(sum,stop){return sum+Math.max(1,Number(stop.days)||1);},0)
+  );
+  return {
+    startingCity:String(parsed.startingCity||parsed.start_city||parsed.origin||"").trim(),
+    endingCity:String(parsed.endingCity||parsed.end_city||parsed.returnCity||"").trim(),
+    summary:String(parsed.summary||parsed.routeSummary||parsed.route_summary||"").trim(),
+    totalDays:totalDays,
+    phases:phases,
+    destinations:normalizedStops,
+    seasonNotes:(Array.isArray(parsed.seasonNotes||parsed.season_notes)?(parsed.seasonNotes||parsed.season_notes):[]).map(function(note){return String(note||"").trim();}).filter(Boolean).slice(0,6),
+    bookingNotes:(Array.isArray(parsed.bookingNotes||parsed.booking_notes)?(parsed.bookingNotes||parsed.booking_notes):[]).map(function(note){return String(note||"").trim();}).filter(Boolean).slice(0,6),
+    packingNotes:(Array.isArray(parsed.packingNotes||parsed.packing_notes)?(parsed.packingNotes||parsed.packing_notes):[]).map(function(note){return String(note||"").trim();}).filter(Boolean).slice(0,6)
+  };
+}
+
+function orderDestinationsByRoutePlan(destinations, routePlan){
+  var list=Array.isArray(destinations)?destinations:[];
+  var orderedStops=Array.isArray(routePlan&&routePlan.destinations)?routePlan.destinations:[];
+  if(list.length===0||orderedStops.length===0)return list;
+  var order={};
+  orderedStops.forEach(function(stop,idx){
+    var key=canonicalTripDestinationName(stop&&stop.destination||stop&&stop.name||"");
+    if(key&&order[key]===undefined)order[key]=idx;
+  });
+  return list.slice().sort(function(a,b){
+    var ak=canonicalTripDestinationName(a&&a.name||a||"");
+    var bk=canonicalTripDestinationName(b&&b.name||b||"");
+    var ai=order[ak];
+    var bi=order[bk];
+    if(ai===undefined&&bi===undefined)return 0;
+    if(ai===undefined)return 1;
+    if(bi===undefined)return -1;
+    return ai-bi;
+  });
+}
+
+function routePlanDurationMap(routePlan){
+  var out={};
+  (Array.isArray(routePlan&&routePlan.destinations)?routePlan.destinations:[]).forEach(function(stop){
+    var name=String(stop&&stop.destination||"").trim();
+    if(!name)return;
+    var days=Math.max(1,Number(stop&&stop.days||1)||1);
+    out[name]=days;
+  });
+  return out;
+}
+
+async function askRoutePlan(destinations, interests, budgetTier, dietary, styles, groupPrefs){
+  var destList=(Array.isArray(destinations)?destinations:[]).map(function(dest){
+    var name=String(dest&&dest.name||dest||"").trim();
+    var country=String(dest&&dest.country||"").trim();
+    return country?(name+", "+country):name;
+  }).filter(Boolean);
+  if(destList.length===0)return null;
+  var yes=[],no=[];
+  var src=(interests&&typeof interests==="object")?interests:{};
+  Object.keys(src).sort().forEach(function(key){
+    if(src[key]===true)yes.push(key);
+    else if(src[key]===false)no.push(key);
+  });
+  if(groupPrefs&&Array.isArray(groupPrefs.extraYes)){
+    groupPrefs.extraYes.forEach(function(key){
+      var next=String(key||"").trim();
+      if(next&&yes.indexOf(next)<0)yes.push(next);
+    });
+  }
+  if(groupPrefs&&Array.isArray(groupPrefs.extraNo)){
+    groupPrefs.extraNo.forEach(function(key){
+      var next=String(key||"").trim();
+      if(next&&no.indexOf(next)<0)no.push(next);
+    });
+  }
+  var styleText=(Array.isArray(styles)?styles:[]).map(function(style){return String(style||"").trim();}).filter(Boolean).join(", ")||"mixed traveler";
+  var dietaryText=(Array.isArray(dietary)?dietary:[]).map(function(item){return String(item||"").trim();}).filter(Boolean).join(", ")||"none";
+  var crewSummary=(groupPrefs&&Array.isArray(groupPrefs.memberSummaries)&&groupPrefs.memberSummaries.length)
+    ? groupPrefs.memberSummaries.join(" | ")
+    : "none provided";
+  var focusText=yes.length?yes.join(", "):"culture, spiritual history, local experiences";
+  var avoidText=no.length?no.join(", "):"none";
+  var sys=`You are WanderPlan Route Planner. Build a realistic route-first travel plan for this trip.
+
+Return ONLY a JSON object with this exact shape:
+{
+  "startingCity":"Best starting city",
+  "endingCity":"Best ending city",
+  "summary":"2-3 sentence route summary",
+  "totalDays":24,
+  "phases":[
+    {"title":"North India phase","route":["Delhi","Kedarnath","Varanasi"],"days":6,"notes":"Why this grouping works"}
+  ],
+  "destinations":[
+    {
+      "destination":"Kedarnath",
+      "days":2,
+      "nearbySites":["Triyuginarayan Temple","Guptkashi"],
+      "reason":"Why this stop matters in the route",
+      "bestTime":"Morning darshan; altitude travel buffer",
+      "travelNote":"Road + trek or helicopter logistics"
+    }
+  ],
+  "seasonNotes":["October to March is easiest for most stops"],
+  "bookingNotes":["Book high-demand temple rituals or helicopter slots early"],
+  "packingNotes":["Carry modest temple clothing and layers for high altitude"]
+}
+
+Trip destinations: ${destList.join(" | ")}
+Travel style: ${styleText}
+Budget tier: ${String(budgetTier||"moderate").trim().toLowerCase()}
+Dietary: ${dietaryText}
+Prioritize traveler interests: ${focusText}
+Avoid emphasizing: ${avoidText}
+Crew context: ${crewSummary}
+
+Rules:
+- The route planner should do most of the work, not just list POIs
+- Use every listed destination exactly once as a core stop
+- Optimize the route to reduce backtracking
+- Suggest the best starting city and ending city
+- Give each destination a realistic number of days
+- Include important nearby temples, spiritual sites, or major landmarks in nearbySites
+- Keep nearbySites real and recognizable when possible
+- For pilgrimage or theme-heavy trips, lean into the trip theme strongly
+- Keep the output practical for a real traveler
+- Return ONLY JSON object. No markdown.`;
+  var msg="Create a realistic route plan for visiting "+destList.join(", ")+".";
+  var parsed=await callLLM(sys,msg,2200);
+  return normalizeRoutePlan(parsed,destinations);
+}
+
 function extractLlmTextContent(data){
   var txt="";
   if(data&&Array.isArray(data.content)){
@@ -1502,7 +1722,7 @@ function buildPOIGroupPrefsFromCrew(members){
 }
 
 function shouldAutoGeneratePois(sc,wizStep,rows,done,loading,contextStale,destinations){
-  if(sc!=="wizard"||wizStep!==5)return false;
+  if(sc!=="wizard"||wizStep!==6)return false;
   if(loading||contextStale)return false;
   if(!Array.isArray(destinations)||destinations.length===0)return false;
   return !Array.isArray(rows)||rows.length===0;
@@ -2652,6 +2872,11 @@ export default function WanderPlan(){
   var[grpInts,setGI]=useState({});
   var[timingOk,setTO]=useState(false);
   var[healthOk,setHO]=useState(false);
+  var[routePlan,setRoutePlan]=useState(null);
+  var[routePlanLoad,setRPL]=useState(false);
+  var[routePlanDone,setRPD]=useState(false);
+  var[routePlanErr,setRPE]=useState("");
+  var[routePlanSignature,setRPS]=useState("");
   var[pois,setPois]=useState([]);
   var[poiLoad,setPL]=useState(false);
   var[poiDone,setPD]=useState(false);
@@ -2765,6 +2990,12 @@ export default function WanderPlan(){
   }());
   var effectiveTripBudgetTierGlobal=resolveTripBudgetTier(sharedBudgetTier,user.budget);
   var wizardPoiGroupPrefs=buildPOIGroupPrefsFromCrew((newTrip&&newTrip.members)||[]);
+  var routePlanCurrentSignatureGlobal=buildRoutePlanSignature(wizardPoiDests,user.interests||{},effectiveTripBudgetTierGlobal,user.dietary,user.styles||[],wizardPoiGroupPrefs);
+  var routePlanContextStaleGlobal=!!(
+    routePlan&&
+    routePlanSignature&&
+    routePlanSignature!==routePlanCurrentSignatureGlobal
+  );
   var mergedPoiRowsGlobal=mergePoiListsByCanonical(pois,poiOptionPool);
   var poiCurrentSignatureGlobal=buildPoiRequestSignature(wizardPoiDests,user.interests||{},effectiveTripBudgetTierGlobal,user.dietary,wizardPoiGroupPrefs);
   var poiContextStaleGlobal=poiListNeedsRefresh(poiRequestSignature,poiCurrentSignatureGlobal,mergedPoiRowsGlobal,wizardPoiDests);
@@ -3386,7 +3617,7 @@ export default function WanderPlan(){
         var planningTripDays=Math.max(0,Number(st.duration_days_locked!==undefined?st.duration_days_locked:sharedDurationDays)||0);
         setFD(function(prev){
           return sanitizeFlightDatesForTrip(
-            mergeSharedFlightDates(prev,st.flight_dates,wizStep===13),
+              mergeSharedFlightDates(prev,st.flight_dates,wizStep===14),
             planningTripDays
           );
         });
@@ -3410,6 +3641,14 @@ export default function WanderPlan(){
       setDMV(normalizeDestinationVoteState(st.dest_member_votes));
       if(st.poi_request_signature!==undefined){
         setPoiRequestSignature(String(st.poi_request_signature||"").trim());
+      }
+      if(st.route_plan_signature!==undefined){
+        setRPS(String(st.route_plan_signature||"").trim());
+      }
+      if(st.route_plan&&typeof st.route_plan==="object"){
+        var normalizedRoutePlan=normalizeRoutePlan(st.route_plan,wizardPoiDests);
+        setRoutePlan(normalizedRoutePlan);
+        setRPD(!!(normalizedRoutePlan&&Array.isArray(normalizedRoutePlan.destinations)&&normalizedRoutePlan.destinations.length));
       }
       setPV(normalizePoiStateMap(st.poi_votes,pois,st.poi_option_pool));
       if(st.poi_option_pool&&typeof st.poi_option_pool==="object"){
@@ -3482,6 +3721,15 @@ export default function WanderPlan(){
       var state=(r&&r.state&&typeof r.state==="object")?r.state:null;
       if(state){
         if(state.poi_request_signature!==undefined)setPoiRequestSignature(String(state.poi_request_signature||"").trim());
+        if(state.route_plan_signature!==undefined)setRPS(String(state.route_plan_signature||"").trim());
+        if(state.route_plan&&typeof state.route_plan==="object"){
+          var normalizedRouteState=normalizeRoutePlan(state.route_plan,wizardPoiDests);
+          setRoutePlan(normalizedRouteState);
+          setRPD(!!(normalizedRouteState&&Array.isArray(normalizedRouteState.destinations)&&normalizedRouteState.destinations.length));
+        }else if(state.route_plan===null){
+          setRoutePlan(null);
+          setRPD(false);
+        }
         if(state.dest_member_votes&&typeof state.dest_member_votes==="object"){
           setDMV(normalizeDestinationVoteState(state.dest_member_votes));
         }
@@ -3495,7 +3743,7 @@ export default function WanderPlan(){
           var returnedTripDays=Math.max(0,Number(state.duration_days_locked!==undefined?state.duration_days_locked:sharedDurationDays)||0);
           setFD(function(prev){
             return sanitizeFlightDatesForTrip(
-              mergeSharedFlightDates(prev,state.flight_dates,wizStep===13),
+              mergeSharedFlightDates(prev,state.flight_dates,wizStep===14),
               returnedTripDays
             );
           });
@@ -3592,13 +3840,13 @@ export default function WanderPlan(){
       2:"vote_destinations",
       3:"interests",
       4:"health",
-      5:"activities",
-      6:"poi_voting",
-      7:"budget",
-      9:"dates",
-      11:"stays",
-      12:"dining",
-      13:"itinerary"
+      6:"activities",
+      7:"poi_voting",
+      8:"budget",
+      10:"stays",
+      11:"dining",
+      12:"itinerary",
+      13:"dates"
     };
     return map[Number(stepNum)]||"";
   }
@@ -3712,7 +3960,7 @@ export default function WanderPlan(){
   ]);
   useEffect(function(){
     var activeTripId=resolveWizardTripId(currentTripId,newTrip);
-    if(!loaded||!authToken||sc!=="wizard"||wizStep!==12||!activeTripId||!isUuidLike(activeTripId))return;
+    if(!loaded||!authToken||sc!=="wizard"||wizStep!==13||!activeTripId||!isUuidLike(activeTripId))return;
     function run(){
       fetchAvailabilityOverlap(activeTripId,authToken).then(function(res){
         if(!res)return;
@@ -3732,7 +3980,7 @@ export default function WanderPlan(){
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,wizStep,currentTripId,newTrip&&newTrip.id,flightDates.depart,flightDates.ret]);
   useEffect(function(){
-    if(!loaded||sc!=="wizard"||wizStep!==13)return;
+    if(!loaded||sc!=="wizard"||wizStep!==14)return;
     var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")
       ? availabilityData.locked_window
       : ((flightDates.depart&&flightDates.ret)?{start:String(flightDates.depart||"").slice(0,10),end:String(flightDates.ret||"").slice(0,10)}:null);
@@ -4627,7 +4875,7 @@ export default function WanderPlan(){
         destinations:["Tokyo"],
         destNames:"Tokyo",
         members:[],
-        step:8,
+        step:9,
         dates:"Apr 10 - Apr 18",
         days:8,
         budget:3600,
@@ -4646,7 +4894,7 @@ export default function WanderPlan(){
         destinations:["Santorini"],
         destNames:"Santorini",
         members:[],
-        step:14,
+        step:15,
         dates:"Sep 2 - Sep 9",
         days:7,
         budget:2800,
@@ -4783,10 +5031,10 @@ export default function WanderPlan(){
     var companionReady=(comp.is_ready!==false)&&!!(today||currentItem||nextItem||upcoming.length);
     var readinessCopy=companionReadinessCopy(comp.readiness_reason);
       var companionActions=[
-      {label:"Open Flights",step:13,color:C.sky},
-      {label:"Open Stays",step:9,color:C.goldT},
-      {label:"Open Dining",step:10,color:C.coral},
-      {label:"Open Itinerary",step:11,color:C.tealL}
+      {label:"Open Flights",step:14,color:C.sky},
+      {label:"Open Stays",step:10,color:C.goldT},
+      {label:"Open Dining",step:11,color:C.coral},
+      {label:"Open Itinerary",step:12,color:C.tealL}
       ];
     function openCompanionWizardStep(stepIndex){
       var tid=String((tr&&tr.id)||currentTripId||"").trim();
@@ -5075,8 +5323,8 @@ export default function WanderPlan(){
         <h2 style={{fontSize:22,fontWeight:700,marginBottom:8}}>{readinessCopy.title}</h2>
         <p style={{fontSize:14,color:C.tx2,marginBottom:14}}>{readinessCopy.body}</p>
         <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          <button onClick={function(){openCompanionWizardStep(11);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.tealL+"35",background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Itinerary</button>
-          <button onClick={function(){openCompanionWizardStep(12);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.goldT+"35",background:C.goldDim,color:C.goldT,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Availability</button>
+          <button onClick={function(){openCompanionWizardStep(12);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.tealL+"35",background:C.teal+"12",color:C.tealL,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Itinerary</button>
+          <button onClick={function(){openCompanionWizardStep(13);}} style={{padding:"11px 14px",borderRadius:10,border:"1px solid "+C.goldT+"35",background:C.goldDim,color:C.goldT,fontSize:12,fontWeight:700,cursor:"pointer"}}>Open Availability</button>
         </div>
       </div></Fade>)}
       {!companionLoad&&(currentItem||nextItem)&&(<Fade delay={130}><div style={{background:C.surface,borderRadius:16,padding:"22px",border:"1px solid "+C.border,marginBottom:14}}>
@@ -5766,7 +6014,14 @@ export default function WanderPlan(){
     }
     var vd=td.filter(function(d){var s=getDestVoteSummary(d);return s.majorityWin;});
     var allDestinationsVoted=td.length>0&&td.every(function(d){return getDestVoteSummary(d).allVoted;});
-    var dests=vd.length>0?vd:td;
+    var rawDests=vd.length>0?vd:td;
+    var routePlanCurrentSignature=buildRoutePlanSignature(rawDests,user.interests||{},resolveTripBudgetTier(sharedBudgetTier,user.budget),user.dietary,user.styles||[],wizardPoiGroupPrefs);
+    var routePlanContextStale=!!(
+      routePlan&&
+      routePlanSignature&&
+      routePlanSignature!==routePlanCurrentSignature
+    );
+    var dests=routePlanContextStale?rawDests:orderDestinationsByRoutePlan(rawDests,routePlan);
 
     function logWizAction(action,payload){
       if(authToken&&wizSessionId){
@@ -6154,6 +6409,51 @@ export default function WanderPlan(){
         setItinErr("Trip confirmation requires a saved trip.");
       }
     }
+    function applyRoutePlanDurations(plan){
+      var suggestions=routePlanDurationMap(plan);
+      if(!suggestions||Object.keys(suggestions).length===0)return;
+      setDPD(function(prev){
+        var next=Object.assign({},prev||{});
+        Object.keys(suggestions).forEach(function(name){
+          if(!next[name])next[name]=suggestions[name];
+        });
+        return next;
+      });
+    }
+    function buildRoutePlanThenContinue(shouldAdvance){
+      var activeBudget=resolveTripBudgetTier(sharedBudgetTier,user.budget);
+      var signature=buildRoutePlanSignature(rawDests,user.interests||{},activeBudget,user.dietary,user.styles||[],wizardPoiGroupPrefs);
+      setRPL(true);
+      setRPE("");
+      askRoutePlan(rawDests,user.interests||{},activeBudget,user.dietary,user.styles||[],wizardPoiGroupPrefs).then(function(plan){
+        if(!(plan&&Array.isArray(plan.destinations)&&plan.destinations.length)){
+          setRPL(false);
+          setRPD(false);
+          setRPE("Could not build a route plan yet. Try again in a moment.");
+          return;
+        }
+        setRoutePlan(plan);
+        setRPS(signature);
+        setRPD(true);
+        applyRoutePlanDurations(plan);
+        var nextDurations=routePlanDurationMap(plan);
+        saveTripPlanningState({state:{
+          route_plan:plan,
+          route_plan_signature:signature,
+          duration_per_destination:nextDurations
+        }}).then(function(){
+          setRPL(false);
+          if(shouldAdvance)adv();
+        }).catch(function(){
+          setRPL(false);
+          if(shouldAdvance)adv();
+        });
+      }).catch(function(e){
+        setRPL(false);
+        setRPD(false);
+        setRPE(String(e&&e.message||"Could not build a route plan"));
+      });
+    }
 
     var organizerMode=isWizardOrganizer(tr);
     var hdr=(<div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}><button onClick={function(){if(wizStep>0)setWizardStepShared(wizStep-1);else go("dash");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13}}>Back</button><div style={{flex:1,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:pct+"%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2,transition:"width .5s"}}/></div><span style={{fontSize:11,color:C.tx3}}>{wizStep+1}/{WIZ.length}</span></div>);
@@ -6385,6 +6685,110 @@ export default function WanderPlan(){
     </div>)}
 
     {wizStep===5&&(function(){
+      var activePlan=routePlanContextStale?null:routePlan;
+      var routeStops=Array.isArray(activePlan&&activePlan.destinations)?activePlan.destinations:[];
+      var routePhases=Array.isArray(activePlan&&activePlan.phases)?activePlan.phases:[];
+      var canContinue=routeStops.length>0;
+      return(<div>
+        {ab("Route Planner",activePlan&&activePlan.summary?activePlan.summary:"Let the LLM do the heavy lifting first: choose the best starting city, group your destinations efficiently, add nearby important temples or landmarks, and assign realistic time at each stop.")}
+        <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(2,1fr)",gap:10,marginBottom:12}}>
+          <div style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+            <p style={{fontSize:11,color:C.tx3,marginBottom:4}}>Destinations in scope</p>
+            <p style={{fontSize:13,color:"#fff",fontWeight:600}}>{rawDests.map(function(d){return d.name;}).join(" • ")||"None yet"}</p>
+          </div>
+          <div style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+            <p style={{fontSize:11,color:C.tx3,marginBottom:4}}>Planning focus</p>
+            <p style={{fontSize:13,color:"#fff",fontWeight:600}}>{Object.keys(user.interests||{}).filter(function(k){return user.interests[k]===true;}).join(", ")||"culture, spiritual history, local experiences"}</p>
+          </div>
+        </div>
+        {routePlanContextStale&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.wrnBg,border:"1px solid "+C.wrn+"20"}}>
+          <p style={{fontSize:13,color:C.wrn,fontWeight:600,marginBottom:4}}>Trip context changed</p>
+          <p style={{fontSize:12,color:C.tx2}}>Destinations, budget, or traveler preferences changed. Rebuild the route plan so the downstream itinerary reflects the current trip.</p>
+        </div>)}
+        {routePlanErr&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.redBg,border:"1px solid "+C.red+"20"}}>
+          <p style={{fontSize:13,color:C.red}}>{routePlanErr}</p>
+        </div>)}
+        {routePlanLoad&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+          <p style={{fontSize:13,color:C.tx2}}>Building the route plan across {rawDests.length} destination{rawDests.length===1?"":"s"}...</p>
+        </div>)}
+        {activePlan&&(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(4,1fr)",gap:8}}>
+            {[
+              {l:"Starting city",v:activePlan.startingCity||"Best TBD"},
+              {l:"Ending city",v:activePlan.endingCity||activePlan.startingCity||"Best TBD"},
+              {l:"Trip days",v:String(activePlan.totalDays||routeStops.reduce(function(sum,stop){return sum+(Number(stop.days||1)||1);},0)||rawDests.length)},
+              {l:"Stops",v:String(routeStops.length||rawDests.length)}
+            ].map(function(item){
+              return(<div key={item.l} style={{padding:"10px 12px",borderRadius:10,background:C.bg,border:"1px solid "+C.border}}>
+                <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>{item.l}</p>
+                <p style={{fontSize:13,color:"#fff",fontWeight:700}}>{item.v}</p>
+              </div>);
+            })}
+          </div>
+          {routePhases.length>0&&(<div style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+            <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Route phases</p>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {routePhases.map(function(phase,idx){
+                return(<div key={phase.title+"-"+idx} style={{padding:"10px 12px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:10,marginBottom:4}}>
+                    <p style={{fontSize:13,fontWeight:700,color:"#fff"}}>{phase.title}</p>
+                    <p style={{fontSize:12,color:C.goldT,fontWeight:700}}>{phase.days} day{phase.days===1?"":"s"}</p>
+                  </div>
+                  <p style={{fontSize:12,color:C.tx2,marginBottom:4}}>{phase.route.join(" → ")}</p>
+                  {phase.notes&&<p style={{fontSize:11,color:C.tx3}}>{phase.notes}</p>}
+                </div>);
+              })}
+            </div>
+          </div>)}
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {routeStops.map(function(stop,idx){
+              return(<div key={(stop.destination||"stop")+"-"+idx} style={{padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:10,marginBottom:6,alignItems:"center"}}>
+                  <div>
+                    <p style={{fontSize:14,fontWeight:700,color:"#fff"}}>{idx+1}. {stop.destination}</p>
+                    {stop.country&&<p style={{fontSize:11,color:C.tx3}}>{stop.country}</p>}
+                  </div>
+                  <span style={{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,background:C.teal+"15",color:C.tealL}}>{stop.days} day{stop.days===1?"":"s"}</span>
+                </div>
+                {stop.reason&&<p style={{fontSize:12,color:C.tx2,marginBottom:6}}>{stop.reason}</p>}
+                {(stop.bestTime||stop.travelNote)&&(
+                  <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(2,1fr)",gap:8,marginBottom:6}}>
+                    {stop.bestTime&&<div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}><p style={{fontSize:10,color:C.tx3,marginBottom:3}}>Best time</p><p style={{fontSize:11,color:C.tx2}}>{stop.bestTime}</p></div>}
+                    {stop.travelNote&&<div style={{padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}><p style={{fontSize:10,color:C.tx3,marginBottom:3}}>Travel note</p><p style={{fontSize:11,color:C.tx2}}>{stop.travelNote}</p></div>}
+                  </div>
+                )}
+                {Array.isArray(stop.nearbySites)&&stop.nearbySites.length>0&&(<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  {stop.nearbySites.map(function(site){return <span key={site} style={{fontSize:11,padding:"4px 8px",borderRadius:999,background:C.goldDim,color:C.goldT,border:"1px solid "+C.goldT+"20"}}>{site}</span>;})}
+                </div>)}
+              </div>);
+            })}
+          </div>
+          {(activePlan.seasonNotes&&activePlan.seasonNotes.length>0||activePlan.bookingNotes&&activePlan.bookingNotes.length>0||activePlan.packingNotes&&activePlan.packingNotes.length>0)&&(
+            <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:8}}>
+              {[["Season notes",activePlan.seasonNotes],["Booking notes",activePlan.bookingNotes],["Packing notes",activePlan.packingNotes]].map(function(entry){
+                var label=entry[0],items=entry[1];
+                if(!Array.isArray(items)||items.length===0)return null;
+                return(<div key={label} style={{padding:"10px 12px",borderRadius:10,background:C.bg,border:"1px solid "+C.border}}>
+                  <p style={{fontSize:11,fontWeight:700,color:C.goldT,marginBottom:6}}>{label}</p>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {items.map(function(item,idx){return <p key={label+"-"+idx} style={{fontSize:11,color:C.tx2}}>{item}</p>;})}
+                  </div>
+                </div>);
+              })}
+            </div>
+          )}
+        </div>)}
+        <div style={{display:"flex",gap:10,marginTop:16,flexWrap:"wrap"}}>
+          <button onClick={function(){buildRoutePlanThenContinue(false);}} disabled={routePlanLoad||rawDests.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.teal+"35",background:(routePlanLoad||rawDests.length===0)?C.border:C.teal+"12",color:(routePlanLoad||rawDests.length===0)?C.tx3:C.tealL,fontSize:14,fontWeight:700,cursor:(routePlanLoad||rawDests.length===0)?"default":"pointer",minHeight:46}}>
+            {routePlanLoad?"Planning route...":(activePlan?"Refresh Route Plan":"Build Route Plan")}
+          </button>
+          {canContinue&&<button onClick={function(){adv();}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",minHeight:46}}>Use Route Plan & Continue</button>}
+          {!canContinue&&!routePlanLoad&&<button onClick={function(){buildRoutePlanThenContinue(true);}} disabled={rawDests.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:rawDests.length===0?C.border:C.gold,color:rawDests.length===0?C.tx3:C.bg,fontSize:14,fontWeight:700,cursor:rawDests.length===0?"default":"pointer",minHeight:46}}>Build Route Plan & Continue</button>}
+        </div>
+      </div>);
+    }())}
+
+    {wizStep===6&&(function(){
       var poiRows=mergePoiListsByCanonical(pois,poiOptionPool);
       function hasAnyCrewYesForIdx(idx){
         var rowMeta=readPoiSelectionRow(poiMemberChoices,poiRows[idx],idx);
@@ -6614,7 +7018,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       </div>);
     }())}
 
-    {wizStep===6&&(function(){
+    {wizStep===7&&(function(){
       var poiRows=mergePoiListsByCanonical(pois,poiOptionPool);
       var voteMembers=[{
         id:currentPlannerId,
@@ -6782,7 +7186,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       </div>);
     }())}
 
-    {wizStep===7&&(<div>
+    {wizStep===8&&(<div>
       {(function(){
         var joinedMembers=tm.filter(function(m){
           var st=mapTripMemberStatus(m&&(m.trip_status||m.status));
@@ -6845,7 +7249,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       {budgetSaveErr&&<p style={{fontSize:12,color:C.red,marginTop:8}}>{budgetSaveErr}</p>}
     </div>)}
 
-    {wizStep===8&&(function(){
+    {wizStep===9&&(function(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var poisByDest={};accPois.forEach(function(p){var d=p.destination||"Other";if(!poisByDest[d])poisByDest[d]=[];poisByDest[d].push(p);});
       var destNames=Object.keys(poisByDest);if(destNames.length===0)dests.forEach(function(d){destNames.push(d.name);poisByDest[d.name]=[];});
@@ -6918,14 +7322,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",color:C.tx3,fontSize:13}}><span>Buffer / rest</span><span>1d</span></div>
         <div style={{display:"flex",justifyContent:"space-between",padding:"14px 0 0",borderTop:"2px solid "+C.gold+"20",marginTop:6}}><span style={{fontWeight:700,fontSize:18,color:C.goldT}}>Total</span><span style={{fontWeight:700,fontSize:18,color:C.goldT}}>{totalCalc} days</span></div>
         {(flightDates.depart||flightDates.ret)&&<div style={{marginTop:10,padding:"10px 14px",borderRadius:10,background:C.teal+"08",border:"1px solid "+C.teal+"15"}}><p style={{fontSize:12,color:C.tealL}}>Exact travel dates captured: {String(flightDates.depart||"").slice(0,10)||"--"} to {String(flightDates.ret||"").slice(0,10)||"--"}. Later steps can refresh these once the itinerary and exact crew availability are locked.</p></div>}
-        {tooLong&&(<div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:C.wrnBg,border:"1px solid "+C.wrn+"20"}}><p style={{fontSize:13,color:C.wrn,fontWeight:600}}>This trip is {totalCalc} days. Consider reducing days per destination above, or go back to Activities to trim some.</p><button onClick={function(){setWizardStepShared(5);}} style={{marginTop:8,padding:"8px 16px",borderRadius:8,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
+        {tooLong&&(<div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:C.wrnBg,border:"1px solid "+C.wrn+"20"}}><p style={{fontSize:13,color:C.wrn,fontWeight:600}}>This trip is {totalCalc} days. Consider reducing days per destination above, or go back to Activities to trim some.</p><button onClick={function(){setWizardStepShared(6);}} style={{marginTop:8,padding:"8px 16px",borderRadius:8,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
         {!feasible&&(<div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:C.redBg,border:"1px solid "+C.red+"20"}}><p style={{fontSize:13,color:C.red}}>Over 21 days may not be feasible. Reduce time per destination or remove activities.</p></div>)}
         {feasible&&!tooLong&&<button onClick={approveDurationAndContinue} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{"Approve "+totalCalc+" days"}</button>}
         {feasible&&tooLong&&<button onClick={approveDurationAndContinue} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{"Accept "+totalCalc+" days anyway"}</button>}
       </div>);
     }())}
 
-    {wizStep===12&&(function(){
+    {wizStep===13&&(function(){
       var requiredTripDays=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays(flightDates.depart,flightDates.ret)||Number(tr.days)||10);
       var myUserId=String(userIdFromToken(authToken)||"").trim();
       var overlapData=sanitizeAvailabilityOverlapData((availabilityData&&typeof availabilityData==="object")?availabilityData:{},requiredTripDays);
@@ -7059,7 +7463,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       </div>);
     }())}
 
-    {wizStep===13&&(function(){
+    {wizStep===14&&(function(){
       var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
       var routePlan=normalizedFlightRoutePlan();
       var displayedRoutePlan=displayedRoundTripRoutePlan(routePlan);
@@ -7197,7 +7601,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       </div>);
     }())}
 
-    {wizStep===9&&(function(){
+    {wizStep===10&&(function(){
       var grpSize=(jc||0)+1;
       var totalN=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays((availabilityData&&availabilityData.locked_window||{}).start,(availabilityData&&availabilityData.locked_window||{}).end)||10);
       var voteMembers=[{
@@ -7553,7 +7957,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       </div>);
     }())}
 
-    {wizStep===10&&(function(){
+    {wizStep===11&&(function(){
       var grpSize=(jc||0)+1;var dietStr=(user.dietary||[]).join(", ")||"none";
       var totalDays=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays((availabilityData&&availabilityData.locked_window||{}).start,(availabilityData&&availabilityData.locked_window||{}).end)||10);
       var voteMembers=[{
@@ -7829,7 +8233,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       </div>);
     }())}
 
-    {wizStep===11&&(function(){
+    {wizStep===12&&(function(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var grpSize=(jc||0)+1;
       var totalDays=0;dests.forEach(function(d){var dd=durPerDest[d.name];totalDays+=dd!==undefined?dd:2;});totalDays=Math.max(totalDays+Math.max(0,dests.length-1)+1,3);
@@ -7929,11 +8333,11 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           </div>
           <button onClick={saveItineraryThenAdvance} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{itinLoad?"Saving...":"Lock Itinerary & Continue"}</button>
         </div>)}
-        {itinDone&&itin.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"20px 0"}}>Could not build itinerary. You may need more activities or meals approved.</p><button onClick={function(){setWizardStepShared(5);}} style={{padding:"10px 18px",borderRadius:10,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
+        {itinDone&&itin.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"20px 0"}}>Could not build itinerary. You may need more activities or meals approved.</p><button onClick={function(){setWizardStepShared(6);}} style={{padding:"10px 18px",borderRadius:10,border:"1px solid "+C.wrn+"30",background:"transparent",color:C.wrn,fontSize:13,fontWeight:600,cursor:"pointer"}}>Back to Activities</button></div>)}
       </div>);
     }())}
 
-    {wizStep===14&&(function(){
+    {wizStep===15&&(function(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var grpSize=(jc||0)+1;
       var pStays=[];Object.keys(stayPick).forEach(function(dn){var grp=(function(){var g={};stays.forEach(function(s){var d=s.destination||"Other";if(!g[d])g[d]=[];g[d].push(s);});return g;})();if(grp[dn]&&grp[dn][stayPick[dn]])pStays.push(grp[dn][stayPick[dn]]);});
@@ -7991,4 +8395,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
