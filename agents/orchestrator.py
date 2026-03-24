@@ -2011,6 +2011,14 @@ def _anthropic_messages_proxy(body: LLMMessageRequest) -> dict[str, Any]:
     if not api_key:
         raise HTTPException(status_code=503, detail="LLM is not configured: ANTHROPIC_API_KEY missing")
 
+    timeout_seconds = max(
+        10,
+        min(
+            int(os.getenv("ANTHROPIC_HTTP_TIMEOUT_SECONDS", "60") or 60),
+            180,
+        ),
+    )
+
     model = (
         (body.model or "").strip()
         or os.getenv("ANTHROPIC_MODEL", "").strip()
