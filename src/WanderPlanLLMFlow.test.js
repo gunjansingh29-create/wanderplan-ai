@@ -189,6 +189,26 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ).toBe(false);
   });
 
+  test("poiListNeedsRefresh stays false when every destination already has enough POIs", () => {
+    const rows = [
+      { name: "Kiyomizu-dera", destination: "Kyoto" },
+      { name: "Nishiki Market", destination: "Kyoto" },
+      { name: "Gion Evening Walk", destination: "Kyoto" },
+      { name: "Arashiyama Bamboo Grove", destination: "Kyoto" },
+      { name: "Dotonbori", destination: "Osaka" },
+      { name: "Osaka Castle", destination: "Osaka" },
+      { name: "Shinsekai Food Crawl", destination: "Osaka" },
+      { name: "Umeda Sky Building", destination: "Osaka" },
+    ];
+
+    expect(
+      poiListNeedsRefresh("sig-a", "sig-b", rows, [
+        { name: "Kyoto" },
+        { name: "Osaka" },
+      ])
+    ).toBe(false);
+  });
+
   test("destinationsNeedingPoiCoverage flags newly added or under-covered destinations", () => {
     const rows = [
       { name: "Fushimi Inari Shrine", destination: "Kyoto" },

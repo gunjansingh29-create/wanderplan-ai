@@ -1350,6 +1350,11 @@ function buildPoiRequestSignature(destinations, interests, budgetTier, dietary, 
 function poiListNeedsRefresh(savedSignature, currentSignature, rows, destinations){
   var list=Array.isArray(rows)?rows:[];
   if(list.length===0)return false;
+  var destCount=(Array.isArray(destinations)?destinations:[]).length;
+  var minPerDestination=destCount<=2?4:(destCount<=6?3:2);
+  if(destinationsNeedingPoiCoverage(list,destinations,minPerDestination).length===0){
+    return false;
+  }
   var saved=String(savedSignature||"").trim();
   var current=String(currentSignature||"").trim();
   if(saved&&current&&saved!==current)return true;
