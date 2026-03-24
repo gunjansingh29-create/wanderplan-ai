@@ -65,6 +65,7 @@ import {
   sanitizeAvailabilityWindow,
   sanitizeFlightDatesForTrip,
   shouldAutoGeneratePois,
+  shouldSkipPoiAutoGenerate,
   shouldResetTravelPlanForDurationChange,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
@@ -304,6 +305,12 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(
       shouldAutoGeneratePois("wizard", 5, [], true, false, false, [{ name: "Kyoto" }])
     ).toBe(true);
+  });
+
+  test("shouldSkipPoiAutoGenerate only skips when a prior auto-run already has rows", () => {
+    expect(shouldSkipPoiAutoGenerate(true, [{ name: "Fushimi Inari" }])).toBe(true);
+    expect(shouldSkipPoiAutoGenerate(true, [])).toBe(false);
+    expect(shouldSkipPoiAutoGenerate(false, [{ name: "Fushimi Inari" }])).toBe(false);
   });
 
   test("wizardSyncIntervalMs uses fast polling for collaborative steps", () => {
