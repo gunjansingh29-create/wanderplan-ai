@@ -3120,6 +3120,10 @@ export default function WanderPlan(){
         tags:Array.isArray(p&&p.tags)?p.tags:[],
         rating:Number(p&&p.rating||0)||0,
         cost_estimate_usd:Number((p&&p.cost)!==undefined?p.cost:0)||0,
+        match_reason:String(p&&p.matchReason||""),
+        location_hint:String(p&&p.locationHint||""),
+        best_time:String(p&&p.bestTime||""),
+        opening_window:String(p&&p.openingWindow||""),
         approved:status[idx]==="yes"
       };
     }).filter(function(p){return !!p.name;});

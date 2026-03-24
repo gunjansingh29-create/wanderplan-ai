@@ -277,6 +277,10 @@ class PoiSyncItemRequest(BaseModel):
     tags: list[str] = []
     rating: Optional[float] = None
     cost_estimate_usd: float = 0
+    match_reason: Optional[str] = None
+    location_hint: Optional[str] = None
+    best_time: Optional[str] = None
+    opening_window: Optional[str] = None
     shortlisted: bool = False
     approved: bool = False
 
@@ -2326,6 +2330,10 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
           tags TEXT[] DEFAULT '{}',
           rating NUMERIC(3,1),
           cost_estimate_usd NUMERIC(10,2) DEFAULT 0,
+          match_reason TEXT,
+          location_hint TEXT,
+          best_time TEXT,
+          opening_window TEXT,
           shortlisted BOOLEAN DEFAULT FALSE,
           approved BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMPTZ DEFAULT NOW()
@@ -2553,6 +2561,10 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
     for stmt in statements:
         await conn.execute(stmt)
     await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS shortlisted BOOLEAN DEFAULT FALSE")
+    await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS match_reason TEXT")
+    await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS location_hint TEXT")
+    await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS best_time TEXT")
+    await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS opening_window TEXT")
     await conn.execute("ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS paid_by_user_id UUID REFERENCES users(id)")
     await conn.execute("ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS split_with_user_ids UUID[] DEFAULT '{}'::uuid[]")
 
@@ -4455,7 +4467,8 @@ async def get_pois(
     async with db_pool.acquire() as conn:
         await _require_trip_member(conn, trip_id, user_id)
         base_query = """
-            SELECT id, name, category, city, country, lat, lng, tags, rating, cost_estimate_usd, shortlisted, approved
+            SELECT id, name, category, city, country, lat, lng, tags, rating, cost_estimate_usd,
+                   match_reason, location_hint, best_time, opening_window, shortlisted, approved
             FROM pois
             WHERE trip_id = $1
         """
@@ -4508,8 +4521,11 @@ async def get_pois(
                     for poi in POI_CATALOG.get(cat, []):
                         await conn.execute(
                             """
-                            INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved)
-                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, false, false)
+                            INSERT INTO pois (
+                                trip_id, name, category, city, country, tags, rating, cost_estimate_usd,
+                                match_reason, location_hint, best_time, opening_window, shortlisted, approved
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, '', '', '', '', false, false)
                             ON CONFLICT DO NOTHING
                             """,
                             trip_id,
@@ -4526,8 +4542,11 @@ async def get_pois(
                     for poi in POI_CATALOG["food"]:
                         await conn.execute(
                             """
-                            INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved)
-                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, false, false)
+                            INSERT INTO pois (
+                                trip_id, name, category, city, country, tags, rating, cost_estimate_usd,
+                                match_reason, location_hint, best_time, opening_window, shortlisted, approved
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, '', '', '', '', false, false)
                             ON CONFLICT DO NOTHING
                             """,
                             trip_id,
@@ -4589,6 +4608,10 @@ async def get_pois(
                 "tags": row["tags"] or [],
                 "rating": float(row["rating"] or 0),
                 "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
+                "matchReason": row["match_reason"] or "",
+                "location_hint": row["location_hint"] or "",
+                "best_time": row["best_time"] or "",
+                "opening_window": row["opening_window"] or "",
                 "shortlisted": bool(row["shortlisted"]),
                 "approved": bool(row["approved"]),
                 "shortlist_counts": {
@@ -4645,6 +4668,10 @@ async def sync_pois(
                 "tags": tags,
                 "rating": rating,
                 "cost_estimate_usd": cost_estimate,
+                "match_reason": str(item.match_reason or "").strip(),
+                "location_hint": str(item.location_hint or "").strip(),
+                "best_time": str(item.best_time or "").strip(),
+                "opening_window": str(item.opening_window or "").strip(),
                 "shortlisted": bool(item.shortlisted),
                 "approved": bool(item.approved),
             }
@@ -4682,10 +4709,15 @@ async def sync_pois(
                         tags = $5::text[],
                         rating = $6,
                         cost_estimate_usd = $7,
-                        shortlisted = $8,
-                        approved = $9
-                    WHERE id = $10 AND trip_id = $11
-                    RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved
+                        match_reason = NULLIF($8, ''),
+                        location_hint = NULLIF($9, ''),
+                        best_time = NULLIF($10, ''),
+                        opening_window = NULLIF($11, ''),
+                        shortlisted = $12,
+                        approved = $13
+                    WHERE id = $14 AND trip_id = $15
+                    RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd,
+                              match_reason, location_hint, best_time, opening_window, shortlisted, approved
                     """,
                     item["name"],
                     item["category"],
@@ -4694,6 +4726,10 @@ async def sync_pois(
                     item["tags"],
                     item["rating"],
                     item["cost_estimate_usd"],
+                    item["match_reason"],
+                    item["location_hint"],
+                    item["best_time"],
+                    item["opening_window"],
                     item["shortlisted"],
                     item["approved"],
                     pid,
@@ -4723,16 +4759,25 @@ async def sync_pois(
                             tags = $3::text[],
                             rating = $4,
                             cost_estimate_usd = $5,
-                            shortlisted = $6,
-                            approved = $7
-                        WHERE id = $8 AND trip_id = $9
-                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved
+                            match_reason = NULLIF($6, ''),
+                            location_hint = NULLIF($7, ''),
+                            best_time = NULLIF($8, ''),
+                            opening_window = NULLIF($9, ''),
+                            shortlisted = $10,
+                            approved = $11
+                        WHERE id = $12 AND trip_id = $13
+                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd,
+                                  match_reason, location_hint, best_time, opening_window, shortlisted, approved
                         """,
                         item["category"],
                         item["country"],
                         item["tags"],
                         item["rating"],
                         item["cost_estimate_usd"],
+                        item["match_reason"],
+                        item["location_hint"],
+                        item["best_time"],
+                        item["opening_window"],
                         item["shortlisted"],
                         item["approved"],
                         existing["id"],
@@ -4741,9 +4786,13 @@ async def sync_pois(
                 else:
                     updated = await conn.fetchrow(
                         """
-                        INSERT INTO pois (trip_id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved)
-                        VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6::text[], $7, $8, $9, $10)
-                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd, shortlisted, approved
+                        INSERT INTO pois (
+                            trip_id, name, category, city, country, tags, rating, cost_estimate_usd,
+                            match_reason, location_hint, best_time, opening_window, shortlisted, approved
+                        )
+                        VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6::text[], $7, $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), $13, $14)
+                        RETURNING id, name, category, city, country, tags, rating, cost_estimate_usd,
+                                  match_reason, location_hint, best_time, opening_window, shortlisted, approved
                         """,
                         trip_id,
                         item["name"],
@@ -4753,6 +4802,10 @@ async def sync_pois(
                         item["tags"],
                         item["rating"],
                         item["cost_estimate_usd"],
+                        item["match_reason"],
+                        item["location_hint"],
+                        item["best_time"],
+                        item["opening_window"],
                         item["shortlisted"],
                         item["approved"],
                     )
@@ -4770,6 +4823,10 @@ async def sync_pois(
                 "tags": row["tags"] or [],
                 "rating": float(row["rating"] or 0),
                 "cost_estimate_usd": float(row["cost_estimate_usd"] or 0),
+                "matchReason": row["match_reason"] or "",
+                "location_hint": row["location_hint"] or "",
+                "best_time": row["best_time"] or "",
+                "opening_window": row["opening_window"] or "",
                 "shortlisted": bool(row["shortlisted"]),
                 "approved": bool(row["approved"]),
             }
