@@ -1491,23 +1491,43 @@ async function askComprehensivePOIs(destinations, interests, budgetTier, dietary
   return merged;
 }
 
+function withAsyncTimeout(task, timeoutMs, fallbackValue){
+  var ms=Math.max(1000,Number(timeoutMs)||0);
+  return Promise.race([
+    Promise.resolve().then(task),
+    new Promise(function(resolve){
+      setTimeout(function(){resolve(fallbackValue);},ms);
+    })
+  ]);
+}
+
 async function buildPoiCoverageForDestinations(destinations, interests, budgetTier, dietary, groupPrefs, minPerDestination, onProgress){
   var dests=(Array.isArray(destinations)?destinations:[]).filter(Boolean);
   var required=Math.max(1,Number(minPerDestination)||1);
   var mergedRows=[];
   var pending=dests.slice();
+  var concurrency=dests.length>=8?2:3;
   var attempts=0;
   while(pending.length>0 && attempts<3){
-    var batches=await Promise.all(pending.map(function(dest){
-      return askPOISupplement(dest, interests, budgetTier, dietary, groupPrefs).catch(function(){return [];});
-    }));
-    var roundRows=[];
-    batches.forEach(function(batch){
-      roundRows=mergePoiListsByCanonical(roundRows.concat(batch||[]), {});
-    });
-    if(roundRows.length>0){
-      mergedRows=mergePoiListsByCanonical(mergedRows.concat(roundRows), {});
-      if(typeof onProgress==="function")onProgress(mergedRows.slice());
+    var nextPending=[];
+    for(var startIdx=0;startIdx<pending.length;startIdx+=concurrency){
+      var chunk=pending.slice(startIdx,startIdx+concurrency);
+      var batches=await Promise.all(chunk.map(function(dest){
+        return withAsyncTimeout(function(){
+          return askPOISupplement(dest, interests, budgetTier, dietary, groupPrefs).catch(function(){return [];});
+        },20000,[]);
+      }));
+      var chunkRows=[];
+      batches.forEach(function(batch,chunkIdx){
+        var rows=Array.isArray(batch)?batch:[];
+        if(rows.length===0)nextPending.push(chunk[chunkIdx]);
+        chunkRows=mergePoiListsByCanonical(chunkRows.concat(rows), {});
+      });
+      if(chunkRows.length>0){
+        mergedRows=mergePoiListsByCanonical(mergedRows.concat(chunkRows), {});
+        if(typeof onProgress==="function")onProgress(mergedRows.slice());
+      }
+      nextPending=destinationsNeedingPoiCoverage(mergedRows,nextPending.concat(pending.slice(startIdx+concurrency)),required);
     }
     attempts+=1;
     pending=destinationsNeedingPoiCoverage(mergedRows,dests,required);
