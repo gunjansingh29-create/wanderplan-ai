@@ -123,6 +123,14 @@ function tripDestinationNamesFromValues(values,bucket){
   }).filter(Boolean);
 }
 
+function canonicalTripDestinationName(value){
+  return normalizeTripDestinationValue(value)
+    .replace(/\s*\([^)]*\)\s*/g," ")
+    .replace(/\s+/g," ")
+    .trim()
+    .toLowerCase();
+}
+
 function activeTripTravelerCount(members,tripJoinedMap){
   var count=1;
   (Array.isArray(members)?members:[]).forEach(function(member){
@@ -1358,11 +1366,13 @@ function poiListNeedsRefresh(savedSignature, currentSignature, rows, destination
   var saved=String(savedSignature||"").trim();
   var current=String(currentSignature||"").trim();
   if(saved&&current&&saved!==current)return true;
-  var destNames=(Array.isArray(destinations)?destinations:[]).map(function(d){return String(d&&d.name||d||"").trim().toLowerCase();}).filter(Boolean);
+  var destNames=(Array.isArray(destinations)?destinations:[]).map(function(d){
+    return canonicalTripDestinationName(d&&d.name||d||"");
+  }).filter(Boolean);
   if(destNames.length===0)return false;
   var poiDests={};
   list.forEach(function(p){
-    var key=String(p&&p.destination||"").trim().toLowerCase();
+    var key=canonicalTripDestinationName(p&&p.destination||"");
     if(key)poiDests[key]=1;
   });
   return destNames.some(function(name){return !poiDests[name];})||Object.keys(poiDests).some(function(name){return destNames.indexOf(name)<0;});
@@ -1372,14 +1382,14 @@ function destinationsNeedingPoiCoverage(rows, destinations, minPerDestination){
   var required=Math.max(1,Number(minPerDestination)||1);
   var counts={};
   (Array.isArray(rows)?rows:[]).forEach(function(p){
-    var dest=String(p&&p.destination||"").trim().toLowerCase();
+    var dest=canonicalTripDestinationName(p&&p.destination||"");
     if(!dest)return;
     counts[dest]=(counts[dest]||0)+1;
   });
   return (Array.isArray(destinations)?destinations:[]).filter(function(d){
     var name=String(d&&d.name||d||"").trim();
     if(!name)return false;
-    return (counts[name.toLowerCase()]||0)<required;
+    return (counts[canonicalTripDestinationName(name)]||0)<required;
   });
 }
 
