@@ -229,6 +229,27 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ).toBe(false);
   });
 
+  test("poiListNeedsRefresh ignores extra POIs from removed destinations when current ones are covered", () => {
+    const rows = [
+      { name: "Temple Route Walk", destination: "Grishneshwar" },
+      { name: "Ancient Cave Circuit", destination: "Grishneshwar" },
+      { name: "Pilgrim Heritage Trail", destination: "Grishneshwar" },
+      { name: "Evening Aarti Experience", destination: "Grishneshwar" },
+      { name: "Ritual Viewing", destination: "Kedarnath" },
+      { name: "Pilgrim Trail", destination: "Kedarnath" },
+      { name: "Mountain Prayer Walk", destination: "Kedarnath" },
+      { name: "Temple Courtyard History Tour", destination: "Kedarnath" },
+      { name: "Old Destination Extra", destination: "Nageshwar" },
+    ];
+
+    expect(
+      poiListNeedsRefresh("sig-a", "sig-b", rows, [
+        { name: "Grishneshwar (Aurangabad)" },
+        { name: "Kedarnath" },
+      ])
+    ).toBe(false);
+  });
+
   test("destinationsNeedingPoiCoverage flags newly added or under-covered destinations", () => {
     const rows = [
       { name: "Fushimi Inari Shrine", destination: "Kyoto" },

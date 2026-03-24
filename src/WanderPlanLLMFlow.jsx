@@ -1375,7 +1375,7 @@ function poiListNeedsRefresh(savedSignature, currentSignature, rows, destination
     var key=canonicalTripDestinationName(p&&p.destination||"");
     if(key)poiDests[key]=1;
   });
-  return destNames.some(function(name){return !poiDests[name];})||Object.keys(poiDests).some(function(name){return destNames.indexOf(name)<0;});
+  return destNames.some(function(name){return !poiDests[name];});
 }
 
 function destinationsNeedingPoiCoverage(rows, destinations, minPerDestination){
