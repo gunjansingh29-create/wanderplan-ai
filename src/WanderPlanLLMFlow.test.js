@@ -73,6 +73,7 @@ import {
   resolveWizardTripId,
   roundTripFlightRoutePlan,
   routePlanDurationMap,
+  resolvePoiVotingDecision,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
   sanitizeFlightDatesForTrip,
@@ -296,6 +297,16 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     );
     expect(trimRouteErrorDetail("")).toBe("Could not build a route plan yet. Try again in a moment.");
     expect(ROUTE_LLM_TIMEOUT_MS).toBeGreaterThan(60000);
+  });
+
+  test("resolvePoiVotingDecision keeps all POIs eligible while respecting votes and prior decisions", () => {
+    expect(resolvePoiVotingDecision("", { up: 2, down: 0 }, {})).toBe("yes");
+    expect(resolvePoiVotingDecision("", { up: 0, down: 2 }, {})).toBe("no");
+    expect(resolvePoiVotingDecision("yes", { up: 0, down: 0 }, {})).toBe("yes");
+    expect(resolvePoiVotingDecision("no", { up: 0, down: 0 }, {})).toBe("no");
+    expect(resolvePoiVotingDecision("", { up: 0, down: 0 }, { "member-1": "yes" })).toBe("yes");
+    expect(resolvePoiVotingDecision("", { up: 0, down: 0 }, { "member-1": "no" })).toBe("no");
+    expect(resolvePoiVotingDecision("", { up: 0, down: 0 }, {})).toBe("yes");
   });
 
   test("poiListNeedsRefresh ignores extra POIs from removed destinations when current ones are covered", () => {
