@@ -1283,6 +1283,56 @@ function normalizeBucketLLMResult(parsed){
   return fallbackOne?{type:"destinations",items:[fallbackOne]}:null;
 }
 
+function bucketQueryNeedsSpecificChildren(userMsg){
+  var q=String(userMsg||"").trim().toLowerCase();
+  if(!q)return false;
+  return /\b(cities|city|towns|town|places|destinations|spots|areas|regions|islands)\b/.test(q) ||
+    /\b(popular|top|best|tourist|must-see|recommend|recommended)\b/.test(q);
+}
+
+function bucketQueryAnchorName(userMsg){
+  var raw=String(userMsg||"").trim().replace(/[?!.,]+$/g,"");
+  if(!raw)return "";
+  var re=/\b(?:in|within|around|across|for)\s+([A-Za-z][A-Za-z .'\-()]{2,})/gi;
+  var match,last="";
+  while((match=re.exec(raw))){ last=String(match[1]||"").trim(); }
+  last=last.replace(/^.*\b(?:in|within|around|across|for)\s+/i,"").trim();
+  return canonicalTripDestinationName(last);
+}
+
+function refineBucketItemsForQuery(userMsg, items){
+  var list=Array.isArray(items)?items:[];
+  if(!list.length)return [];
+  var needsSpecific=bucketQueryNeedsSpecificChildren(userMsg);
+  var anchor=bucketQueryAnchorName(userMsg);
+  var out=[];
+  var seen={};
+  list.forEach(function(it){
+    var name=String(it&&it.name||"").trim();
+    if(!name)return;
+    var country=String(it&&it.country||"").trim();
+    var nameKey=canonicalTripDestinationName(name);
+    var countryKey=canonicalTripDestinationName(country);
+    if(needsSpecific&&anchor&&nameKey===anchor&&(!countryKey||countryKey===anchor)){
+      return;
+    }
+    var dedupeKey=nameKey+"|"+countryKey;
+    if(seen[dedupeKey])return;
+    seen[dedupeKey]=1;
+    out.push(it);
+  });
+  return out;
+}
+
+function bucketClarifyMessage(userMsg){
+  var anchor=bucketQueryAnchorName(userMsg);
+  if(anchor){
+    var pretty=String(anchor||"").replace(/\b\w/g,function(ch){return ch.toUpperCase();});
+    return "I need specific cities, islands, or regions in "+pretty+". Try something like \"best cities in "+pretty+"\" or name a few places you want to compare.";
+  }
+  return "Could you name specific cities, islands, or regions you want to explore?";
+}
+
 async function fallbackExtractDestinations(userMsg){
   try{
     var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
@@ -1320,11 +1370,28 @@ async function askLLM(userMsg, budget, history) {
     var txt = ""; if (data.content) { for (var j = 0; j < data.content.length; j++) { if (data.content[j].type === "text") txt += data.content[j].text; } }
     var parsed=parseJsonLoose(txt);
     var normalized=normalizeBucketLLMResult(parsed);
+    if(normalized&&normalized.type==="destinations"){
+      var refined=refineBucketItemsForQuery(userMsg, normalized.items);
+      if(refined.length)return {type:"destinations",items:refined};
+      if(bucketQueryNeedsSpecificChildren(userMsg)){
+        var retrySys=sys+"\nAdditional rule: if the user asks for cities/places in a country or larger area, NEVER return just that parent country/area. Return 4-8 specific city, island, or region-level destinations inside it.";
+        var retryData=await llmReq({model:"claude-sonnet-4-20250514",max_tokens:700,messages:msgs,system:retrySys});
+        var retryTxt=""; if(retryData&&retryData.content){ for(var rj=0;rj<retryData.content.length;rj++){ if(retryData.content[rj].type==="text")retryTxt+=retryData.content[rj].text; } }
+        var retryParsed=parseJsonLoose(retryTxt);
+        var retryNormalized=normalizeBucketLLMResult(retryParsed);
+        if(retryNormalized&&retryNormalized.type==="destinations"){
+          var retryRefined=refineBucketItemsForQuery(userMsg, retryNormalized.items);
+          if(retryRefined.length)return {type:"destinations",items:retryRefined};
+        }
+        return {type:"clarify",message:bucketClarifyMessage(userMsg)};
+      }
+    }
     if(normalized)return normalized;
   } catch (e) {}
   var fb=await fallbackExtractDestinations(userMsg);
-  if(fb.length)return {type:"destinations",items:fb};
-  return {type: "clarify", message: "Could you name a specific city or country?"};
+  var refinedFallback=refineBucketItemsForQuery(userMsg, fb);
+  if(refinedFallback.length)return {type:"destinations",items:refinedFallback};
+  return {type: "clarify", message: bucketClarifyMessage(userMsg)};
 }
 
 function buildPoiRequestSignature(destinations, interests, budgetTier, dietary, groupPrefs){
@@ -1501,26 +1568,55 @@ function withAsyncTimeout(task, timeoutMs, fallbackValue){
   ]);
 }
 
-async function buildPoiCoverageForDestinations(destinations, interests, budgetTier, dietary, groupPrefs, minPerDestination, onProgress){
+async function buildPoiCoverageForDestinations(destinations, interests, budgetTier, dietary, groupPrefs, minPerDestination, onProgress, onStatus){
   var dests=(Array.isArray(destinations)?destinations:[]).filter(Boolean);
   var required=Math.max(1,Number(minPerDestination)||1);
   var mergedRows=[];
   var pending=dests.slice();
   var concurrency=dests.length>=8?2:3;
+  var batchCount=Math.max(1,Math.ceil(Math.max(dests.length,1)/concurrency));
   var attempts=0;
+  var completedDestinations=[];
+  var timedOutDestinations=[];
+  var emptyDestinations=[];
+  var failedDestinations=[];
+  onStatus=(typeof onStatus==="function")?onStatus:null;
   while(pending.length>0 && attempts<3){
     var nextPending=[];
     for(var startIdx=0;startIdx<pending.length;startIdx+=concurrency){
       var chunk=pending.slice(startIdx,startIdx+concurrency);
+      if(onStatus)onStatus({
+        phase:"llm",
+        attempt:attempts+1,
+        currentBatch:Math.floor(startIdx/concurrency)+1,
+        batchCount:batchCount,
+        activeDestinations:chunk.map(function(dest){return String(dest&&dest.name||dest||"").trim();}).filter(Boolean),
+        completedDestinations:completedDestinations.slice(),
+        timedOutDestinations:timedOutDestinations.slice(),
+        emptyDestinations:emptyDestinations.slice(),
+        failedDestinations:failedDestinations.slice()
+      });
       var batches=await Promise.all(chunk.map(function(dest){
         return withAsyncTimeout(function(){
-          return askPOISupplement(dest, interests, budgetTier, dietary, groupPrefs).catch(function(){return [];});
-        },20000,[]);
+          return askPOISupplement(dest, interests, budgetTier, dietary, groupPrefs).then(function(rows){
+            return {rows:Array.isArray(rows)?rows:[],timedOut:false,error:false};
+          }).catch(function(){
+            return {rows:[],timedOut:false,error:true};
+          });
+        },20000,{rows:[],timedOut:true,error:false});
       }));
       var chunkRows=[];
       batches.forEach(function(batch,chunkIdx){
-        var rows=Array.isArray(batch)?batch:[];
-        if(rows.length===0)nextPending.push(chunk[chunkIdx]);
+        var meta=(batch&&typeof batch==="object")?batch:{rows:[],timedOut:false,error:false};
+        var rows=Array.isArray(meta.rows)?meta.rows:[];
+        var destName=String(chunk[chunkIdx]&&chunk[chunkIdx].name||chunk[chunkIdx]||"").trim();
+        if(rows.length>0&&destName&&completedDestinations.indexOf(destName)<0)completedDestinations.push(destName);
+        if(meta.timedOut&&destName&&timedOutDestinations.indexOf(destName)<0)timedOutDestinations.push(destName);
+        if(meta.error&&destName&&failedDestinations.indexOf(destName)<0)failedDestinations.push(destName);
+        if(rows.length===0){
+          nextPending.push(chunk[chunkIdx]);
+          if(!meta.timedOut&&!meta.error&&destName&&emptyDestinations.indexOf(destName)<0)emptyDestinations.push(destName);
+        }
         chunkRows=mergePoiListsByCanonical(chunkRows.concat(rows), {});
       });
       if(chunkRows.length>0){
@@ -2396,6 +2492,7 @@ export default function WanderPlan(){
   var[poiVotes,setPV]=useState({});
   var[poiMemberChoices,setPMC]=useState({});
   var[poiOptionPool,setPOP]=useState({});
+  var[poiGenStatus,setPGS]=useState({phase:"idle",currentBatch:0,batchCount:0,activeDestinations:[],completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],backendSync:"idle"});
   var[poiRequestSignature,setPoiRequestSignature]=useState("");
   var[poiAsk,setPA]=useState("");
   var[poiAskLoad,setPAL]=useState(false);
@@ -3011,6 +3108,7 @@ export default function WanderPlan(){
     var pendingDestinations=(Array.isArray(wizardPoiDests)?wizardPoiDests.slice():[]).filter(Boolean);
     var targetPerDestination=pendingDestinations.length<=2?5:4;
     setPL(true);
+    setPGS({phase:"starting",currentBatch:0,batchCount:Math.max(1,Math.ceil(Math.max(pendingDestinations.length,1)/(pendingDestinations.length>=8?2:3))),activeDestinations:pendingDestinations.map(function(d){return String(d&&d.name||d||"").trim();}).filter(Boolean),completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],backendSync:"idle"});
     setPS({});
     setPV({});
     setPMC({});
@@ -3021,6 +3119,7 @@ export default function WanderPlan(){
     if(pendingDestinations.length===0){
       setPL(false);
       setPD(true);
+      setPGS({phase:"done",currentBatch:0,batchCount:0,activeDestinations:[],completedDestinations:[],timedOutDestinations:[],emptyDestinations:[],failedDestinations:[],backendSync:"skipped"});
       setPoiRequestSignature(poiCurrentSignatureGlobal);
       return;
     }
@@ -3041,9 +3140,17 @@ export default function WanderPlan(){
       user.dietary,
       wizardPoiGroupPrefs,
       targetPerDestination,
-      appendRows
+      appendRows,
+      function(status){
+        setPGS(function(prev){
+          return Object.assign({},prev||{},status||{},{
+            backendSync:(prev&&prev.backendSync)||"idle"
+          });
+        });
+      }
     ).then(function(nextRows){
       var nextPool=buildPoiOptionPoolPatch(nextRows,{});
+      setPGS(function(prev){return Object.assign({},prev||{},{phase:"syncing",backendSync:"pending",activeDestinations:[]});});
       syncTripPoisToBackend({},nextRows).then(function(syncRes){
         var syncedRows=mapBackendPois((syncRes&&syncRes.pois)||[]);
         var finalRows=syncedRows.length>0?syncedRows:nextRows;
@@ -3053,6 +3160,7 @@ export default function WanderPlan(){
         setPL(false);
         setPD(true);
         setPoiRequestSignature(poiCurrentSignatureGlobal);
+        setPGS(function(prev){return Object.assign({},prev||{},{phase:"done",backendSync:"ok",activeDestinations:[]});});
         saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:finalPool,poi_request_signature:poiCurrentSignatureGlobal}}).then(function(){
           refreshCurrentTripSharedState(authToken,activeTripId).catch(function(){});
           refreshTripPlanningState(authToken,activeTripId).catch(function(){});
@@ -3063,6 +3171,7 @@ export default function WanderPlan(){
         setPL(false);
         setPD(true);
         setPoiRequestSignature(poiCurrentSignatureGlobal);
+        setPGS(function(prev){return Object.assign({},prev||{},{phase:"done",backendSync:"planning-only",activeDestinations:[]});});
         saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:nextPool,poi_request_signature:poiCurrentSignatureGlobal}}).then(function(){
           refreshTripPlanningState(authToken,activeTripId).catch(function(){});
         }).catch(function(){return null;});
@@ -3073,6 +3182,7 @@ export default function WanderPlan(){
       setPL(false);
       setPD(true);
       setPoiRequestSignature(poiCurrentSignatureGlobal);
+      setPGS(function(prev){return Object.assign({},prev||{},{phase:"failed",backendSync:"failed",activeDestinations:[]});});
     });
   }
   async function refreshTripPlanningState(token,tripId){
@@ -6247,6 +6357,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               {l:"Selection row count",v:String(Object.keys(poiMemberChoices||{}).length)},
               {l:"Vote row count",v:String(Object.keys(poiVotes||{}).length)},
               {l:"Duplicate canonical keys",v:String(poiDebugDuplicates.length)},
+              {l:"POI phase",v:String(poiGenStatus&&poiGenStatus.phase||"idle")},
+              {l:"Backend sync",v:String(poiGenStatus&&poiGenStatus.backendSync||"idle")},
               {l:"Saved request signature",v:poiRequestSignature||"(none)"},
               {l:"Current request signature",v:poiCurrentSignature||"(none)"},
               {l:"Context stale",v:poiContextStale?"yes":"no"}
@@ -6277,6 +6389,10 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>Raw poi_votes</p>
             <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:160,overflowY:"auto"}}>{JSON.stringify(poiVotes||{},null,2)}</pre>
           </div>
+          <div style={{marginBottom:10,padding:"8px 10px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
+            <p style={{fontSize:10,color:C.tx3,marginBottom:4}}>POI generation status</p>
+            <pre style={{margin:0,whiteSpace:"pre-wrap",wordBreak:"break-word",fontSize:10,color:C.tx2,maxHeight:160,overflowY:"auto"}}>{JSON.stringify(poiGenStatus||{},null,2)}</pre>
+          </div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             {poiRows.map(function(p,idx){
               var selectionMeta=readPoiSelectionRow(poiMemberChoices,p,idx);
@@ -6292,7 +6408,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           </div>
         </div>)}
         {(!poiDone||poiContextStale)&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>{poiContextStale?"Destinations, budget, or traveler profiles changed. Refresh the activity list so it matches the current trip.":("The agent searches "+dests.length+" destination"+(dests.length>1?"s":"")+" based on group interests and budget.")}</p><button onClick={runPoiSearch} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>{poiContextStale?"Refresh Activities for Updated Trip":"Find Activities"}</button></div>)}
-        {poiLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Searching across {dests.map(function(d){return d.name;}).join(", ")}...</p></div>)}
+        {poiLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2,marginBottom:8}}>{poiGenStatus.phase==="syncing"?"Saving generated POIs to the trip...":("Searching across "+dests.map(function(d){return d.name;}).join(", ")+"...")}</p>{poiGenStatus.currentBatch>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>Batch {poiGenStatus.currentBatch} of {poiGenStatus.batchCount||1}{Array.isArray(poiGenStatus.activeDestinations)&&poiGenStatus.activeDestinations.length?": "+poiGenStatus.activeDestinations.join(", "):""}</p>}{Array.isArray(poiGenStatus.completedDestinations)&&poiGenStatus.completedDestinations.length>0&&<p style={{fontSize:12,color:C.grn,marginBottom:6}}>Completed: {poiGenStatus.completedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.timedOutDestinations)&&poiGenStatus.timedOutDestinations.length>0&&<p style={{fontSize:12,color:C.wrn,marginBottom:6}}>Anthropic timed out for: {poiGenStatus.timedOutDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.failedDestinations)&&poiGenStatus.failedDestinations.length>0&&<p style={{fontSize:12,color:C.red,marginBottom:6}}>Provider errors for: {poiGenStatus.failedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.emptyDestinations)&&poiGenStatus.emptyDestinations.length>0&&<p style={{fontSize:12,color:C.tx3}}>No POIs yet for: {poiGenStatus.emptyDestinations.join(", ")}</p>}</div>)}
         {poiDone&&poiRows.length>0&&!poiContextStale&&(<div>
           {poiRows.map(function(p,i){var st=poiStatus[i];var cc=p.category==="Nature"?C.grn:p.category==="Food"?C.teal:p.category==="Culture"?C.wrn:p.category==="Adventure"?C.coral:p.category==="Wellness"?C.purp:C.tealL;
             return(<div key={i} style={{padding:"12px 0",borderBottom:i<poiRows.length-1?"1px solid "+C.border:"none",opacity:st==="no"?.4:1,transition:"opacity .2s"}}>
@@ -7704,4 +7820,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, inclusiveIsoDays, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, voteKeyAliasesFor, wizardSyncIntervalMs };

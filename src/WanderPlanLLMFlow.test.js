@@ -18,6 +18,9 @@ import {
   buildTripShareSummary,
   buildTripWhatsAppText,
   buildWhatsAppShareUrl,
+  bucketClarifyMessage,
+  bucketQueryAnchorName,
+  bucketQueryNeedsSpecificChildren,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
   canonicalMealVoteKey,
@@ -56,6 +59,7 @@ import {
   voteKeyAliasesFor,
   readVoteForVoter,
   receiptItemsTotal,
+  refineBucketItemsForQuery,
   resolveAvailabilityDraftWindow,
   resolveBudgetTier,
   resolveTripBudgetTier,
@@ -126,6 +130,33 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
     ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+  });
+
+  test("bucketQueryNeedsSpecificChildren detects city-list style requests", () => {
+    expect(bucketQueryNeedsSpecificChildren("popular tourist cities in Japan")).toBe(true);
+    expect(bucketQueryNeedsSpecificChildren("Kyoto")).toBe(false);
+  });
+
+  test("bucketQueryAnchorName extracts trailing scope from request", () => {
+    expect(bucketQueryAnchorName("popular tourist cities in Japan")).toBe("japan");
+    expect(bucketQueryAnchorName("best places for food in Mexico")).toBe("mexico");
+  });
+
+  test("refineBucketItemsForQuery removes broad parent destination echoes", () => {
+    expect(
+      refineBucketItemsForQuery("popular tourist cities in Japan", [
+        { name: "Japan", country: "" },
+        { name: "Kyoto", country: "Japan" },
+        { name: "Osaka", country: "Japan" },
+      ])
+    ).toEqual([
+      { name: "Kyoto", country: "Japan" },
+      { name: "Osaka", country: "Japan" },
+    ]);
+  });
+
+  test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
+    expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
