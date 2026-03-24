@@ -446,7 +446,24 @@ async function apiJson(path, options, token){
 }
 
 async function llmReq(payload){
-  var r=await fetch(LLM_PROXY,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  var opts={method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)};
+  var r=null;
+  var fallbackUrl=apiFallbackUrlFor(LLM_PROXY);
+  try{
+    r=await fetch(LLM_PROXY,opts);
+  }catch(e){
+    if(fallbackUrl&&fallbackUrl!==LLM_PROXY){
+      try{
+        r=await fetch(fallbackUrl,opts);
+      }catch(e2){
+        var netMsg2=String(e2&&e2.message||String(e&&e.message)||"Failed to fetch");
+        throw new Error("Network error calling "+LLM_PROXY+" (fallback "+fallbackUrl+" also failed). Check REACT_APP_API_BASE / REACT_APP_LLM_PROXY and backend CORS (FRONTEND_ORIGINS). "+netMsg2);
+      }
+    }else{
+      var netMsg=String(e&&e.message||"Failed to fetch");
+      throw new Error("Network error calling "+LLM_PROXY+". Check REACT_APP_API_BASE / REACT_APP_LLM_PROXY and backend CORS (FRONTEND_ORIGINS). "+netMsg);
+    }
+  }
   var txt=await r.text();
   var data=null;
   try{data=txt?JSON.parse(txt):null;}catch(e){data=txt;}
