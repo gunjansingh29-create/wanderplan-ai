@@ -3779,7 +3779,11 @@ export default function WanderPlan(){
         setPD(true);
         setPoiRequestSignature(poiCurrentSignatureGlobal);
         setPGS(function(prev){return Object.assign({},prev||{},{phase:"done",backendSync:"ok",activeDestinations:[]});});
-        saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:finalPool,poi_request_signature:poiCurrentSignatureGlobal}}).then(function(){
+        replacePoiOptionPoolState(activeTripId, finalPool, {
+          poi_votes:{},
+          poi_member_choices:{},
+          poi_request_signature:poiCurrentSignatureGlobal
+        }).then(function(){
           refreshCurrentTripSharedState(authToken,activeTripId).catch(function(){});
           refreshTripPlanningState(authToken,activeTripId).catch(function(){});
         }).catch(function(){return null;});
@@ -3790,7 +3794,11 @@ export default function WanderPlan(){
         setPD(true);
         setPoiRequestSignature(poiCurrentSignatureGlobal);
         setPGS(function(prev){return Object.assign({},prev||{},{phase:"done",backendSync:"planning-only",activeDestinations:[]});});
-        saveTripPlanningState({state:{poi_votes:{},poi_member_choices:{},poi_option_pool:nextPool,poi_request_signature:poiCurrentSignatureGlobal}}).then(function(){
+        replacePoiOptionPoolState(activeTripId, nextPool, {
+          poi_votes:{},
+          poi_member_choices:{},
+          poi_request_signature:poiCurrentSignatureGlobal
+        }).then(function(){
           refreshTripPlanningState(authToken,activeTripId).catch(function(){});
         }).catch(function(){return null;});
       });
@@ -3912,6 +3920,19 @@ export default function WanderPlan(){
         return next;
       });
     }catch(e){}
+  }
+  function replacePoiOptionPoolState(activeTripId, fullPool, extraState){
+    var tid=String(activeTripId||resolveWizardTripId(currentTripId,newTrip)).trim();
+    if(!(authToken&&tid&&isUuidLike(tid)))return Promise.resolve(null);
+    var nextPool=(fullPool&&typeof fullPool==="object")?fullPool:{};
+    var extras=(extraState&&typeof extraState==="object")?extraState:{};
+    return saveTripPlanningState({state:{poi_option_pool:null}})
+      .catch(function(){return null;})
+      .then(function(){
+        return saveTripPlanningState({
+          state:Object.assign({},extras,{poi_option_pool:nextPool})
+        });
+      });
   }
   function saveTripPlanningState(patch){
     var tid=resolveWizardTripId(currentTripId,newTrip);
@@ -4265,11 +4286,11 @@ export default function WanderPlan(){
     if(!loaded||!authToken||sc!=="wizard"||!activeTripId||!isUuidLike(activeTripId))return;
     if(wizStep<5)return;
     if(!Array.isArray(pois)||pois.length===0)return;
-    var patch=buildPoiOptionPoolPatch(pois,poiOptionPool);
-    var keys=Object.keys(patch);
-    if(keys.length===0)return;
-    setPOP(function(prev){return Object.assign({},prev||{},patch);});
-    saveTripPlanningState({state:{poi_option_pool:patch}}).then(function(){
+    var fullPool=buildPoiOptionPoolPatch(pois,{});
+    var currentPool=(poiOptionPool&&typeof poiOptionPool==="object")?poiOptionPool:{};
+    if(poiKeySignature(Object.keys(fullPool).map(function(key){return fullPool[key];}))===poiKeySignature(Object.keys(currentPool).map(function(key){return currentPool[key];})))return;
+    setPOP(fullPool);
+    replacePoiOptionPoolState(activeTripId, fullPool).then(function(){
       refreshTripPlanningState(authToken,activeTripId).catch(function(){});
     });
   },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,wizStep,pois,poiOptionPool]);
@@ -4291,11 +4312,8 @@ export default function WanderPlan(){
     var groundedPool=buildPoiOptionPoolPatch(grounded,{});
     setPois(grounded);
     setPOP(groundedPool);
-    saveTripPlanningState({
-      state:{
-        poi_option_pool:groundedPool,
-        poi_request_signature:poiCurrentSignatureGlobal
-      }
+    replacePoiOptionPoolState(activeTripId, groundedPool, {
+      poi_request_signature:poiCurrentSignatureGlobal
     }).then(function(){
       refreshTripPlanningState(authToken,activeTripId).catch(function(){});
     }).catch(function(){});
