@@ -14,6 +14,7 @@ import {
   buildItinerarySavePayload,
   buildPOIGroupPrefsFromCrew,
   buildPoiRequestSignature,
+  groundPoiRowsWithRoutePlan,
   shouldReplaceWithGroundedNearbyPois,
   buildRoutePlanSignature,
   classifyPoiFailureReason,
@@ -302,6 +303,37 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         routePlan
       )
     ).toBe(false);
+  });
+
+  test("groundPoiRowsWithRoutePlan replaces manufactured rows with route nearby sites", () => {
+    const rows = [
+      { name: "Somnath Heritage Walk", destination: "Somnath", category: "Culture", duration: "2h", cost: 0, rating: 4.2 },
+      { name: "Somnath Temple Darshan and Orientation Walk", destination: "Somnath", category: "Culture", duration: "2h", cost: 0, rating: 4.1 },
+    ];
+    const routePlan = {
+      destinations: [
+        {
+          destination: "Somnath",
+          nearbySites: ["Bhalka Tirth", "Triveni Sangam", "Somnath Beach"],
+        },
+      ],
+    };
+
+    const grounded = groundPoiRowsWithRoutePlan(
+      rows,
+      routePlan,
+      { culture: true },
+      "moderate",
+      [],
+      {}
+    );
+
+    expect(grounded.map((row) => row.name)).toEqual([
+      "Bhalka Tirth",
+      "Triveni Sangam",
+      "Somnath Beach",
+    ]);
+    expect(grounded.every((row) => row.failureReason === "route_plan_grounded")).toBe(true);
   });
 
   test("classifyPoiFailureReason treats backend timeout details as timed_out", () => {
