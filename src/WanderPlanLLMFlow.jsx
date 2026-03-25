@@ -4274,6 +4274,49 @@ export default function WanderPlan(){
     });
   },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,wizStep,pois,poiOptionPool]);
   useEffect(function(){
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    if(!loaded||!authToken||sc!=="wizard"||!activeTripId||!isUuidLike(activeTripId))return;
+    if(wizStep<7)return;
+    if(!routePlan||!Array.isArray(routePlan.destinations)||routePlan.destinations.length===0)return;
+    if(!Array.isArray(pois)||pois.length===0)return;
+    var grounded=groundPoiRowsWithRoutePlan(
+      pois,
+      routePlan,
+      user.interests||{},
+      effectiveTripBudgetTierGlobal,
+      user.dietary,
+      wizardPoiGroupPrefs
+    );
+    if(poiKeySignature(grounded)===poiKeySignature(pois))return;
+    var groundedPool=buildPoiOptionPoolPatch(grounded,{});
+    setPois(grounded);
+    setPOP(groundedPool);
+    saveTripPlanningState({
+      state:{
+        poi_option_pool:groundedPool,
+        poi_request_signature:poiCurrentSignatureGlobal
+      }
+    }).then(function(){
+      refreshTripPlanningState(authToken,activeTripId).catch(function(){});
+    }).catch(function(){});
+  },[
+    loaded,
+    authToken,
+    sc,
+    currentTripId,
+    newTrip&&newTrip.id,
+    wizStep,
+    poiCurrentSignatureGlobal,
+    routePlanSignature,
+    JSON.stringify((Array.isArray(routePlan&&routePlan.destinations)?routePlan.destinations:[]).map(function(stop){
+      return {
+        destination:String(stop&&stop.destination||"").trim(),
+        nearbySites:Array.isArray(stop&&stop.nearbySites)?stop.nearbySites.slice():[]
+      };
+    })),
+    poiKeySignature(pois)
+  ]);
+  useEffect(function(){
     if(!loaded)return;
     if(!pendingTripJoinId)return;
     if(inviteTripFilterAppliedRef.current)return;
