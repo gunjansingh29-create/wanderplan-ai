@@ -2579,6 +2579,21 @@ var MANUFACTURED_MEAL_SUFFIXES=[
   "evening table","chef's local kitchen"
 ];
 
+var MANUFACTURED_MEAL_GENERIC_WORDS=[
+  "cafe","bistro","kitchen","table","house","bakery","grill","hall",
+  "club","roastery","diner","eatery","canteen","dhaba","restaurant",
+  "spot","bar","food","brunch","breakfast","lunch","dinner","supper"
+];
+
+var MANUFACTURED_MEAL_DESCRIPTOR_WORDS=[
+  "sunrise","morning","market","laneway","harbor","street","night",
+  "ember","local","chef","temple","town","templetown","evening"
+];
+
+function normalizeMealText(value){
+  return String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+}
+
 function mealGuidanceVariants(type,destination,anchor){
   var t=String(type||"meal").toLowerCase();
   var dest=String(destination||"the area").trim()||"the area";
@@ -2606,10 +2621,25 @@ function mealGuidanceVariants(type,destination,anchor){
 function isManufacturedMealName(name,destination){
   var raw=String(name||"").trim().toLowerCase();
   var dest=String(destination||"").trim().toLowerCase();
+  var rawNorm=normalizeMealText(raw);
+  var destNorm=normalizeMealText(dest);
   if(!raw)return false;
-  return MANUFACTURED_MEAL_SUFFIXES.some(function(suffix){
-    return raw===suffix || (dest && raw===((dest+" "+suffix).trim()));
-  });
+  if(MANUFACTURED_MEAL_SUFFIXES.some(function(suffix){
+    var suffixNorm=normalizeMealText(suffix);
+    return rawNorm===suffixNorm || (destNorm && rawNorm===((destNorm+" "+suffixNorm).trim()));
+  }))return true;
+  if(destNorm && rawNorm.indexOf(destNorm+" ")===0){
+    var remainder=rawNorm.slice(destNorm.length).trim();
+    if(!remainder)return false;
+    var tokens=remainder.split(/\s+/).filter(Boolean);
+    var hasGeneric=tokens.some(function(token){return MANUFACTURED_MEAL_GENERIC_WORDS.indexOf(token)>=0;});
+    var significant=tokens.filter(function(token){
+      return MANUFACTURED_MEAL_GENERIC_WORDS.indexOf(token)<0 &&
+        MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)<0;
+    });
+    if(hasGeneric && significant.length===0)return true;
+  }
+  return false;
 }
 
 function isAreaGuidanceMealOption(option,destination){
