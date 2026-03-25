@@ -2563,26 +2563,53 @@ async function askDining(destinations, budgetTier, dietary, days, groupSize) {
   return Array.isArray(res) ? res : [];
 }
 
-function mealOptionVariants(type){
+var MANUFACTURED_MEAL_SUFFIXES=[
+  "sunrise cafe","brunch table","bakery kitchen","morning roastery",
+  "market bistro","laneway kitchen","harbor grill","food hall",
+  "supper club","chef's table","night market house","ember kitchen",
+  "morning bakery","local breakfast house","street kitchen","local lunch spot",
+  "evening table","chef's local kitchen"
+];
+
+function mealGuidanceVariants(type,destination,anchor){
   var t=String(type||"meal").toLowerCase();
+  var dest=String(destination||"the area").trim()||"the area";
+  var near=String(anchor||dest).trim()||dest;
   if(t==="breakfast")return [
-    {suffix:"Sunrise Cafe",cuisine:"Cafe"},
-    {suffix:"Brunch Table",cuisine:"Brunch"},
-    {suffix:"Bakery Kitchen",cuisine:"Bakery"},
-    {suffix:"Morning Roastery",cuisine:"Coffee"}
+    {name:"Breakfast near "+near,note:"Use this area to compare real breakfast spots near "+near+"."},
+    {name:dest+" morning cafe area",note:"Popular morning cafes tend to cluster around "+dest+"."},
+    {name:"Temple-access breakfast around "+dest,note:"A practical early meal area before morning darshan or local visits."},
+    {name:dest+" tea and bakery area",note:"Area guidance only; compare actual breakfast stops nearby."}
   ];
   if(t==="lunch")return [
-    {suffix:"Market Bistro",cuisine:"Bistro"},
-    {suffix:"Laneway Kitchen",cuisine:"Local"},
-    {suffix:"Harbor Grill",cuisine:"Grill"},
-    {suffix:"Food Hall",cuisine:"Street Food"}
+    {name:"Lunch near "+near,note:"Use this area to compare real lunch options near "+near+"."},
+    {name:dest+" local lunch area",note:"A reliable midday dining cluster around "+dest+"."},
+    {name:dest+" market and lunch area",note:"Useful if you want simple local food near the main route."},
+    {name:"Temple-town lunch near "+dest,note:"Area guidance only; compare actual local eateries nearby."}
   ];
   return [
-    {suffix:"Supper Club",cuisine:"Local Fine Dining"},
-    {suffix:"Chef's Table",cuisine:"Modern"},
-    {suffix:"Night Market House",cuisine:"Street Food"},
-    {suffix:"Ember Kitchen",cuisine:"Regional"}
+    {name:"Dinner near "+near,note:"Use this area to compare real dinner options near "+near+"."},
+    {name:dest+" evening dining area",note:"A good evening dining cluster in "+dest+"."},
+    {name:dest+" temple-town dinner area",note:"Practical dinner area after temple visits or evening aarti."},
+    {name:dest+" local supper area",note:"Area guidance only; choose a real restaurant after comparing nearby options."}
   ];
+}
+
+function isManufacturedMealName(name,destination){
+  var raw=String(name||"").trim().toLowerCase();
+  var dest=String(destination||"").trim().toLowerCase();
+  if(!raw)return false;
+  return MANUFACTURED_MEAL_SUFFIXES.some(function(suffix){
+    return raw===suffix || (dest && raw===((dest+" "+suffix).trim()));
+  });
+}
+
+function isAreaGuidanceMealOption(option,destination){
+  var tags=Array.isArray(option&&option.tags)?option.tags.map(function(t){return String(t||"").toLowerCase();}):[];
+  var cuisine=String(option&&option.cuisine||"").toLowerCase();
+  return tags.indexOf("area-guidance")>=0 ||
+    cuisine==="area guidance" ||
+    isManufacturedMealName(option&&option.name,destination);
 }
 
 function mealTimeForType(type){
@@ -2602,24 +2629,27 @@ export function normalizeDiningPlan(rows){
     var mealsIn=Array.isArray(day&&day.meals)?day.meals:[];
     var mealsOut=mealsIn.map(function(meal,mealIndex){
       var type=String(meal&&meal.type||"Meal").trim()||"Meal";
+      var guidanceVariants=mealGuidanceVariants(type,destination,anchor);
       var optionSeed=(Array.isArray(meal&&meal.options)&&meal.options.length?meal.options:[meal]).map(function(opt,optIndex){
+        var rawName=String(opt&&opt.name||meal&&meal.name||guidanceVariants[Math.min(optIndex,guidanceVariants.length-1)].name).trim();
+        var guidance=isAreaGuidanceMealOption(opt,destination) || isManufacturedMealName(rawName,destination);
+        var guidanceVariant=guidanceVariants[Math.min(optIndex,guidanceVariants.length-1)];
         return {
           option_id:String(opt&&opt.option_id||("meal-opt-"+dayIndex+"-"+mealIndex+"-"+optIndex)),
-          name:String(opt&&opt.name||meal&&meal.name||((destination+" "+(mealOptionVariants(type)[optIndex]||mealOptionVariants(type)[0]).suffix))).trim(),
+          name:guidance?guidanceVariant.name:rawName,
           city:String(opt&&opt.city||meal&&meal.city||destination).trim(),
-          cuisine:String(opt&&opt.cuisine||meal&&meal.cuisine||"Local").trim()||"Local",
+          cuisine:guidance?"Area guidance":(String(opt&&opt.cuisine||meal&&meal.cuisine||"Local").trim()||"Local"),
           cost:Number((opt&&opt.cost)!==undefined?opt.cost:(meal&&meal.cost)!==undefined?meal.cost:0)||0,
-          rating:Number((opt&&opt.rating)!==undefined?opt.rating:(meal&&meal.rating)!==undefined?meal.rating:(4.2+(optIndex*0.2)))||4.2,
-          note:String(opt&&opt.note||opt&&opt.near_poi||meal&&meal.note||"").trim(),
+          rating:guidance?0:(Number((opt&&opt.rating)!==undefined?opt.rating:(meal&&meal.rating)!==undefined?meal.rating:(4.2+(optIndex*0.2)))||4.2),
+          note:guidance?guidanceVariant.note:(String(opt&&opt.note||opt&&opt.near_poi||meal&&meal.note||"").trim()),
           travel_minutes:Number((opt&&opt.travel_minutes)!==undefined?opt.travel_minutes:(opt&&opt.travelMinutes)!==undefined?opt.travelMinutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0,
-          tags:Array.isArray(opt&&opt.tags)?opt.tags:[]
+          tags:guidance?["area-guidance",String(type||"meal").toLowerCase()]:(Array.isArray(opt&&opt.tags)?opt.tags:[])
         };
       });
-      var variants=mealOptionVariants(type);
       var options=optionSeed.slice();
-      variants.forEach(function(variant,variantIndex){
+      guidanceVariants.forEach(function(variant,variantIndex){
         if(options.length>=4)return;
-        var candidateName=((destination+" "+variant.suffix).replace(/\s+/g," ")).trim();
+        var candidateName=String(variant.name||"").trim();
         var exists=options.some(function(opt){
           return String(opt&&opt.name||"").trim().toLowerCase()===candidateName.toLowerCase();
         });
@@ -2628,12 +2658,12 @@ export function normalizeDiningPlan(rows){
           option_id:"meal-opt-"+dayIndex+"-"+mealIndex+"-fallback-"+variantIndex,
           name:candidateName,
           city:destination,
-          cuisine:variant.cuisine,
+          cuisine:"Area guidance",
           cost:Math.max(8,Math.round((Number(meal&&meal.cost||24)||24)+(variantIndex*4)-4)),
-          rating:Number((4.8-(variantIndex*0.1)).toFixed(1)),
-          note:"Popular "+variant.cuisine.toLowerCase()+" option in "+destination+".",
+          rating:0,
+          note:String(variant.note||"").trim(),
           travel_minutes:Math.max(4,8+(variantIndex*4)),
-          tags:[String(type||"meal").toLowerCase(),variant.cuisine.toLowerCase()]
+          tags:["area-guidance",String(type||"meal").toLowerCase()]
         });
       });
       var selectedOpt=(meal&&meal.selectedOption!==undefined&&meal.selectedOption!==null)?Number(meal.selectedOption):0;
@@ -2649,7 +2679,7 @@ export function normalizeDiningPlan(rows){
         city:String(picked.city||meal&&meal.city||destination).trim(),
         cuisine:String(picked.cuisine||meal&&meal.cuisine||"Local").trim()||"Local",
         cost:Number((picked.cost!==undefined)?picked.cost:(meal&&meal.cost)!==undefined?meal.cost:0)||0,
-        rating:Number((picked.rating!==undefined)?picked.rating:(meal&&meal.rating)!==undefined?meal.rating:4.4)||4.4,
+        rating:isAreaGuidanceMealOption(picked,destination)?0:(Number((picked.rating!==undefined)?picked.rating:(meal&&meal.rating)!==undefined?meal.rating:4.4)||4.4),
         dietaryOk:typeof (meal&&meal.dietaryOk)==="boolean"?meal.dietaryOk:true,
         note:String(picked.note||meal&&meal.note||"").trim(),
         travelMinutes:Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0
@@ -8502,7 +8532,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                         <span style={{fontSize:10,color:typeCol,fontWeight:600}}>{m.type}</span>
                         {m.time&&<span style={{fontSize:10,color:C.tx3}}>{m.time}</span>}
-                        <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>{m.rating? <span style={{fontSize:10,color:C.wrn,fontWeight:700}}>{"*"+Number(m.rating).toFixed(1)}</span> : null}
+                        <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>{m.rating && !isAreaGuidanceMealOption(m,day.destination)? <span style={{fontSize:10,color:C.wrn,fontWeight:700}}>{"*"+Number(m.rating).toFixed(1)}</span> : null}
                       </div>
                       <div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,flexWrap:"wrap"}}>
                         <span>{m.cuisine}</span>
@@ -8514,10 +8544,12 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                     <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:999,background:st==="yes"?C.grnBg:(st==="no"?C.redBg:C.wrnBg),color:st==="yes"?C.grn:(st==="no"?C.red:C.wrn),flexShrink:0}}>{soloTripMode?"Ready":(st==="yes"?"Approved":(st==="no"?"Rejected":("Voting "+summary.votedCount+"/"+voteMembers.length)))}</span>
                   </div>
                   {opts.length>1&&(<div style={{display:"flex",gap:6,flexWrap:"wrap",paddingLeft:16}}>
-                    {opts.map(function(opt,oi){
-                      var picked=selectedOpt===oi;
-                      return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{opt.name+" *"+Number(opt.rating||0).toFixed(1)+" $"+(opt.cost||0)}</button>;
-                    })}
+                        {opts.map(function(opt,oi){
+                        var picked=selectedOpt===oi;
+                        var optGuidance=isAreaGuidanceMealOption(opt,day.destination);
+                        var chipLabel=opt.name+(optGuidance?"":" *"+Number(opt.rating||0).toFixed(1))+" $"+(opt.cost||0);
+                        return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{chipLabel}</button>;
+                      })}
                   </div>)}
                   {!soloTripMode&&(<div style={{display:"flex",flexWrap:"wrap",gap:8,paddingLeft:16}}>
                     {voteMembers.map(function(vm){

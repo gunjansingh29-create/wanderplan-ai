@@ -1087,6 +1087,38 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     );
   });
 
+  test("normalizeDiningPlan converts manufactured dining names into area guidance", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 1,
+        destination: "Bhimashankar",
+        anchor: "temple access road",
+        meals: [
+          {
+            type: "Lunch",
+            name: "Bhimashankar Market Bistro",
+            cost: 28,
+            rating: 4.6,
+          },
+        ],
+      },
+    ]);
+    expect(out[0].meals[0]).toEqual(
+      expect.objectContaining({
+        name: "Lunch near temple access road",
+        cuisine: "Area guidance",
+        rating: 0,
+      })
+    );
+    expect(out[0].meals[0].options[0]).toEqual(
+      expect.objectContaining({
+        name: "Lunch near temple access road",
+        cuisine: "Area guidance",
+        rating: 0,
+      })
+    );
+  });
+
   test("receipt helpers total parsed items and format budget values", () => {
     expect(
       receiptItemsTotal([

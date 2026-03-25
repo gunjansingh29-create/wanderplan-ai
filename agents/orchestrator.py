@@ -7570,18 +7570,31 @@ def _fallback_meal_options(
             )
         return out[:limit]
 
+    anchor_label = str(near_poi or city or "your route").strip() or "your route"
+    label_city = city or "City"
     base_names = {
-        "Breakfast": ["Sunrise Cafe", "Morning Bakery", "Local Breakfast House"],
-        "Lunch": ["Market Bistro", "Street Kitchen", "Local Lunch Spot"],
-        "Dinner": ["Evening Table", "Harbor Grill", "Chef's Local Kitchen"],
+        "Breakfast": [
+            f"Breakfast near {anchor_label}",
+            f"{label_city} morning cafe area",
+            f"Temple-access breakfast around {label_city}",
+        ],
+        "Lunch": [
+            f"Lunch near {anchor_label}",
+            f"{label_city} local lunch area",
+            f"{label_city} market and lunch area",
+        ],
+        "Dinner": [
+            f"Dinner near {anchor_label}",
+            f"{label_city} evening dining area",
+            f"{label_city} temple-town dinner area",
+        ],
     }
     base_cost = {"Breakfast": 18.0, "Lunch": 32.0, "Dinner": 52.0}
     out: list[dict[str, Any]] = []
     for idx, base in enumerate(base_names.get(meal, [])):
         if len(out) >= limit:
             break
-        label_city = city or "City"
-        name = f"{label_city} {base}"
+        name = str(base).strip()
         cost = float(base_cost.get(meal, 30.0) + idx * 8)
         out.append(
             {
@@ -7589,12 +7602,12 @@ def _fallback_meal_options(
                 "name": name,
                 "city": city,
                 "country": country,
-                "tags": [meal.lower(), "local"],
+                "tags": [meal.lower(), "area-guidance", "local"],
                 "cost": cost,
-                "cuisine": "Local",
+                "cuisine": "Area guidance",
                 "near_poi": near_poi,
-                "rating": 4.2 + max(0.0, (len(out) * 0.15)),
-                "note": f"Fallback {meal.lower()} option near {near_poi or city or 'your route'}.",
+                "rating": 0.0,
+                "note": f"Area guidance only. Compare real {meal.lower()} options near {anchor_label}.",
             }
         )
     return out
