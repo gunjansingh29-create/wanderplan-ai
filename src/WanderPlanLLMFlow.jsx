@@ -1812,11 +1812,18 @@ function groundPoiRowsWithRoutePlan(rows, routePlan, interests, budgetTier, diet
     var destName=String((rowsForDest[0]&&rowsForDest[0].destination)||"").trim();
     var routeStop=routeStopForDestination(routePlan,destName);
     var nearbySites=Array.isArray(routeStop&&routeStop.nearbySites)?routeStop.nearbySites.filter(Boolean):[];
-    if(nearbySites.length>0 && rowsForDest.length>0 && rowsForDest.every(function(row){
-      return isManufacturedPoiName(row&&row.name,destName);
-    })){
-      grounded=grounded.concat(buildDestinationFallbackPois(destName, interests, budgetTier, dietary, groupPrefs, routePlan, "route_plan_grounded"));
-      return;
+    if(nearbySites.length>0){
+      var manufacturedRows=[];
+      var preservedRows=[];
+      rowsForDest.forEach(function(row){
+        if(isManufacturedPoiName(row&&row.name,destName))manufacturedRows.push(row);
+        else preservedRows.push(row);
+      });
+      if(manufacturedRows.length>0){
+        var groundedNearbyRows=buildDestinationFallbackPois(destName, interests, budgetTier, dietary, groupPrefs, routePlan, "route_plan_grounded");
+        grounded=grounded.concat(mergePoiListsByCanonical(preservedRows.concat(groundedNearbyRows), {}));
+        return;
+      }
     }
     grounded=grounded.concat(rowsForDest);
   });
