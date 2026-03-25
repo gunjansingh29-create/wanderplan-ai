@@ -14,6 +14,7 @@ import {
   buildItinerarySavePayload,
   buildPOIGroupPrefsFromCrew,
   buildPoiRequestSignature,
+  shouldReplaceWithGroundedNearbyPois,
   buildRoutePlanSignature,
   classifyPoiFailureReason,
   chooseBestItineraryRows,
@@ -73,6 +74,7 @@ import {
   resolveWizardTripId,
   roundTripFlightRoutePlan,
   routePlanDurationMap,
+  isManufacturedPoiName,
   resolvePoiVotingDecision,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
@@ -269,6 +271,35 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { name: "Grishneshwar (Aurangabad)" },
         { name: "Kedarnath" },
       ])
+    ).toBe(false);
+  });
+
+  test("isManufacturedPoiName detects generic destination filler rows", () => {
+    expect(isManufacturedPoiName("Somnath Heritage Walk", "Somnath")).toBe(true);
+    expect(isManufacturedPoiName("Bhalka Tirth", "Somnath")).toBe(false);
+  });
+
+  test("shouldReplaceWithGroundedNearbyPois prefers route planner nearby sites over manufactured rows", () => {
+    const rows = [
+      { name: "Somnath Heritage Walk" },
+      { name: "Somnath Temple Darshan and Orientation Walk" },
+    ];
+    const routePlan = {
+      destinations: [
+        {
+          destination: "Somnath",
+          nearbySites: ["Bhalka Tirth", "Triveni Sangam", "Somnath Beach"],
+        },
+      ],
+    };
+
+    expect(shouldReplaceWithGroundedNearbyPois(rows, { name: "Somnath" }, routePlan)).toBe(true);
+    expect(
+      shouldReplaceWithGroundedNearbyPois(
+        [{ name: "Bhalka Tirth" }, { name: "Triveni Sangam" }],
+        { name: "Somnath" },
+        routePlan
+      )
     ).toBe(false);
   });
 
