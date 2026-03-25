@@ -2381,6 +2381,14 @@ function normalizeStays(rows,dests,budgetTier,totalNights){
   }
   return out;
 }
+function normalizePersistedStayOptions(rows,dests,budgetTier,totalNights){
+  return normalizeStays(
+    Array.isArray(rows)?rows:[],
+    Array.isArray(dests)?dests:[],
+    String(budgetTier||"moderate").trim().toLowerCase()||"moderate",
+    Math.max(0,Number(totalNights)||0)
+  );
+}
 
 function canonicalStayVoteKey(stay, idx){
   var raw=(String(stay&&stay.name||"")+" "+String(stay&&stay.destination||"")+" "+String(stay&&stay.type||"")).trim().toLowerCase();
@@ -3966,8 +3974,14 @@ export default function WanderPlan(){
         }
       }
       if(Array.isArray(st.stay_options)){
-        setStays(st.stay_options);
-        setSD(st.stay_options.length>0);
+        var hydratedStayOptions=normalizePersistedStayOptions(
+          st.stay_options,
+          dests,
+          sharedBudgetTier,
+          sharedDurationDays
+        );
+        setStays(hydratedStayOptions);
+        setSD(hydratedStayOptions.length>0);
       }
       setStayVotes((st.stay_votes&&typeof st.stay_votes==="object")?st.stay_votes:{});
       setSFC((st.stay_final_choices&&typeof st.stay_final_choices==="object")?st.stay_final_choices:{});
@@ -4062,7 +4076,16 @@ export default function WanderPlan(){
       }
       if(state.flights_confirmed!==undefined)setFC(!!state.flights_confirmed);
       if(Array.isArray(state.flight_booking_links))setFBL(state.flight_booking_links.slice());
-        if(Array.isArray(state.stay_options)){setStays(state.stay_options);setSD(state.stay_options.length>0);}
+        if(Array.isArray(state.stay_options)){
+          var savedStayOptions=normalizePersistedStayOptions(
+            state.stay_options,
+            dests,
+            state.shared_budget_tier!==undefined?state.shared_budget_tier:sharedBudgetTier,
+            state.duration_days_locked!==undefined?state.duration_days_locked:sharedDurationDays
+          );
+          setStays(savedStayOptions);
+          setSD(savedStayOptions.length>0);
+        }
         if(state.stay_votes&&typeof state.stay_votes==="object")setStayVotes(state.stay_votes);
         if(state.stay_final_choices&&typeof state.stay_final_choices==="object")setSFC(state.stay_final_choices);
         if(Array.isArray(state.meal_plan)){var normalizedMealPlan=normalizeDiningPlan(state.meal_plan);setMeals(normalizedMealPlan);setMD(normalizedMealPlan.length>0);}
