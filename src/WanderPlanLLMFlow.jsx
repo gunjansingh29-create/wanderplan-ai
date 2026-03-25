@@ -2303,6 +2303,23 @@ export function stayPreviewLink(stay){
   return "https://www.google.com/search?q="+encodeURIComponent(query);
 }
 
+function isManufacturedStayName(name,destination){
+  var raw=String(name||"").trim();
+  var dest=String(destination||"").trim();
+  if(!raw||!dest)return false;
+  var low=raw.toLowerCase();
+  var destLow=dest.toLowerCase();
+  if(low.indexOf(destLow)!==0)return false;
+  return /( palace| suites| suite| lodge| inn| residency| retreat| central| urban| grand)\b/.test(low);
+}
+
+function isAreaGuidanceStay(stay){
+  if(!stay||typeof stay!=="object")return false;
+  var type=String(stay.type||"").trim().toLowerCase();
+  var source=String(stay.bookingSource||"").trim().toLowerCase();
+  return type==="area guidance" || source.indexOf("area guidance")>=0;
+}
+
 function normalizeStays(rows,dests,budgetTier,totalNights){
   var list=Array.isArray(rows)?rows:[];
   var names=(dests||[]).map(function(d){return String(d&&d.name||"").trim();}).filter(Boolean);
@@ -2331,21 +2348,32 @@ function normalizeStays(rows,dests,budgetTier,totalNights){
     var name=String(it.name||it.hotel||it.property||"").trim();
     if(!name)continue;
     var dest=pickDestination(it.destination||it.city||it.location||"");
+    var manufactured=isManufacturedStayName(name,dest);
+    var source=String(it.bookingSource||"").trim();
+    var areaName=String(it.neighborhood||it.area||"").trim();
+    var areaGuidance=manufactured||String(it.type||"").trim().toLowerCase()==="area guidance"||source.toLowerCase().indexOf("area guidance")>=0;
+    if(areaGuidance){
+      name=areaName?("Stay near "+areaName):("Stay near "+dest);
+    }
     var key=(name.toLowerCase()+"|"+dest.toLowerCase());
     if(seen[key])continue;
     seen[key]=true;
     var rate=Math.max(0,Math.round(Number(it.ratePerNight||it.price||it.pricePerNight||0)));
+    var why=String(it.whyThisOne||it.reason||"").trim();
+    if(areaGuidance&&!why){
+      why="Use this area to compare real guesthouses, dharamshalas, and hotels near "+(areaName||dest)+".";
+    }
     out.push({
       name:name,
       destination:dest,
-      type:String(it.type||it.propertyType||"Hotel").trim()||"Hotel",
-      rating:Number(it.rating||it.stars||4.3)||4.3,
+      type:areaGuidance?"Area guidance":(String(it.type||it.propertyType||"Hotel").trim()||"Hotel"),
+      rating:areaGuidance?0:(Number(it.rating||it.stars||4.3)||4.3),
       ratePerNight:rate>0?rate:defaultRate,
       totalNights:Math.max(1,Number(it.totalNights||it.nights||nightsEach)||nightsEach),
       amenities:Array.isArray(it.amenities)?it.amenities.slice(0,6):[],
-      neighborhood:String(it.neighborhood||it.area||"").trim(),
-      bookingSource:String(it.bookingSource||"WanderPlan LLM").trim(),
-      whyThisOne:String(it.whyThisOne||it.reason||"Good fit for your budget and trip style.").trim(),
+      neighborhood:areaName,
+      bookingSource:areaGuidance?"WanderPlan area guidance":(source||"WanderPlan LLM"),
+      whyThisOne:why||"Good fit for your budget and trip style.",
       cancellation:String(it.cancellation||"Flexible cancellation").trim(),
       imageUrl:String(it.imageUrl||it.image_url||it.photoUrl||it.photo_url||it.thumbnail||it.image||"").trim(),
       bookingUrl:String(it.bookingUrl||it.booking_url||it.listingUrl||it.listing_url||it.url||it.link||"").trim()
@@ -8129,18 +8157,18 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           {destList.map(function(destName){var opts=destGroups[destName]||[];var destSummary=summarizeStayDestination(destName);var ranked=rankStayOptions(destName);var leadingIdx=ranked[0]?ranked[0].idx:-1;var lockedEntry=destSummary.lockedEntry;var resolvedEntry=soloTripMode?(function(){var selectedIdx=stayPick[destName];return opts.find(function(entry){return entry.localIndex===selectedIdx;})||null;}()):destSummary.resolvedEntry;
             return(<div key={destName} style={{marginBottom:16}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL}}/><span style={{fontSize:14,fontWeight:700}}>{destName}</span><span style={{fontSize:12,color:C.tx3}}>{opts.length} options</span><span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:lockedEntry?C.goldDim:(resolvedEntry?C.grnBg:C.wrnBg),color:lockedEntry?C.goldT:(resolvedEntry?C.grn:C.wrn),marginLeft:"auto"}}>{soloTripMode?(resolvedEntry?"Selected":"Choose one"): (lockedEntry?"Locked":(resolvedEntry?("Ready "+destSummary.votedCount+"/"+voteMembers.length):("Voting "+destSummary.votedCount+"/"+voteMembers.length)))}</span></div>
-              {opts.map(function(entry){var s=entry.stay;var summary=summarizeStayVotes(stayVotes,s,entry.idx,voteMembers);var mine=readVoteForVoter(summary.row,currentVoteActor)==="up";var leader=soloTripMode?(stayPick[destName]===entry.localIndex):(entry.idx===leadingIdx);var isLocked=!!(lockedEntry&&lockedEntry.idx===entry.idx);var isResolved=!!(resolvedEntry&&resolvedEntry.idx===entry.idx);
+              {opts.map(function(entry){var s=entry.stay;var summary=summarizeStayVotes(stayVotes,s,entry.idx,voteMembers);var mine=readVoteForVoter(summary.row,currentVoteActor)==="up";var leader=soloTripMode?(stayPick[destName]===entry.localIndex):(entry.idx===leadingIdx);var isLocked=!!(lockedEntry&&lockedEntry.idx===entry.idx);var isResolved=!!(resolvedEntry&&resolvedEntry.idx===entry.idx);var isAreaGuidance=isAreaGuidanceStay(s);
                 return(<div key={entry.idx} onClick={function(){setStayPreview({destination:destName,stay:s,summary:summary,isLocked:isLocked,isResolved:isResolved,leader:leader});}} style={{background:isLocked?C.goldDim:(leader?C.teal+"10":C.bg),borderRadius:12,padding:"12px 14px",marginBottom:6,border:"2px solid "+(isLocked?C.goldT:(isResolved?C.teal+"50":C.border)),transition:"all .2s",cursor:"pointer"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-                    <div><h4 style={{fontWeight:700,fontSize:14,color:isLocked?C.goldT:(leader?C.tealL:C.tx)}}>{s.name}</h4><div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,marginTop:2,flexWrap:"wrap"}}><span>{s.type}</span><span style={{color:C.wrn}}>{"*"+(s.rating||4.5)}</span>{s.neighborhood&&<span>{s.neighborhood}</span>}<span style={{color:C.sky}}>Click to preview</span></div></div>
+                    <div><h4 style={{fontWeight:700,fontSize:14,color:isLocked?C.goldT:(leader?C.tealL:C.tx)}}>{s.name}</h4><div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,marginTop:2,flexWrap:"wrap"}}><span>{s.type}</span>{!isAreaGuidance&&Number(s.rating||0)>0&&<span style={{color:C.wrn}}>{"*"+(s.rating||4.5)}</span>}{s.neighborhood&&<span>{s.neighborhood}</span>}<span style={{color:C.sky}}>{isAreaGuidance?"Click to review area":"Click to preview"}</span></div></div>
                     <div style={{textAlign:"right"}}><span style={{fontWeight:700,fontSize:16,color:C.goldT}}>{"$"+(s.ratePerNight||0)}</span><p style={{fontSize:10,color:C.tx3}}>/night x {s.totalNights||"?"}</p></div>
                   </div>
                   {s.amenities&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:4}}>{s.amenities.map(function(a){return <span key={a} style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:"rgba(255,255,255,.04)",color:C.tx2}}>{a}</span>;})}</div>}
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>{s.whyThisOne&&<p style={{fontSize:11,color:C.tealL,fontStyle:"italic",flex:1}}>{s.whyThisOne}</p>}{s.bookingSource&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:999,background:C.sky+"15",color:C.sky}}>{s.bookingSource}</span>}</div>
                   <div style={{marginTop:6,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:11,color:(mine||isResolved)?C.grn:C.tx3}}>{soloTripMode?(isResolved?"Selected for this trip":"Preview and select below"):(isLocked?"Organizer locked this stay":(mine?"Your pick":"Vote on this stay below"))}</span>
+                    <span style={{fontSize:11,color:(mine||isResolved)?C.grn:C.tx3}}>{soloTripMode?(isResolved?(isAreaGuidance?"Selected stay area":"Selected for this trip"):(isAreaGuidance?"Review and use this area below":"Preview and select below")):(isLocked?"Organizer locked this stay":(mine?"Your pick":"Vote on this stay below"))}</span>
                     <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:999,background:isLocked?C.goldDim:(soloTripMode?(isResolved?C.grnBg:C.surface):(summary.up>=majorityNeeded?C.grnBg:C.surface)),color:isLocked?C.goldT:(soloTripMode?(isResolved?C.grn:C.tx2):(summary.up>=majorityNeeded?C.grn:C.tx2))}}>
-                      {soloTripMode?(isResolved?"Selected":"Preview"):(summary.up+" / "+voteMembers.length+" votes")}
+                      {soloTripMode?(isResolved?(isAreaGuidance?"Area Selected":"Selected"):(isAreaGuidance?"Review Area":"Preview")):(summary.up+" / "+voteMembers.length+" votes")}
                     </span>
                   </div>
                   {!soloTripMode&&(<div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:8}}>
@@ -8155,7 +8183,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                     })}
                   </div>)}
                   <div style={{marginTop:10,display:"flex",justifyContent:"flex-end",gap:8}}>
-                    {soloTripMode&&<button onClick={function(e){e.stopPropagation();selectSoloStay(destName,entry);}} style={{padding:"8px 12px",borderRadius:8,border:"none",background:isResolved?C.grn:C.teal,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>{isResolved?"Selected":"Select Stay"}</button>}
+                    {soloTripMode&&<button onClick={function(e){e.stopPropagation();selectSoloStay(destName,entry);}} style={{padding:"8px 12px",borderRadius:8,border:"none",background:isResolved?C.grn:C.teal,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>{isResolved?(isAreaGuidance?"Area Selected":"Selected"):(isAreaGuidance?"Use This Area":"Select Stay")}</button>}
                     {!soloTripMode&&organizerMode&&<button onClick={function(e){e.stopPropagation();lockStayChoice(destName,entry);}} style={{padding:"8px 12px",borderRadius:8,border:"none",background:isLocked?C.gold:C.goldT,color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>{isLocked?"Locked by Organizer":"Lock This Stay"}</button>}
                   </div>
                 </div>);
@@ -8181,7 +8209,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                   <h3 style={{fontSize:24,fontWeight:800,marginBottom:6}}>{stayPreview.stay.name||"Selected stay"}</h3>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap",fontSize:12,color:C.tx3}}>
                     <span>{stayPreview.stay.type||"Hotel"}</span>
-                    <span style={{color:C.wrn}}>{"*"+(stayPreview.stay.rating||4.5)}</span>
+                    {!isAreaGuidanceStay(stayPreview.stay)&&Number(stayPreview.stay.rating||0)>0&&<span style={{color:C.wrn}}>{"*"+(stayPreview.stay.rating||4.5)}</span>}
                     {stayPreview.stay.neighborhood&&<span>{stayPreview.stay.neighborhood}</span>}
                     {stayPreview.stay.bookingSource&&<span style={{color:C.sky}}>{stayPreview.stay.bookingSource}</span>}
                   </div>
@@ -8213,6 +8241,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                     <span>{"Source: "+(stayPreview.stay.bookingSource||"Direct / OTA")}</span>
                     <span>{"Cancellation: "+(stayPreview.stay.cancellation||"Policy not provided")}</span>
                     <span>{"Destination: "+(stayPreview.destination||stayPreview.stay.destination||"Trip stop")}</span>
+                    {isAreaGuidanceStay(stayPreview.stay)&&<span>This is area guidance, not a single verified hotel listing.</span>}
                   </div>
                 </div>
                 <div style={{padding:"14px 16px",borderRadius:14,background:C.bg,border:"1px solid "+C.border}}>
@@ -8225,9 +8254,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                 </div>
               </div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                <p style={{fontSize:12,color:C.tx3}}>Preview stays before voting so the crew can compare hotel features, pricing, and policies clearly.</p>
+                <p style={{fontSize:12,color:C.tx3}}>{isAreaGuidanceStay(stayPreview.stay)?"Review this area before choosing a real guesthouse, dharamshala, or hotel nearby.":"Preview stays before voting so the crew can compare hotel features, pricing, and policies clearly."}</p>
                 <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                  {stayPreviewLink(stayPreview.stay)&&<a href={stayPreviewLink(stayPreview.stay)} target="_blank" rel="noreferrer" style={{padding:"10px 14px",borderRadius:10,border:"1px solid "+C.sky+"35",background:C.sky+"12",color:C.sky,fontSize:12,fontWeight:700,textDecoration:"none"}}>{stayPreview.stay.bookingUrl?"Open Listing":"Search Property"}</a>}
+                  {stayPreviewLink(stayPreview.stay)&&<a href={stayPreviewLink(stayPreview.stay)} target="_blank" rel="noreferrer" style={{padding:"10px 14px",borderRadius:10,border:"1px solid "+C.sky+"35",background:C.sky+"12",color:C.sky,fontSize:12,fontWeight:700,textDecoration:"none"}}>{isAreaGuidanceStay(stayPreview.stay)?"Search This Area":(stayPreview.stay.bookingUrl?"Open Listing":"Search Property")}</a>}
                   <button onClick={function(){setStayPreview(null);}} style={{padding:"10px 14px",borderRadius:10,border:"1px solid "+C.border,background:C.surface,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>Back to stays</button>
                 </div>
               </div>

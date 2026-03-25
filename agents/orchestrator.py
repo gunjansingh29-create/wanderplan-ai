@@ -5870,6 +5870,74 @@ async def search_stays(trip_id: str, body: StaySearchRequest, user_id: str = Dep
     city = str(body.city or "").strip()
     city_slug = re.sub(r"[^a-z0-9]+", "-", city.lower()).strip("-")
 
+    def _canon_place_key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+    def _route_stop_for_destination(route_plan: Any, destination: str) -> dict[str, Any] | None:
+        plan = route_plan if isinstance(route_plan, dict) else {}
+        stops = plan.get("destinations") if isinstance(plan.get("destinations"), list) else []
+        target = _canon_place_key(destination)
+        for stop in stops:
+            if not isinstance(stop, dict):
+                continue
+            if _canon_place_key(stop.get("destination") or stop.get("name")) == target:
+                return stop
+        return None
+
+    def _build_area_guidance_stays(destination: str, route_plan: Any) -> list[dict[str, Any]]:
+        route_stop = _route_stop_for_destination(route_plan, destination)
+        nearby_sites = []
+        if route_stop:
+            raw_sites = route_stop.get("nearbySites") or route_stop.get("nearby_sites") or []
+            if isinstance(raw_sites, list):
+                nearby_sites = [str(site or "").strip() for site in raw_sites if str(site or "").strip()]
+        best_time = str((route_stop or {}).get("bestTime") or (route_stop or {}).get("best_time") or "").strip()
+        travel_note = str((route_stop or {}).get("travelNote") or (route_stop or {}).get("travel_note") or "").strip()
+        reason = str((route_stop or {}).get("reason") or "").strip()
+
+        primary_anchor = nearby_sites[0] if nearby_sites else ""
+        secondary_anchor = nearby_sites[1] if len(nearby_sites) > 1 else ""
+        anchor_label = primary_anchor or destination
+        guidance = [
+            {
+                "name": f"Stay near {anchor_label}",
+                "type": "Area guidance",
+                "rating": 0.0,
+                "price": 135.0,
+                "neighborhood": primary_anchor or f"{destination} temple approach",
+                "amenities": ["Area guidance", "Search real stays"],
+                "why": f"Use this area to compare real guesthouses, dharamshalas, or hotels close to {anchor_label}.",
+                "cancellation": "Check provider policy",
+            },
+            {
+                "name": f"{destination} temple access area",
+                "type": "Area guidance",
+                "rating": 0.0,
+                "price": 110.0,
+                "neighborhood": secondary_anchor or f"{destination} main access road",
+                "amenities": ["Area guidance", "Local access"],
+                "why": f"Best if you want easy early-morning temple access and simple local transport around {destination}.",
+                "cancellation": "Check provider policy",
+            },
+            {
+                "name": f"{destination} town center stay area",
+                "type": "Area guidance",
+                "rating": 0.0,
+                "price": 95.0,
+                "neighborhood": f"{destination} town center",
+                "amenities": ["Area guidance", "Transit base"],
+                "why": f"Useful base when you want broader lodging choice, food access, and flexible onward travel from {destination}.",
+                "cancellation": "Check provider policy",
+            },
+        ]
+        if best_time:
+            guidance[0]["why"] += f" Best visit timing nearby: {best_time}."
+        if travel_note:
+            guidance[1]["why"] += f" Travel note: {travel_note}."
+        if reason:
+            guidance[2]["why"] += f" Route fit: {reason}"
+        return guidance
+
     fallback_catalog: dict[str, list[dict[str, Any]]] = {
         "auckland": [
             {"name": "Britomart House", "type": "Boutique Hotel", "rating": 4.7, "price": 220.0, "neighborhood": "Britomart", "amenities": ["WiFi", "Breakfast", "Harbor views"], "why": "Walkable to ferries, dining, and the waterfront.", "cancellation": "Free cancellation up to 48 hours"},
@@ -5909,30 +5977,35 @@ async def search_stays(trip_id: str, body: StaySearchRequest, user_id: str = Dep
         ],
     }
 
+    route_plan = {}
+    async with db_pool.acquire() as conn:
+        planning_state_row = await conn.fetchrow(
+            "SELECT state FROM trip_planning_states WHERE trip_id = $1 ORDER BY updated_at DESC LIMIT 1",
+            trip_id,
+        )
+        planning_state = _json_obj((planning_state_row["state"] if planning_state_row else {}) or {})
+        route_plan = planning_state.get("route_plan") if isinstance(planning_state, dict) else {}
+
     if city_slug in fallback_catalog:
         raw_stays = fallback_catalog[city_slug]
     else:
-        raw_stays = [
-            {"name": f"{city} Old Town House", "type": "Boutique Hotel", "rating": 4.5, "price": 190.0, "neighborhood": "Old Town", "amenities": ["WiFi", "Breakfast", "Courtyard"], "why": "Walkable base near historic sights and restaurants.", "cancellation": "Flexible cancellation"},
-            {"name": f"{city} Station Quarter Suites", "type": "Serviced Apartment", "rating": 4.3, "price": 155.0, "neighborhood": "Station Quarter", "amenities": ["Kitchen", "Laundry", "WiFi"], "why": "Useful when the group wants more room and transit access.", "cancellation": "Pay later option available"},
-            {"name": f"{city} Harbor & Market Hotel", "type": "City Hotel", "rating": 4.6, "price": 225.0, "neighborhood": "Waterfront", "amenities": ["WiFi", "Gym", "Breakfast"], "why": "Good fit when most plans cluster near the center and dining districts.", "cancellation": "Free cancellation up to 48 hours"},
-            {"name": f"{city} Garden District Lodge", "type": "Guesthouse", "rating": 4.2, "price": 135.0, "neighborhood": "Garden District", "amenities": ["WiFi", "Garden", "Parking"], "why": "Quieter stay for travelers prioritizing value and slower evenings.", "cancellation": "Flexible cancellation"},
-        ]
+        raw_stays = _build_area_guidance_stays(city, route_plan)
 
     stays = []
     for idx, option in enumerate(raw_stays):
         stay_name = str(option.get("name") or "").strip()
-        booking_query = quote_plus(f"{stay_name} {city} hotel")
+        is_area_guidance = str(option.get("type") or "").strip().lower() == "area guidance"
+        booking_query = quote_plus(f"{city} {'stay near ' + str(option.get('neighborhood') or '').strip() if is_area_guidance else stay_name + ' hotel'}")
         stays.append({
             "stay_id": f"STAY-{city_slug or 'CITY'}-{idx+1:03d}",
             "name": stay_name,
             "price_per_night_usd": float(option.get("price") or 0),
-            "rating": float(option.get("rating") or 4.3),
+            "rating": float(option.get("rating") or 0),
             "type": str(option.get("type") or "Hotel"),
             "nights": nights,
             "amenities": list(option.get("amenities") or []),
             "neighborhood": str(option.get("neighborhood") or "").strip(),
-            "booking_source": "WanderPlan curated fallback",
+            "booking_source": "WanderPlan area guidance" if is_area_guidance else "WanderPlan curated fallback",
             "why_this_one": str(option.get("why") or "").strip(),
             "cancellation": str(option.get("cancellation") or "Flexible cancellation"),
             "booking_url": f"https://www.google.com/search?q={booking_query}",
