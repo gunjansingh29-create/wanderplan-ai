@@ -1022,6 +1022,34 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     );
   });
 
+  test("normalizeStays converts prefixed manufactured stay names into area guidance", () => {
+    const out = normalizeStays(
+      [
+        {
+          name: "Grand Bhimashankar Palace",
+          destination: "Bhimashankar",
+          type: "Hotel",
+          rating: 4.8,
+          ratePerNight: 200,
+          neighborhood: "temple approach road",
+          bookingSource: "WanderPlan curated fallback",
+        },
+      ],
+      [{ name: "Bhimashankar" }],
+      "moderate",
+      1
+    );
+    expect(out[0]).toEqual(
+      expect.objectContaining({
+        name: "Stay near temple approach road",
+        destination: "Bhimashankar",
+        type: "Area guidance",
+        rating: 0,
+        bookingSource: "WanderPlan area guidance",
+      })
+    );
+  });
+
   test("normalizeDiningPlan expands meal options and keeps ratings", () => {
     const out = normalizeDiningPlan([
       {

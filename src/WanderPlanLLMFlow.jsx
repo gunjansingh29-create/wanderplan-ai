@@ -2309,7 +2309,7 @@ function isManufacturedStayName(name,destination){
   if(!raw||!dest)return false;
   var low=raw.toLowerCase();
   var destLow=dest.toLowerCase();
-  if(low.indexOf(destLow)!==0)return false;
+  if(low.indexOf(destLow)<0)return false;
   return /( palace| suites| suite| lodge| inn| residency| retreat| central| urban| grand)\b/.test(low);
 }
 
