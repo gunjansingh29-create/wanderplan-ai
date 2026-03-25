@@ -1783,6 +1783,7 @@ function buildPoiRequestSignature(destinations, interests, budgetTier, dietary, 
     return (Array.isArray(list)?list:[]).map(function(v){return String(v||"").trim();}).filter(Boolean).sort();
   }
   return JSON.stringify({
+    version:"grounded-nearby-sites-v1",
     destinations:destList,
     interests:normalizedInterests,
     budgetTier:String(budgetTier||"").trim().toLowerCase(),

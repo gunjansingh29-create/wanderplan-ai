@@ -203,6 +203,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     );
 
     expect(updated).not.toBe(base);
+    expect(base).toMatch(/grounded-nearby-sites-v1/);
   });
 
   test("poiListNeedsRefresh detects signature mismatch and destination drift", () => {
