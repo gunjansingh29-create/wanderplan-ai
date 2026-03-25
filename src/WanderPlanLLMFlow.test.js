@@ -986,7 +986,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ).toContain("google.com/search?q=");
   });
 
-  test("normalizeStays preserves backend stay metadata for richer previews", () => {
+  test("normalizeStays converts curated fallback stays into honest area guidance", () => {
     const out = normalizeStays(
       [
         {
@@ -1010,11 +1010,13 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     );
     expect(out[0]).toEqual(
       expect.objectContaining({
-        name: "Britomart House",
+        name: "Stay near Britomart",
         destination: "Auckland",
+        type: "Area guidance",
+        rating: 0,
         amenities: ["WiFi", "Breakfast", "Harbor views"],
         neighborhood: "Britomart",
-        bookingSource: "WanderPlan curated fallback",
+        bookingSource: "WanderPlan area guidance",
         whyThisOne: "Walkable to ferries, dining, and the waterfront.",
         cancellation: "Free cancellation up to 48 hours",
         bookingUrl: "https://example.test/britomart-house",

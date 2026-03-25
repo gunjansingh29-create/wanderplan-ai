@@ -2317,7 +2317,7 @@ function isAreaGuidanceStay(stay){
   if(!stay||typeof stay!=="object")return false;
   var type=String(stay.type||"").trim().toLowerCase();
   var source=String(stay.bookingSource||"").trim().toLowerCase();
-  return type==="area guidance" || source.indexOf("area guidance")>=0;
+  return type==="area guidance" || source.indexOf("area guidance")>=0 || source.indexOf("curated fallback")>=0;
 }
 
 function normalizeStays(rows,dests,budgetTier,totalNights){
@@ -2351,7 +2351,7 @@ function normalizeStays(rows,dests,budgetTier,totalNights){
     var manufactured=isManufacturedStayName(name,dest);
     var source=String(it.bookingSource||"").trim();
     var areaName=String(it.neighborhood||it.area||"").trim();
-    var areaGuidance=manufactured||String(it.type||"").trim().toLowerCase()==="area guidance"||source.toLowerCase().indexOf("area guidance")>=0;
+    var areaGuidance=manufactured||isAreaGuidanceStay(it);
     if(areaGuidance){
       name=areaName?("Stay near "+areaName):("Stay near "+dest);
     }
