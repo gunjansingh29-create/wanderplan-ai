@@ -2587,7 +2587,9 @@ var MANUFACTURED_MEAL_GENERIC_WORDS=[
 
 var MANUFACTURED_MEAL_DESCRIPTOR_WORDS=[
   "sunrise","morning","market","laneway","harbor","street","night",
-  "ember","local","chef","temple","town","templetown","evening"
+  "ember","local","chef","temple","town","templetown","evening",
+  "pilgrim","pilgrimage","courtyard","ritual","rituals","sacred",
+  "holy","aarti","darshan","heritage","devotional","spiritual"
 ];
 
 function normalizeMealText(value){
@@ -2638,6 +2640,18 @@ function isManufacturedMealName(name,destination){
         MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)<0;
     });
     if(hasGeneric && significant.length===0)return true;
+  }
+  var allTokens=rawNorm.split(/\s+/).filter(Boolean);
+  if(allTokens.length>=3 && allTokens.length<=6){
+    var hasGenericWord=allTokens.some(function(token){return MANUFACTURED_MEAL_GENERIC_WORDS.indexOf(token)>=0;});
+    var hasDescriptorWord=allTokens.some(function(token){return MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)>=0;});
+    var destTokens=destNorm?destNorm.split(/\s+/).filter(Boolean):[];
+    var nonPatternTokens=allTokens.filter(function(token){
+      return MANUFACTURED_MEAL_GENERIC_WORDS.indexOf(token)<0 &&
+        MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)<0 &&
+        destTokens.indexOf(token)<0;
+    });
+    if(hasGenericWord && hasDescriptorWord && nonPatternTokens.length===0)return true;
   }
   return false;
 }

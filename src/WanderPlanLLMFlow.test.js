@@ -1181,6 +1181,44 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     );
   });
 
+  test("normalizeDiningPlan converts non-prefixed synthetic temple dining names into area guidance", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 1,
+        destination: "Somnath",
+        anchor: "temple access road",
+        meals: [
+          {
+            type: "Dinner",
+            name: "Temple Courtyard Cafe",
+            cost: 30,
+            rating: 4.4,
+          },
+          {
+            type: "Breakfast",
+            name: "Pilgrim Supper House",
+            cost: 18,
+            rating: 4.3,
+          },
+        ],
+      },
+    ]);
+    expect(out[0].meals[0]).toEqual(
+      expect.objectContaining({
+        name: "Dinner near temple access road",
+        cuisine: "Area guidance",
+        rating: 0,
+      })
+    );
+    expect(out[0].meals[1]).toEqual(
+      expect.objectContaining({
+        name: "Breakfast near temple access road",
+        cuisine: "Area guidance",
+        rating: 0,
+      })
+    );
+  });
+
   test("receipt helpers total parsed items and format budget values", () => {
     expect(
       receiptItemsTotal([
