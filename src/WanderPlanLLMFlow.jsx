@@ -2582,14 +2582,21 @@ var MANUFACTURED_MEAL_SUFFIXES=[
 var MANUFACTURED_MEAL_GENERIC_WORDS=[
   "cafe","bistro","kitchen","table","house","bakery","grill","hall",
   "club","roastery","diner","eatery","canteen","dhaba","restaurant",
-  "spot","bar","food","brunch","breakfast","lunch","dinner","supper"
+  "spot","bar","food","brunch","breakfast","lunch","dinner","supper",
+  "cuisine"
 ];
 
 var MANUFACTURED_MEAL_DESCRIPTOR_WORDS=[
   "sunrise","morning","market","laneway","harbor","street","night",
   "ember","local","chef","temple","town","templetown","evening",
   "pilgrim","pilgrimage","courtyard","ritual","rituals","sacred",
-  "holy","aarti","darshan","heritage","devotional","spiritual"
+  "holy","aarti","darshan","heritage","devotional","spiritual",
+  "traditional",
+  "coastal","photography","seafood","tasting","cooking","class"
+];
+
+var MANUFACTURED_MEAL_CONNECTOR_WORDS=[
+  "and","with","of","near","by","for","from","to","at","in","on"
 ];
 
 function normalizeMealText(value){
@@ -2637,21 +2644,24 @@ function isManufacturedMealName(name,destination){
     var hasGeneric=tokens.some(function(token){return MANUFACTURED_MEAL_GENERIC_WORDS.indexOf(token)>=0;});
     var significant=tokens.filter(function(token){
       return MANUFACTURED_MEAL_GENERIC_WORDS.indexOf(token)<0 &&
-        MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)<0;
+        MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)<0 &&
+        MANUFACTURED_MEAL_CONNECTOR_WORDS.indexOf(token)<0;
     });
-    if(hasGeneric && significant.length===0)return true;
+    var hasDescriptor=tokens.some(function(token){return MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)>=0;});
+    if(significant.length===0 && (hasGeneric || hasDescriptor))return true;
   }
   var allTokens=rawNorm.split(/\s+/).filter(Boolean);
-  if(allTokens.length>=3 && allTokens.length<=6){
+  if(allTokens.length>=3 && allTokens.length<=7){
     var hasGenericWord=allTokens.some(function(token){return MANUFACTURED_MEAL_GENERIC_WORDS.indexOf(token)>=0;});
     var hasDescriptorWord=allTokens.some(function(token){return MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)>=0;});
     var destTokens=destNorm?destNorm.split(/\s+/).filter(Boolean):[];
     var nonPatternTokens=allTokens.filter(function(token){
       return MANUFACTURED_MEAL_GENERIC_WORDS.indexOf(token)<0 &&
         MANUFACTURED_MEAL_DESCRIPTOR_WORDS.indexOf(token)<0 &&
+        MANUFACTURED_MEAL_CONNECTOR_WORDS.indexOf(token)<0 &&
         destTokens.indexOf(token)<0;
     });
-    if(hasGenericWord && hasDescriptorWord && nonPatternTokens.length===0)return true;
+    if(hasDescriptorWord && nonPatternTokens.length<=2 && (hasGenericWord || destTokens.length>0))return true;
   }
   return false;
 }
@@ -2720,6 +2730,17 @@ export function normalizeDiningPlan(rows){
       });
       var selectedOpt=(meal&&meal.selectedOption!==undefined&&meal.selectedOption!==null)?Number(meal.selectedOption):0;
       if(!(selectedOpt>=0&&selectedOpt<options.length))selectedOpt=0;
+      var requestedName=String(
+        (options[selectedOpt]&&options[selectedOpt].name) ||
+        (meal&&meal.name) ||
+        ""
+      ).trim();
+      if(requestedName && isManufacturedMealName(requestedName,destination)){
+        var groundedIndex=options.findIndex(function(opt){
+          return isAreaGuidanceMealOption(opt,destination);
+        });
+        if(groundedIndex>=0)selectedOpt=groundedIndex;
+      }
       var picked=options[selectedOpt]||options[0]||{};
       return {
         type:type,
