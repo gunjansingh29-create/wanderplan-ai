@@ -2603,27 +2603,84 @@ function normalizeMealText(value){
   return String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
 }
 
+var MEAL_AREA_KEYWORDS=[
+  "access","area","bazaar","beach","center","centre","chowk","district","fort",
+  "front","ghat","ghats","harbor","harbour","hill","hills","junction","lake",
+  "lane","lanes","market","marina","old","precinct","quarter","quarters","road",
+  "riverfront","square","street","streets","temple","town","trailhead","waterfront"
+];
+
+var MEAL_ACTIVITY_LABEL_WORDS=[
+  "class","circuit","darshan","experience","highlights","highlight","orientation",
+  "photography","session","tasting","tour","trail","viewing","walk","workshop"
+];
+
+function cleanMealAnchorText(value){
+  return String(value||"").replace(/\s+/g," ").trim();
+}
+
+function mealAreaLabel(destination, anchor){
+  var dest=cleanMealAnchorText(destination)||"the area";
+  var raw=cleanMealAnchorText(anchor);
+  if(!raw)return dest;
+  var candidate=raw
+    .replace(/[|/;]+/g,",")
+    .split(",")[0];
+  if(/^approx\.\s*\d+\s*min transit\b/i.test(candidate) && /\bto\b/i.test(candidate)){
+    candidate=candidate.split(/\bto\b/i).pop();
+  }
+  candidate=candidate
+    .replace(/^(?:arrive in|travel to)\s+/i,"")
+    .replace(/^check in(?: at)?\s+/i,"")
+    .replace(/^check out(?: from)?\s+/i,"")
+    .replace(/^stay near\s+/i,"");
+  if(/\bnear\b/i.test(candidate)){
+    candidate=candidate.split(/\bnear\b/i).pop();
+  }
+  if(/\bof\b/i.test(candidate)){
+    var tail=candidate.split(/\bof\b/i).pop();
+    if(cleanMealAnchorText(tail))candidate=tail;
+  }
+  candidate=cleanMealAnchorText(candidate)
+    .replace(/\b(?:orientation walk|heritage walk|photography tour|interpretation session|evening aarti viewing|landmark orientation walk|signature local experience|market and neighborhood walk|sunset or evening highlight|temple darshan and orientation walk)\b.*$/i,"")
+    .replace(/\b(?:darshan|viewing|session|trail|circuit|tasting|workshop|class|experience)\b.*$/i,"")
+    .replace(/^[\s:,-]+|[\s:,-]+$/g,"");
+  candidate=cleanMealAnchorText(candidate);
+  if(!candidate)return dest;
+  var candidateNorm=normalizeMealText(candidate);
+  var destNorm=normalizeMealText(dest);
+  if(!candidateNorm || candidateNorm==="trip highlights" || candidateNorm==="highlights")return dest;
+  if(candidateNorm===destNorm)return dest;
+  var tokens=candidateNorm.split(/\s+/).filter(Boolean);
+  var hasAreaToken=tokens.some(function(token){return MEAL_AREA_KEYWORDS.indexOf(token)>=0;});
+  var hasActivityToken=tokens.some(function(token){return MEAL_ACTIVITY_LABEL_WORDS.indexOf(token)>=0;});
+  if((isManufacturedMealName(candidate,dest) || isManufacturedPoiName(candidate,dest)) && !hasAreaToken)return dest;
+  if(tokens.length>7 && !hasAreaToken)return dest;
+  if(hasActivityToken && !hasAreaToken)return dest;
+  return candidate;
+}
+
 function mealGuidanceVariants(type,destination,anchor){
   var t=String(type||"meal").toLowerCase();
   var dest=String(destination||"the area").trim()||"the area";
-  var near=String(anchor||dest).trim()||dest;
+  var near=mealAreaLabel(dest,anchor);
   if(t==="breakfast")return [
-    {name:"Breakfast near "+near,note:"Use this area to compare real breakfast spots near "+near+"."},
-    {name:dest+" morning cafe area",note:"Popular morning cafes tend to cluster around "+dest+"."},
-    {name:"Temple-access breakfast around "+dest,note:"A practical early meal area before morning darshan or local visits."},
-    {name:dest+" tea and bakery area",note:"Area guidance only; compare actual breakfast stops nearby."}
+    {name:"Breakfast area",note:"Area guidance only. Compare real breakfast spots near "+near+"."},
+    {name:"Cafe cluster",note:"Area guidance only. Compare real cafes near "+near+"."},
+    {name:"Early-start breakfast area",note:"Useful if you want a practical breakfast before sightseeing near "+near+"."},
+    {name:"Tea and bakery cluster",note:"Area guidance only. Compare real tea stalls, cafes, and bakeries near "+near+"."}
   ];
   if(t==="lunch")return [
-    {name:"Lunch near "+near,note:"Use this area to compare real lunch options near "+near+"."},
-    {name:dest+" local lunch area",note:"A reliable midday dining cluster around "+dest+"."},
-    {name:dest+" market and lunch area",note:"Useful if you want simple local food near the main route."},
-    {name:"Temple-town lunch near "+dest,note:"Area guidance only; compare actual local eateries nearby."}
+    {name:"Lunch area",note:"Area guidance only. Compare real lunch options near "+near+"."},
+    {name:"Casual lunch cluster",note:"Area guidance only. Good for comparing simple midday spots near "+near+"."},
+    {name:"Midday dining area",note:"Useful if you want flexible lunch choices while staying close to "+near+"."},
+    {name:"Quick lunch area",note:"Area guidance only. Compare real local eateries near "+near+"."}
   ];
   return [
-    {name:"Dinner near "+near,note:"Use this area to compare real dinner options near "+near+"."},
-    {name:dest+" evening dining area",note:"A good evening dining cluster in "+dest+"."},
-    {name:dest+" temple-town dinner area",note:"Practical dinner area after temple visits or evening aarti."},
-    {name:dest+" local supper area",note:"Area guidance only; choose a real restaurant after comparing nearby options."}
+    {name:"Dinner area",note:"Area guidance only. Compare real dinner options near "+near+"."},
+    {name:"Evening dining cluster",note:"Area guidance only. Good for comparing dinner spots close to "+near+"."},
+    {name:"Dinner cluster",note:"Useful if you want a realistic evening dining area near "+near+" without locking to one venue."},
+    {name:"After-sightseeing dinner area",note:"Area guidance only. Choose a real restaurant after comparing nearby options near "+near+"."}
   ];
 }
 
@@ -2686,7 +2743,7 @@ export function normalizeDiningPlan(rows){
   var list=Array.isArray(rows)?rows:[];
   return list.map(function(day,dayIndex){
     var destination=String(day&&day.destination||"City").trim()||"City";
-    var anchor=String(day&&day.anchor||day&&day.locationLabel||"").trim();
+    var anchor=mealAreaLabel(destination,String(day&&day.anchor||day&&day.locationLabel||"").trim());
     var locationLabel=anchor?String(destination+" near "+anchor).trim():destination;
     var mealsIn=Array.isArray(day&&day.meals)?day.meals:[];
     var mealsOut=mealsIn.map(function(meal,mealIndex){
@@ -2701,7 +2758,7 @@ export function normalizeDiningPlan(rows){
           name:guidance?guidanceVariant.name:rawName,
           city:String(opt&&opt.city||meal&&meal.city||destination).trim(),
           cuisine:guidance?"Area guidance":(String(opt&&opt.cuisine||meal&&meal.cuisine||"Local").trim()||"Local"),
-          cost:Number((opt&&opt.cost)!==undefined?opt.cost:(meal&&meal.cost)!==undefined?meal.cost:0)||0,
+          cost:guidance?0:(Number((opt&&opt.cost)!==undefined?opt.cost:(meal&&meal.cost)!==undefined?meal.cost:0)||0),
           rating:guidance?0:(Number((opt&&opt.rating)!==undefined?opt.rating:(meal&&meal.rating)!==undefined?meal.rating:(4.2+(optIndex*0.2)))||4.2),
           note:guidance?guidanceVariant.note:(String(opt&&opt.note||opt&&opt.near_poi||meal&&meal.note||"").trim()),
           travel_minutes:Number((opt&&opt.travel_minutes)!==undefined?opt.travel_minutes:(opt&&opt.travelMinutes)!==undefined?opt.travelMinutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0,
@@ -2721,7 +2778,7 @@ export function normalizeDiningPlan(rows){
           name:candidateName,
           city:destination,
           cuisine:"Area guidance",
-          cost:Math.max(8,Math.round((Number(meal&&meal.cost||24)||24)+(variantIndex*4)-4)),
+          cost:0,
           rating:0,
           note:String(variant.note||"").trim(),
           travel_minutes:Math.max(4,8+(variantIndex*4)),
@@ -8609,10 +8666,11 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           </div>)}
           {meals.map(function(day,di){
             return(<div key={di} style={{marginBottom:16}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>{day.locationLabel||day.destination||("Location "+day.day)}</span><span style={{fontSize:12,color:C.tx3}}>{day.anchor?("Near "+day.anchor):"Location-first dining cluster"}</span></div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>{day.destination||("Location "+day.day)}</span><span style={{fontSize:12,color:C.tx3}}>{day.anchor?("Area guidance near "+day.anchor):"Location-based dining"}</span></div>
               {(day.meals||[]).map(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);var st=soloTripMode?"yes":((summary.up>=majorityNeeded&&summary.up>summary.down)?"yes":(summary.votedCount===voteMembers.length&&summary.down>=summary.up?"no":""));var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
                 var opts=Array.isArray(m.options)?m.options:[];
                 var selectedOpt=(m.selectedOption!==undefined&&m.selectedOption!==null)?m.selectedOption:0;
+                var mealGuidance=isAreaGuidanceMealOption(m,day.destination);
                 return(<div key={mi} style={{display:"flex",flexDirection:"column",gap:6,padding:"8px 0",borderBottom:mi<(day.meals||[]).length-1?"1px solid "+C.border:"none",opacity:st==="no"?.35:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:10}}>
                     <div style={{width:6,height:6,borderRadius:999,background:typeCol,flexShrink:0}}/>
@@ -8620,7 +8678,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                         <span style={{fontSize:10,color:typeCol,fontWeight:600}}>{m.type}</span>
                         {m.time&&<span style={{fontSize:10,color:C.tx3}}>{m.time}</span>}
-                        <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>{m.rating && !isAreaGuidanceMealOption(m,day.destination)? <span style={{fontSize:10,color:C.wrn,fontWeight:700}}>{"*"+Number(m.rating).toFixed(1)}</span> : null}
+                        <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>{m.rating && !mealGuidance? <span style={{fontSize:10,color:C.wrn,fontWeight:700}}>{"*"+Number(m.rating).toFixed(1)}</span> : null}
                       </div>
                       <div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,flexWrap:"wrap"}}>
                         <span>{m.cuisine}</span>
@@ -8628,14 +8686,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                         {m.note&&<span style={{fontStyle:"italic"}}>{m.note}</span>}
                       </div>
                     </div>
-                    <span style={{fontSize:13,fontWeight:600,color:C.goldT,flexShrink:0}}>{"$"+(m.cost||0)}</span>
+                    {!mealGuidance&&<span style={{fontSize:13,fontWeight:600,color:C.goldT,flexShrink:0}}>{"$"+(m.cost||0)}</span>}
                     <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:999,background:st==="yes"?C.grnBg:(st==="no"?C.redBg:C.wrnBg),color:st==="yes"?C.grn:(st==="no"?C.red:C.wrn),flexShrink:0}}>{soloTripMode?"Ready":(st==="yes"?"Approved":(st==="no"?"Rejected":("Voting "+summary.votedCount+"/"+voteMembers.length)))}</span>
                   </div>
                   {opts.length>1&&(<div style={{display:"flex",gap:6,flexWrap:"wrap",paddingLeft:16}}>
                         {opts.map(function(opt,oi){
                         var picked=selectedOpt===oi;
                         var optGuidance=isAreaGuidanceMealOption(opt,day.destination);
-                        var chipLabel=opt.name+(optGuidance?"":" *"+Number(opt.rating||0).toFixed(1))+" $"+(opt.cost||0);
+                        var chipLabel=optGuidance?opt.name:(opt.name+" *"+Number(opt.rating||0).toFixed(1)+" $"+(opt.cost||0));
                         return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{chipLabel}</button>;
                       })}
                   </div>)}

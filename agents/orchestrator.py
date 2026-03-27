@@ -7397,6 +7397,92 @@ def _extract_location_hint(raw: Any) -> str:
     return normalized.strip()
 
 
+_MEAL_AREA_KEYWORDS = {
+    "access", "area", "bazaar", "beach", "center", "centre", "chowk", "district",
+    "fort", "front", "ghat", "ghats", "harbor", "harbour", "hill", "hills",
+    "junction", "lake", "lane", "lanes", "market", "marina", "old", "precinct",
+    "quarter", "quarters", "road", "riverfront", "square", "street", "streets",
+    "temple", "town", "trailhead", "waterfront",
+}
+
+_MEAL_ACTIVITY_WORDS = {
+    "class", "circuit", "darshan", "experience", "highlight", "highlights",
+    "orientation", "photography", "session", "tasting", "tour", "trail",
+    "viewing", "walk", "workshop",
+}
+
+
+def _canonical_place_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _route_stop_lookup(route_plan: Any, destination: Any) -> Optional[dict[str, Any]]:
+    plan = route_plan if isinstance(route_plan, dict) else {}
+    stops = plan.get("destinations") if isinstance(plan.get("destinations"), list) else []
+    target = _canonical_place_key(destination)
+    if not target:
+        return None
+    for stop in stops:
+        if not isinstance(stop, dict):
+            continue
+        if _canonical_place_key(stop.get("destination") or stop.get("name")) == target:
+            return stop
+    return None
+
+
+def _clean_meal_anchor(raw: Any) -> str:
+    return re.sub(r"\s+", " ", str(raw or "").strip())
+
+
+def _meal_area_label(destination: Any, anchor: Any, fallback_anchor: Any = "") -> str:
+    dest = _clean_meal_anchor(destination) or "the area"
+    raw = _clean_meal_anchor(anchor)
+    fallback = _clean_meal_anchor(fallback_anchor)
+    candidate = raw or fallback
+    if not candidate:
+        return dest
+    candidate = re.split(r"[|/;,]+", candidate, maxsplit=1)[0].strip()
+    if re.match(r"^approx\.\s*\d+\s*min transit\b", candidate, flags=re.IGNORECASE) and re.search(r"\bto\b", candidate, flags=re.IGNORECASE):
+        candidate = re.split(r"\bto\b", candidate, maxsplit=1, flags=re.IGNORECASE)[-1].strip()
+    candidate = re.sub(r"^(?:arrive in|travel to)\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^check in(?: at)?\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^check out(?: from)?\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^stay near\s+", "", candidate, flags=re.IGNORECASE)
+    near_parts = re.split(r"\bnear\b", candidate, maxsplit=1, flags=re.IGNORECASE)
+    if len(near_parts) > 1:
+        candidate = near_parts[-1].strip()
+    of_parts = re.split(r"\bof\b", candidate, maxsplit=1, flags=re.IGNORECASE)
+    if len(of_parts) > 1 and _clean_meal_anchor(of_parts[-1]):
+        candidate = _clean_meal_anchor(of_parts[-1])
+    candidate = re.sub(
+        r"\b(?:orientation walk|heritage walk|photography tour|interpretation session|evening aarti viewing|landmark orientation walk|signature local experience|market and neighborhood walk|sunset or evening highlight|temple darshan and orientation walk)\b.*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    candidate = re.sub(
+        r"\b(?:darshan|viewing|session|trail|circuit|tasting|workshop|class|experience)\b.*$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip(" :-,")
+    candidate = _clean_meal_anchor(candidate)
+    if not candidate:
+        return fallback or dest
+    normalized = re.sub(r"[^a-z0-9]+", " ", candidate.lower()).strip()
+    dest_normalized = re.sub(r"[^a-z0-9]+", " ", dest.lower()).strip()
+    if not normalized or normalized in {"trip highlights", "highlights"} or normalized == dest_normalized:
+        return fallback or dest
+    tokens = [token for token in normalized.split() if token]
+    has_area_token = any(token in _MEAL_AREA_KEYWORDS for token in tokens)
+    has_activity_token = any(token in _MEAL_ACTIVITY_WORDS for token in tokens)
+    if len(tokens) > 7 and not has_area_token:
+        return fallback or dest
+    if has_activity_token and not has_area_token:
+        return fallback or dest
+    return candidate
+
+
 def _normalize_place(city: Any, country: Any, fallback: str = "") -> tuple[str, str]:
     c = str(city or "").strip()
     k = str(country or "").strip()
@@ -7570,32 +7656,58 @@ def _fallback_meal_options(
             )
         return out[:limit]
 
-    anchor_label = str(near_poi or city or "your route").strip() or "your route"
+    anchor_label = _meal_area_label(city, near_poi, city or "your route")
     label_city = city or "City"
-    base_names = {
+    base_rows = {
         "Breakfast": [
-            f"Breakfast near {anchor_label}",
-            f"{label_city} morning cafe area",
-            f"Temple-access breakfast around {label_city}",
+            (
+                "Breakfast area",
+                f"Area guidance only. Compare real breakfast spots near {anchor_label}.",
+            ),
+            (
+                "Cafe cluster",
+                f"Area guidance only. Compare real cafes near {anchor_label}.",
+            ),
+            (
+                "Early-start breakfast area",
+                f"Useful if you want a practical breakfast before sightseeing near {anchor_label}.",
+            ),
         ],
         "Lunch": [
-            f"Lunch near {anchor_label}",
-            f"{label_city} local lunch area",
-            f"{label_city} market and lunch area",
+            (
+                "Lunch area",
+                f"Area guidance only. Compare real lunch options near {anchor_label}.",
+            ),
+            (
+                "Casual lunch cluster",
+                f"Area guidance only. Good for comparing simple midday spots near {anchor_label}.",
+            ),
+            (
+                "Midday dining area",
+                f"Useful if you want flexible lunch choices while staying close to {anchor_label}.",
+            ),
         ],
         "Dinner": [
-            f"Dinner near {anchor_label}",
-            f"{label_city} evening dining area",
-            f"{label_city} temple-town dinner area",
+            (
+                "Dinner area",
+                f"Area guidance only. Compare real dinner options near {anchor_label}.",
+            ),
+            (
+                "Evening dining cluster",
+                f"Area guidance only. Good for comparing dinner spots close to {anchor_label}.",
+            ),
+            (
+                "Dinner cluster",
+                f"Useful if you want a realistic evening dining area near {anchor_label} without locking to one venue.",
+            ),
         ],
     }
-    base_cost = {"Breakfast": 18.0, "Lunch": 32.0, "Dinner": 52.0}
     out: list[dict[str, Any]] = []
-    for idx, base in enumerate(base_names.get(meal, [])):
+    for idx, row in enumerate(base_rows.get(meal, [])):
         if len(out) >= limit:
             break
-        name = str(base).strip()
-        cost = float(base_cost.get(meal, 30.0) + idx * 8)
+        name = str(row[0]).strip()
+        note = str(row[1]).strip()
         out.append(
             {
                 "option_id": f"fallback-{meal.lower()}-{idx + 1}",
@@ -7603,11 +7715,11 @@ def _fallback_meal_options(
                 "city": city,
                 "country": country,
                 "tags": [meal.lower(), "area-guidance", "local"],
-                "cost": cost,
+                "cost": 0.0,
                 "cuisine": "Area guidance",
                 "near_poi": near_poi,
                 "rating": 0.0,
-                "note": f"Area guidance only. Compare real {meal.lower()} options near {anchor_label}.",
+                "note": note,
             }
         )
     return out
@@ -7731,6 +7843,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
     planning_state = (planning_state_row["state"] or {}) if planning_state_row else {}
     if not isinstance(planning_state, dict):
         planning_state = {}
+    route_plan = planning_state.get("route_plan") if isinstance(planning_state, dict) else {}
     locked_window = planning_state.get("availability_locked_window")
     locked_start = _safe_iso_date((locked_window or {}).get("start")) if isinstance(locked_window, dict) else None
     locked_end = _safe_iso_date((locked_window or {}).get("end")) if isinstance(locked_window, dict) else None
@@ -7823,7 +7936,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
     for row in itinerary_rows:
         title = str(row["title"] or "").strip()
         category = str(row["category"] or "").strip().lower()
-        if not title or category == "dining":
+        if not title or category in {"dining", "meal", "travel", "checkin", "checkout", "flight", "rest"}:
             continue
         try:
             day_number = int(row["day_number"] or 0)
@@ -7864,6 +7977,10 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         fallback_dest = fallback_destinations[day_idx % len(fallback_destinations)] if fallback_destinations else {"city": "", "country": ""}
         fallback_city = str((fallback_poi or {}).get("city") or fallback_dest.get("city") or "").strip()
         fallback_country = str((fallback_poi or {}).get("country") or fallback_dest.get("country") or "").strip()
+        route_stop = _route_stop_lookup(route_plan, fallback_city or fallback_dest.get("city"))
+        route_sites_raw = (route_stop or {}).get("nearbySites") or (route_stop or {}).get("nearby_sites") or []
+        route_sites = [str(site or "").strip() for site in route_sites_raw if str(site or "").strip()] if isinstance(route_sites_raw, list) else []
+        route_anchor = route_sites[0] if route_sites else ""
 
         def anchor_for_meal(meal_name: str) -> dict[str, Any]:
             if day_activities:
@@ -7889,7 +8006,11 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 anchor.get("country"),
                 fallback_city,
             )
-            near_poi = str(anchor.get("title") or fallback_city or "trip highlights").strip()
+            near_poi = _meal_area_label(
+                anchor_city or fallback_city,
+                anchor.get("title") or fallback_city or "trip highlights",
+                route_anchor,
+            )
 
             default_minutes = _minutes_of_day(_safe_time_hhmm(_MEAL_DEFAULT_TIME[meal_name])) or 12 * 60
             anchor_start = _minutes_of_day(anchor.get("start"))

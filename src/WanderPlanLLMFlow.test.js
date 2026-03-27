@@ -1135,16 +1135,18 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Lunch near temple access road",
+        name: "Lunch area",
         cuisine: "Area guidance",
         rating: 0,
+        cost: 0,
       })
     );
     expect(out[0].meals[0].options[0]).toEqual(
       expect.objectContaining({
-        name: "Lunch near temple access road",
+        name: "Lunch area",
         cuisine: "Area guidance",
         rating: 0,
+        cost: 0,
       })
     );
   });
@@ -1167,16 +1169,18 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Dinner near temple access road",
+        name: "Dinner area",
         cuisine: "Area guidance",
         rating: 0,
+        cost: 0,
       })
     );
     expect(out[0].meals[0].options[0]).toEqual(
       expect.objectContaining({
-        name: "Dinner near temple access road",
+        name: "Dinner area",
         cuisine: "Area guidance",
         rating: 0,
+        cost: 0,
       })
     );
   });
@@ -1205,16 +1209,182 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Dinner near temple access road",
+        name: "Dinner area",
         cuisine: "Area guidance",
         rating: 0,
+        cost: 0,
       })
     );
     expect(out[0].meals[1]).toEqual(
       expect.objectContaining({
-        name: "Breakfast near temple access road",
+        name: "Breakfast area",
         cuisine: "Area guidance",
         rating: 0,
+        cost: 0,
+      })
+    );
+  });
+
+  test("normalizeDiningPlan converts synthetic themed dining names from route flow into area guidance", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 1,
+        destination: "Somnath",
+        anchor: "temple access road",
+        meals: [
+          {
+            type: "Breakfast",
+            name: "Kedarnath Sunrise Cafe",
+            cost: 18,
+            rating: 4.5,
+          },
+          {
+            type: "Lunch",
+            name: "Traditional Malwa Cuisine Cooking Class",
+            cost: 35,
+            rating: 4.5,
+          },
+          {
+            type: "Dinner",
+            name: "Somnath Coastal Photography and Seafood Tasting",
+            cost: 45,
+            rating: 4.5,
+          },
+          {
+            type: "Dinner",
+            name: "Kashi Vishwanath Evening Table",
+            cost: 52,
+            rating: 4.5,
+          },
+        ],
+      },
+    ]);
+    expect(out[0].meals[0]).toEqual(
+      expect.objectContaining({
+        name: "Breakfast area",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+      })
+    );
+    expect(out[0].meals[1]).toEqual(
+      expect.objectContaining({
+        name: "Lunch area",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+      })
+    );
+    expect(out[0].meals[2]).toEqual(
+      expect.objectContaining({
+        name: "Dinner area",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+      })
+    );
+    expect(out[0].meals[3]).toEqual(
+      expect.objectContaining({
+        name: "Dinner area",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+      })
+    );
+  });
+
+  test("normalizeDiningPlan sanitizes long synthetic anchors into place-like area labels", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 1,
+        destination: "Varanasi",
+        anchor: "Heritage Walk and Photography Tour of Varanasi Ghats",
+        meals: [
+          {
+            type: "Breakfast",
+            name: "Temple Courtyard Cafe",
+            cost: 22,
+            rating: 4.4,
+          },
+        ],
+      },
+    ]);
+    expect(out[0]).toEqual(
+      expect.objectContaining({
+        anchor: "Varanasi Ghats",
+        locationLabel: "Varanasi near Varanasi Ghats",
+      })
+    );
+    expect(out[0].meals[0]).toEqual(
+      expect.objectContaining({
+        name: "Breakfast area",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+      })
+    );
+  });
+
+  test("normalizeDiningPlan strips travel-style arrival anchors before building area guidance", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 1,
+        destination: "Somnath",
+        anchor: "Arrive in Grishneshwar (Aurangabad)",
+        meals: [
+          {
+            type: "Breakfast",
+            name: "Temple Courtyard Cafe",
+            cost: 22,
+            rating: 4.4,
+          },
+        ],
+      },
+    ]);
+    expect(out[0]).toEqual(
+      expect.objectContaining({
+        anchor: "Grishneshwar (Aurangabad)",
+        locationLabel: "Somnath near Grishneshwar (Aurangabad)",
+      })
+    );
+    expect(out[0].meals[0]).toEqual(
+      expect.objectContaining({
+        name: "Breakfast area",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+      })
+    );
+  });
+
+  test("normalizeDiningPlan strips transit-style anchors down to the destination side of the route", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 1,
+        destination: "Somnath",
+        anchor: "Approx. 10 min transit from Lunch in Grishneshwar (Aurangabad) to Ellora Caves (Grishneshwar area)",
+        meals: [
+          {
+            type: "Lunch",
+            name: "Temple Courtyard Cafe",
+            cost: 28,
+            rating: 4.4,
+          },
+        ],
+      },
+    ]);
+    expect(out[0]).toEqual(
+      expect.objectContaining({
+        anchor: "Ellora Caves (Grishneshwar area)",
+        locationLabel: "Somnath near Ellora Caves (Grishneshwar area)",
+      })
+    );
+    expect(out[0].meals[0]).toEqual(
+      expect.objectContaining({
+        name: "Lunch area",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
       })
     );
   });
