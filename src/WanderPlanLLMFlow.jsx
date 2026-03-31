@@ -2599,6 +2599,9 @@ var MANUFACTURED_MEAL_CONNECTOR_WORDS=[
   "and","with","of","near","by","for","from","to","at","in","on"
 ];
 
+var MEAL_ROUTE_INSTRUCTION_REGEX=/\b(?:arrive in|travel to|check in(?: at)?|check out(?: from)?|transit from|transfer from)\b/i;
+var MEAL_TRANSIT_DURATION_REGEX=/\bapprox\.?\s*\d+\s*min(?:ute)?s?\s*(?:transit|transfer)?\b/i;
+
 function normalizeMealText(value){
   return String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
 }
@@ -2617,6 +2620,47 @@ var MEAL_ACTIVITY_LABEL_WORDS=[
 
 function cleanMealAnchorText(value){
   return String(value||"").replace(/\s+/g," ").trim();
+}
+
+function optionalMealAreaLabel(destination, anchor){
+  var raw=cleanMealAnchorText(anchor);
+  if(!raw)return "";
+  return mealAreaLabel(destination, raw);
+}
+
+function defaultMealAnchorRole(type){
+  return String(type||"").trim().toLowerCase()==="lunch"?"poi":"stay";
+}
+
+function normalizeMealAnchorRole(value, type){
+  var role=String(value||"").trim().toLowerCase();
+  if(role!=="poi"&&role!=="stay")role=defaultMealAnchorRole(type);
+  return role;
+}
+
+function mealAnchorContext(role, destination, anchor){
+  var dest=cleanMealAnchorText(destination)||"the destination";
+  var label=optionalMealAreaLabel(dest,anchor);
+  if(role==="poi"){
+    return label&&normalizeMealText(label)!==normalizeMealText(dest)
+      ? "the main sightseeing stop near "+label
+      : "the main sightseeing area in "+dest;
+  }
+  return label&&normalizeMealText(label)!==normalizeMealText(dest)
+    ? "your stay around "+label
+    : "your stay in "+dest;
+}
+
+function mealAnchorBadge(role, anchor){
+  var label=cleanMealAnchorText(anchor);
+  if(role==="poi")return label?("Near sightseeing stop: "+label):"Near sightseeing stop";
+  return label?("Near your stay: "+label):"Near your stay";
+}
+
+function mealTravelLabel(role, minutes){
+  var mins=Number(minutes)||0;
+  if(!mins)return "";
+  return "~"+mins+" min from "+(role==="poi"?"sightseeing stop":"your stay");
 }
 
 function mealAreaLabel(destination, anchor){
@@ -2660,28 +2704,40 @@ function mealAreaLabel(destination, anchor){
   return candidate;
 }
 
-function mealGuidanceVariants(type,destination,anchor){
+function mealGuidanceVariants(type,destination,anchor,anchorRole){
   var t=String(type||"meal").toLowerCase();
   var dest=String(destination||"the area").trim()||"the area";
   var near=mealAreaLabel(dest,anchor);
+  var role=normalizeMealAnchorRole(anchorRole,t);
+  var context=mealAnchorContext(role,dest,near);
   if(t==="breakfast")return [
-    {name:"Breakfast area",note:"Area guidance only. Compare real breakfast spots near "+near+"."},
-    {name:"Cafe cluster",note:"Area guidance only. Compare real cafes near "+near+"."},
-    {name:"Early-start breakfast area",note:"Useful if you want a practical breakfast before sightseeing near "+near+"."},
-    {name:"Tea and bakery cluster",note:"Area guidance only. Compare real tea stalls, cafes, and bakeries near "+near+"."}
+    {name:"Breakfast near your stay",note:"Area guidance only. Compare real breakfast spots close to "+context+"."},
+    {name:"Cafe options near your stay",note:"Area guidance only. Compare real cafes close to "+context+"."},
+    {name:"Early breakfast near your stay",note:"Useful when you want a practical breakfast close to "+context+" before heading out."},
+    {name:"Tea and bakery near your stay",note:"Area guidance only. Compare tea stalls, bakeries, and cafes close to "+context+"."}
   ];
   if(t==="lunch")return [
-    {name:"Lunch area",note:"Area guidance only. Compare real lunch options near "+near+"."},
-    {name:"Casual lunch cluster",note:"Area guidance only. Good for comparing simple midday spots near "+near+"."},
-    {name:"Midday dining area",note:"Useful if you want flexible lunch choices while staying close to "+near+"."},
-    {name:"Quick lunch area",note:"Area guidance only. Compare real local eateries near "+near+"."}
+    {name:"Lunch near sightseeing stop",note:"Area guidance only. Compare real lunch places close to "+context+" so midday travel stays light."},
+    {name:"Quick lunch near sightseeing stop",note:"Area guidance only. Good for comparing quick midday stops close to "+context+"."},
+    {name:"Casual lunch near sightseeing stop",note:"Useful when you want flexible lunch choices without drifting far from "+context+"."},
+    {name:"Midday food near sightseeing stop",note:"Area guidance only. Compare simple local eateries close to "+context+"."}
   ];
   return [
-    {name:"Dinner area",note:"Area guidance only. Compare real dinner options near "+near+"."},
-    {name:"Evening dining cluster",note:"Area guidance only. Good for comparing dinner spots close to "+near+"."},
-    {name:"Dinner cluster",note:"Useful if you want a realistic evening dining area near "+near+" without locking to one venue."},
-    {name:"After-sightseeing dinner area",note:"Area guidance only. Choose a real restaurant after comparing nearby options near "+near+"."}
+    {name:"Dinner near your stay",note:"Area guidance only. Compare real dinner options close to "+context+"."},
+    {name:"Evening dinner near your stay",note:"Area guidance only. Good for comparing dinner spots close to "+context+"."},
+    {name:"Dinner options near your stay",note:"Useful when you want the evening to end close to "+context+"."},
+    {name:"After-sightseeing dinner near your stay",note:"Area guidance only. Choose a real restaurant close to "+context+" after the day wraps up."}
   ];
+}
+
+function isRouteInstructionMealText(value){
+  var raw=String(value||"").trim();
+  if(!raw)return false;
+  if(MEAL_ROUTE_INSTRUCTION_REGEX.test(raw))return true;
+  if(MEAL_TRANSIT_DURATION_REGEX.test(raw) && /\b(?:transit|transfer|from|to)\b/i.test(raw))return true;
+  if(/\bnear\b/i.test(raw) && /\b(?:arrive|check in|check out|transit|transfer)\b/i.test(raw))return true;
+  if(/\bfrom\b.+\bto\b/i.test(raw) && /\b(?:breakfast|lunch|dinner|transit|transfer|approx\.?)\b/i.test(raw))return true;
+  return false;
 }
 
 function isManufacturedMealName(name,destination){
@@ -2690,6 +2746,7 @@ function isManufacturedMealName(name,destination){
   var rawNorm=normalizeMealText(raw);
   var destNorm=normalizeMealText(dest);
   if(!raw)return false;
+  if(isRouteInstructionMealText(raw))return true;
   if(MANUFACTURED_MEAL_SUFFIXES.some(function(suffix){
     var suffixNorm=normalizeMealText(suffix);
     return rawNorm===suffixNorm || (destNorm && rawNorm===((destNorm+" "+suffixNorm).trim()));
@@ -2726,8 +2783,10 @@ function isManufacturedMealName(name,destination){
 function isAreaGuidanceMealOption(option,destination){
   var tags=Array.isArray(option&&option.tags)?option.tags.map(function(t){return String(t||"").toLowerCase();}):[];
   var cuisine=String(option&&option.cuisine||"").toLowerCase();
+  var note=String(option&&option.note||"").toLowerCase();
   return tags.indexOf("area-guidance")>=0 ||
     cuisine==="area guidance" ||
+    note.indexOf("area guidance only")>=0 ||
     isManufacturedMealName(option&&option.name,destination);
 }
 
@@ -2744,15 +2803,39 @@ export function normalizeDiningPlan(rows){
   return list.map(function(day,dayIndex){
     var destination=String(day&&day.destination||"City").trim()||"City";
     var anchor=mealAreaLabel(destination,String(day&&day.anchor||day&&day.locationLabel||"").trim());
-    var locationLabel=anchor?String(destination+" near "+anchor).trim():destination;
     var mealsIn=Array.isArray(day&&day.meals)?day.meals:[];
     var mealsOut=mealsIn.map(function(meal,mealIndex){
       var type=String(meal&&meal.type||"Meal").trim()||"Meal";
-      var guidanceVariants=mealGuidanceVariants(type,destination,anchor);
+      var anchorRole=normalizeMealAnchorRole(meal&&((meal.anchorRole!==undefined)?meal.anchorRole:meal.anchor_role),type);
+      var anchorLabel=optionalMealAreaLabel(
+        destination,
+        String(
+          meal&&(
+            meal.anchorLabel||
+            meal.anchor_label||
+            meal.near_poi
+          )||
+          day&&day[
+            anchorRole==="poi"?"lunchAnchorLabel":"stayAnchorLabel"
+          ]||
+          day&&day[
+            anchorRole==="poi"?"lunch_anchor_label":"stay_anchor_label"
+          ]||
+          anchor||
+          ""
+        ).trim()
+      ) || (anchorRole==="poi"?anchor:optionalMealAreaLabel(destination,String(day&&day.stayAnchorLabel||day&&day.stay_anchor_label||"").trim())||anchor);
+      var guidanceVariants=mealGuidanceVariants(type,destination,anchorLabel,anchorRole);
       var optionSeed=(Array.isArray(meal&&meal.options)&&meal.options.length?meal.options:[meal]).map(function(opt,optIndex){
         var rawName=String(opt&&opt.name||meal&&meal.name||guidanceVariants[Math.min(optIndex,guidanceVariants.length-1)].name).trim();
         var guidance=isAreaGuidanceMealOption(opt,destination) || isManufacturedMealName(rawName,destination);
         var guidanceVariant=guidanceVariants[Math.min(optIndex,guidanceVariants.length-1)];
+        var optionAnchorRole=normalizeMealAnchorRole(opt&&((opt.anchorRole!==undefined)?opt.anchorRole:opt.anchor_role),type)||anchorRole;
+        var optionAnchorLabel=optionalMealAreaLabel(destination,String(opt&&(
+          opt.anchorLabel||
+          opt.anchor_label||
+          opt.near_poi
+        )||anchorLabel||"").trim())||anchorLabel;
         return {
           option_id:String(opt&&opt.option_id||("meal-opt-"+dayIndex+"-"+mealIndex+"-"+optIndex)),
           name:guidance?guidanceVariant.name:rawName,
@@ -2762,7 +2845,9 @@ export function normalizeDiningPlan(rows){
           rating:guidance?0:(Number((opt&&opt.rating)!==undefined?opt.rating:(meal&&meal.rating)!==undefined?meal.rating:(4.2+(optIndex*0.2)))||4.2),
           note:guidance?guidanceVariant.note:(String(opt&&opt.note||opt&&opt.near_poi||meal&&meal.note||"").trim()),
           travel_minutes:Number((opt&&opt.travel_minutes)!==undefined?opt.travel_minutes:(opt&&opt.travelMinutes)!==undefined?opt.travelMinutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0,
-          tags:guidance?["area-guidance",String(type||"meal").toLowerCase()]:(Array.isArray(opt&&opt.tags)?opt.tags:[])
+          tags:guidance?["area-guidance",String(type||"meal").toLowerCase()]:(Array.isArray(opt&&opt.tags)?opt.tags:[]),
+          anchorRole:optionAnchorRole,
+          anchorLabel:optionAnchorLabel
         };
       });
       var options=optionSeed.slice();
@@ -2782,7 +2867,9 @@ export function normalizeDiningPlan(rows){
           rating:0,
           note:String(variant.note||"").trim(),
           travel_minutes:Math.max(4,8+(variantIndex*4)),
-          tags:["area-guidance",String(type||"meal").toLowerCase()]
+          tags:["area-guidance",String(type||"meal").toLowerCase()],
+          anchorRole:anchorRole,
+          anchorLabel:anchorLabel
         });
       });
       var selectedOpt=(meal&&meal.selectedOption!==undefined&&meal.selectedOption!==null)?Number(meal.selectedOption):0;
@@ -2812,18 +2899,155 @@ export function normalizeDiningPlan(rows){
         rating:isAreaGuidanceMealOption(picked,destination)?0:(Number((picked.rating!==undefined)?picked.rating:(meal&&meal.rating)!==undefined?meal.rating:4.4)||4.4),
         dietaryOk:typeof (meal&&meal.dietaryOk)==="boolean"?meal.dietaryOk:true,
         note:String(picked.note||meal&&meal.note||"").trim(),
-        travelMinutes:Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0
+        travelMinutes:Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0,
+        anchorRole:normalizeMealAnchorRole(picked&&picked.anchorRole, type),
+        anchorLabel:optionalMealAreaLabel(destination,String(picked&&picked.anchorLabel||meal&&meal.anchorLabel||anchorLabel||"").trim())||anchorLabel
       };
     });
+      var stayAnchorLabel=optionalMealAreaLabel(
+        destination,
+        String(
+          day&&(
+            day.stayAnchorLabel||
+            day.stay_anchor_label
+          )||
+          ((mealsOut.find(function(entry){
+            return normalizeMealAnchorRole(entry&&entry.anchorRole,entry&&entry.type)!=="poi" && cleanMealAnchorText(entry&&entry.anchorLabel);
+          })||{}).anchorLabel)||
+          ""
+        ).trim()
+      );
+      var lunchAnchorLabel=optionalMealAreaLabel(
+        destination,
+        String(
+          day&&(
+            day.lunchAnchorLabel||
+            day.lunch_anchor_label
+          )||
+          ((mealsOut.find(function(entry){
+            return normalizeMealAnchorRole(entry&&entry.anchorRole,entry&&entry.type)==="poi" && cleanMealAnchorText(entry&&entry.anchorLabel);
+          })||{}).anchorLabel)||
+          ""
+        ).trim()
+      );
       return {
         day:Number(day&&day.day||dayIndex+1)||dayIndex+1,
         date:String(day&&day.date||"").trim(),
         destination:destination,
         anchor:anchor,
-        locationLabel:locationLabel,
+        locationLabel:String(day&&day.locationLabel||destination).trim()||destination,
+        stayAnchorLabel:stayAnchorLabel,
+        lunchAnchorLabel:lunchAnchorLabel,
         meals:mealsOut
       };
   });
+}
+
+function mealTypeSortValue(type){
+  var low=String(type||"").trim().toLowerCase();
+  if(low==="breakfast")return 0;
+  if(low==="lunch")return 1;
+  if(low==="dinner")return 2;
+  return 3;
+}
+
+export function buildDiningRowsFromSuggestions(suggestions){
+  var list=Array.isArray(suggestions)?suggestions:[];
+  var byDestination={};
+  var ordered=[];
+  list.forEach(function(s){
+    var destination=String(s&&(
+      s.destination||
+      s.city||
+      s.poi_city
+    )||"City").trim()||"City";
+    var key=destination.toLowerCase();
+    if(!byDestination[key]){
+      byDestination[key]={
+        day:ordered.length+1,
+        date:"",
+        destination:destination,
+        anchor:"",
+        locationLabel:destination,
+        stayAnchorLabel:"",
+        lunchAnchorLabel:"",
+        meals:[]
+      };
+      ordered.push(byDestination[key]);
+    }
+    var row=byDestination[key];
+    var mealType=String(s&&s.meal||"Meal").trim()||"Meal";
+    if(row.meals.some(function(existing){
+      return String(existing&&existing.type||"").trim().toLowerCase()===mealType.toLowerCase();
+    }))return;
+    var anchorRole=normalizeMealAnchorRole(s&&((s.anchor_role!==undefined)?s.anchor_role:s.anchorRole),mealType);
+    var anchorLabel=optionalMealAreaLabel(destination,String(s&&(
+      s.anchor_label||
+      s.anchorLabel||
+      s.near_poi
+    )||"").trim());
+    var options=(Array.isArray(s&&s.options)&&s.options.length>0?s.options:[{
+      option_id:s&&s.id||("meal-"+key.replace(/[^a-z0-9]+/gi,"-")+"-"+mealType.toLowerCase()),
+      name:s&&s.name||"Restaurant",
+      city:destination,
+      cuisine:s&&s.cuisine||((s&&s.tags&&s.tags[0])||"Local"),
+      cost:s&&s.cost||0,
+      rating:Number((s&&s.rating!==undefined)?s.rating:4.5)||4.5,
+      tags:s&&s.tags||[],
+      near_poi:s&&s.near_poi||"",
+      travel_minutes:s&&s.travel_from_poi_minutes||0,
+      note:s&&s.note||"",
+      anchorRole:anchorRole,
+      anchorLabel:anchorLabel
+     }]).map(function(o,oi){
+      return {
+        option_id:o.option_id||("opt-"+key.replace(/[^a-z0-9]+/gi,"-")+"-"+mealType.toLowerCase()+"-"+oi),
+        name:o.name||"Restaurant",
+        city:o.city||destination,
+        cuisine:o.cuisine||((o.tags&&o.tags[0])||"Local"),
+        cost:Number((o.cost!==undefined)?o.cost:0)||0,
+        rating:Number((o.rating!==undefined)?o.rating:4.5)||4.5,
+        tags:Array.isArray(o.tags)?o.tags:[],
+        near_poi:o.near_poi||s.near_poi||"",
+        travel_minutes:Number((o.travel_minutes!==undefined)?o.travel_minutes:0)||0,
+        note:o.note||"",
+        anchorRole:normalizeMealAnchorRole((o.anchorRole!==undefined)?o.anchorRole:o.anchor_role,mealType),
+        anchorLabel:optionalMealAreaLabel(destination,String(o.anchorLabel||o.anchor_label||anchorLabel||o.near_poi||"").trim())||anchorLabel
+      };
+    });
+    var top=options[0]||{};
+    row.meals.push({
+      type:mealType,
+      time:s&&s.time||"",
+      date:"",
+      options:options,
+      selectedOption:0,
+      name:top.name||s&&s.name||"Restaurant",
+      city:top.city||s&&s.city||"",
+      cuisine:top.cuisine||((s&&s.tags&&s.tags[0])||"Local"),
+      cost:Number((top.cost!==undefined)?top.cost:(s&&s.cost||0))||0,
+      rating:Number((top.rating!==undefined)?top.rating:(s&&s.rating!==undefined)?s.rating:4.5)||4.5,
+      dietaryOk:true,
+      note:top.note||top.near_poi||s&&s.note||s&&s.near_poi||((s&&s.tags||[]).join(", ")),
+      travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s&&s.travel_from_poi_minutes||0))||0,
+      anchorRole:anchorRole,
+      anchorLabel:anchorLabel
+    });
+    if(anchorRole==="poi"){
+      if(anchorLabel)row.lunchAnchorLabel=anchorLabel;
+    }else if(anchorLabel){
+      row.stayAnchorLabel=anchorLabel;
+    }
+  });
+  ordered.forEach(function(row,idx){
+    row.day=idx+1;
+    row.locationLabel=row.destination;
+    row.meals.sort(function(a,b){
+      return mealTypeSortValue(a&&a.type)-mealTypeSortValue(b&&b.type);
+    });
+    row.anchor=row.lunchAnchorLabel||row.stayAnchorLabel||row.anchor||"";
+  });
+  return ordered;
 }
 
 async function askItinerary(destinations, acceptedPOIs, pickedStays, approvedMeals, budgetTier, days, groupSize, startDateIso) {
@@ -3276,6 +3500,7 @@ export default function WanderPlan(){
   var[healthOk,setHO]=useState(false);
   var[routePlan,setRoutePlan]=useState(null);
   var[routePlanLoad,setRPL]=useState(false);
+  var[routePlanSaveLoad,setRPSL]=useState(false);
   var[routePlanDone,setRPD]=useState(false);
   var[routePlanErr,setRPE]=useState("");
   var[routePlanSignature,setRPS]=useState("");
@@ -3796,6 +4021,8 @@ export default function WanderPlan(){
       meal.note=String(picked.note||picked.near_poi||meal.note||"");
       meal.city=String(picked.city||meal.city||"");
       meal.travelMinutes=Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(picked.travelMinutes!==undefined)?picked.travelMinutes:meal.travelMinutes)||0;
+      meal.anchorRole=normalizeMealAnchorRole((picked.anchorRole!==undefined)?picked.anchorRole:picked.anchor_role,meal.type);
+      meal.anchorLabel=optionalMealAreaLabel(next[dayIndex].destination,String(picked.anchorLabel||picked.anchor_label||meal.anchorLabel||meal.anchor_label||picked.near_poi||"").trim())||meal.anchorLabel||"";
       next[dayIndex].meals[mealIndex]=meal;
       var mealKey=canonicalMealVoteKey(next[dayIndex],meal,dayIndex,mealIndex);
       setMealVotes(function(prevVotes){
@@ -6907,6 +7134,37 @@ export default function WanderPlan(){
         return next;
       });
     }
+    function persistRoutePlanState(plan,signature){
+      var nextPlan=plan&&typeof plan==="object"?plan:null;
+      if(!(nextPlan&&Array.isArray(nextPlan.destinations)&&nextPlan.destinations.length)){
+        var missingErr=new Error("Build a route plan first.");
+        setRPE(missingErr.message);
+        return Promise.reject(missingErr);
+      }
+      var nextSignature=String(signature||routePlanSignature||"").trim();
+      if(!nextSignature){
+        nextSignature=buildRoutePlanSignature(rawDests,user.interests||{},resolveTripBudgetTier(sharedBudgetTier,user.budget),user.dietary,user.styles||[],wizardPoiGroupPrefs);
+      }
+      var nextDurations=routePlanDurationMap(nextPlan);
+      setRoutePlan(nextPlan);
+      setRPS(nextSignature);
+      setRPD(true);
+      applyRoutePlanDurations(nextPlan);
+      setRPE("");
+      setRPSL(true);
+      return saveTripPlanningState({state:{
+        route_plan:nextPlan,
+        route_plan_signature:nextSignature,
+        duration_per_destination:nextDurations
+      }}).then(function(res){
+        setRPSL(false);
+        return res;
+      }).catch(function(e){
+        setRPSL(false);
+        setRPE(String(e&&e.message||"Could not save the route plan"));
+        throw e;
+      });
+    }
     function buildRoutePlanThenContinue(shouldAdvance){
       var activeBudget=resolveTripBudgetTier(sharedBudgetTier,user.budget);
       var signature=buildRoutePlanSignature(rawDests,user.interests||{},activeBudget,user.dietary,user.styles||[],wizardPoiGroupPrefs);
@@ -6923,17 +7181,12 @@ export default function WanderPlan(){
         setRPS(signature);
         setRPD(true);
         applyRoutePlanDurations(plan);
-        var nextDurations=routePlanDurationMap(plan);
-        saveTripPlanningState({state:{
-          route_plan:plan,
-          route_plan_signature:signature,
-          duration_per_destination:nextDurations
-        }}).then(function(){
+        setRPL(false);
+        persistRoutePlanState(plan,signature).then(function(){
           setRPL(false);
           if(shouldAdvance)adv();
         }).catch(function(){
           setRPL(false);
-          if(shouldAdvance)adv();
         });
       }).catch(function(e){
         setRPL(false);
@@ -7176,6 +7429,7 @@ export default function WanderPlan(){
       var routeStops=Array.isArray(activePlan&&activePlan.destinations)?activePlan.destinations:[];
       var routePhases=Array.isArray(activePlan&&activePlan.phases)?activePlan.phases:[];
       var canContinue=routeStops.length>0;
+      var routePlanBusy=routePlanLoad||routePlanSaveLoad;
       return(<div>
         {ab("Route Planner",activePlan&&activePlan.summary?activePlan.summary:"Let the LLM do the heavy lifting first: choose the best starting city, group your destinations efficiently, add nearby important temples or landmarks, and assign realistic time at each stop.")}
         <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(2,1fr)",gap:10,marginBottom:12}}>
@@ -7195,8 +7449,8 @@ export default function WanderPlan(){
         {routePlanErr&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.redBg,border:"1px solid "+C.red+"20"}}>
           <p style={{fontSize:13,color:C.red}}>{routePlanErr}</p>
         </div>)}
-        {routePlanLoad&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
-          <p style={{fontSize:13,color:C.tx2}}>Building the route plan across {rawDests.length} destination{rawDests.length===1?"":"s"}...</p>
+        {routePlanBusy&&(<div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+          <p style={{fontSize:13,color:C.tx2}}>{routePlanLoad?("Building the route plan across "+rawDests.length+" destination"+(rawDests.length===1?"":"s")+"..."):"Saving the route plan before continuing..."}</p>
         </div>)}
         {activePlan&&(<div style={{display:"flex",flexDirection:"column",gap:12}}>
           <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(4,1fr)",gap:8}}>
@@ -7266,11 +7520,11 @@ export default function WanderPlan(){
           )}
         </div>)}
         <div style={{display:"flex",gap:10,marginTop:16,flexWrap:"wrap"}}>
-          <button onClick={function(){buildRoutePlanThenContinue(false);}} disabled={routePlanLoad||rawDests.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.teal+"35",background:(routePlanLoad||rawDests.length===0)?C.border:C.teal+"12",color:(routePlanLoad||rawDests.length===0)?C.tx3:C.tealL,fontSize:14,fontWeight:700,cursor:(routePlanLoad||rawDests.length===0)?"default":"pointer",minHeight:46}}>
-            {routePlanLoad?"Planning route...":(activePlan?"Refresh Route Plan":"Build Route Plan")}
+          <button onClick={function(){buildRoutePlanThenContinue(false);}} disabled={routePlanBusy||rawDests.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.teal+"35",background:(routePlanBusy||rawDests.length===0)?C.border:C.teal+"12",color:(routePlanBusy||rawDests.length===0)?C.tx3:C.tealL,fontSize:14,fontWeight:700,cursor:(routePlanBusy||rawDests.length===0)?"default":"pointer",minHeight:46}}>
+            {routePlanLoad?"Planning route...":(routePlanSaveLoad?"Saving route plan...":(activePlan?"Refresh Route Plan":"Build Route Plan"))}
           </button>
-          {canContinue&&<button onClick={function(){adv();}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",minHeight:46}}>Use Route Plan & Continue</button>}
-          {!canContinue&&!routePlanLoad&&<button onClick={function(){buildRoutePlanThenContinue(true);}} disabled={rawDests.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:rawDests.length===0?C.border:C.gold,color:rawDests.length===0?C.tx3:C.bg,fontSize:14,fontWeight:700,cursor:rawDests.length===0?"default":"pointer",minHeight:46}}>Build Route Plan & Continue</button>}
+          {canContinue&&<button onClick={function(){persistRoutePlanState(activePlan).then(function(){adv();}).catch(function(){});}} disabled={routePlanBusy} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:routePlanBusy?C.border:C.teal,color:routePlanBusy?C.tx3:"#fff",fontSize:14,fontWeight:700,cursor:routePlanBusy?"default":"pointer",minHeight:46}}>{routePlanSaveLoad?"Saving route plan...":"Use Route Plan & Continue"}</button>}
+          {!canContinue&&!routePlanBusy&&<button onClick={function(){buildRoutePlanThenContinue(true);}} disabled={rawDests.length===0} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:rawDests.length===0?C.border:C.gold,color:rawDests.length===0?C.tx3:C.bg,fontSize:14,fontWeight:700,cursor:rawDests.length===0?"default":"pointer",minHeight:46}}>Build Route Plan & Continue</button>}
         </div>
       </div>);
     }())}
@@ -8523,63 +8777,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             apiJson("/trips/"+currentTripId+"/dining/suggestions",{method:"GET"},authToken).then(function(r){
               var sug=(r&&r.suggestions)||[];
               if(sug.length>0){
-                var byLocation={};
-                sug.forEach(function(s){
-                  var destination=String(s.city||s.poi_city||"City").trim()||"City";
-                  var anchor=String(s.near_poi||"").trim();
-                  var groupKey=(destination.toLowerCase()+"|"+anchor.toLowerCase());
-                  if(!byLocation[groupKey]){
-                    byLocation[groupKey]={
-                      day:Object.keys(byLocation).length+1,
-                      date:"",
-                      destination:destination,
-                      anchor:anchor,
-                      locationLabel:anchor?(destination+" near "+anchor):destination,
-                      meals:[]
-                    };
-                  }
-                  var options=(Array.isArray(s.options)&&s.options.length>0?s.options:[{
-                    option_id:s.id||("meal-"+groupKey.replace(/[^a-z0-9]+/gi,"-")+"-"+String(s.meal||"meal").toLowerCase()),
-                    name:s.name||"Restaurant",
-                    city:destination,
-                    cuisine:s.cuisine||((s.tags&&s.tags[0])||"Local"),
-                    cost:s.cost||0,
-                    rating:Number((s.rating!==undefined)?s.rating:4.5)||4.5,
-                    tags:s.tags||[],
-                    near_poi:s.near_poi||"",
-                    travel_minutes:s.travel_from_poi_minutes||0
-                   }]).map(function(o,oi){
-                      return {
-                        option_id:o.option_id||("opt-"+groupKey.replace(/[^a-z0-9]+/gi,"-")+"-"+oi),
-                        name:o.name||"Restaurant",
-                        city:o.city||destination,
-                        cuisine:o.cuisine||((o.tags&&o.tags[0])||"Local"),
-                        cost:Number((o.cost!==undefined)?o.cost:0)||0,
-                        rating:Number((o.rating!==undefined)?o.rating:4.5)||4.5,
-                       tags:Array.isArray(o.tags)?o.tags:[],
-                       near_poi:o.near_poi||s.near_poi||"",
-                       travel_minutes:Number((o.travel_minutes!==undefined)?o.travel_minutes:0)||0,
-                       note:o.note||""
-                     };
-                  });
-                  var top=options[0]||{};
-                  byLocation[groupKey].meals.push({
-                     type:s.meal||"Meal",
-                     time:s.time||"",
-                     date:"",
-                     options:options,
-                     selectedOption:0,
-                     name:top.name||s.name||"Restaurant",
-                    city:top.city||s.city||"",
-                     cuisine:top.cuisine||((s.tags&&s.tags[0])||"Local"),
-                     cost:Number((top.cost!==undefined)?top.cost:(s.cost||0))||0,
-                     rating:Number((top.rating!==undefined)?top.rating:(s.rating!==undefined)?s.rating:4.5)||4.5,
-                     dietaryOk:true,
-                     note:top.note||top.near_poi||s.note||s.near_poi||((s.tags||[]).join(", ")),
-                     travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s.travel_from_poi_minutes||0))||0
-                   });
-                 });
-                var rows=normalizeDiningPlan(Object.keys(byLocation).map(function(k){return byLocation[k];}));
+                var rows=normalizeDiningPlan(buildDiningRowsFromSuggestions(sug));
                 setMeals(rows);setML(false);setMD(true);
                 saveTripPlanningState({state:{meal_plan:rows,meal_votes:{}}}).then(function(){
                   refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
@@ -8666,11 +8864,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           </div>)}
           {meals.map(function(day,di){
             return(<div key={di} style={{marginBottom:16}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>{day.destination||("Location "+day.day)}</span><span style={{fontSize:12,color:C.tx3}}>{day.anchor?("Area guidance near "+day.anchor):"Location-based dining"}</span></div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>{day.destination||("Location "+day.day)}</span><span style={{fontSize:12,color:C.tx3}}>Breakfast and dinner stay close to your stay. Lunch stays near the main sightseeing stop.</span>{day.stayAnchorLabel&&<span style={{fontSize:10,padding:"4px 8px",borderRadius:999,background:C.surface,color:C.tealL,border:"1px solid "+C.teal+"30"}}>{"Your stay: "+day.stayAnchorLabel}</span>}{day.lunchAnchorLabel&&<span style={{fontSize:10,padding:"4px 8px",borderRadius:999,background:C.surface,color:C.sky,border:"1px solid "+C.sky+"30"}}>{"Sightseeing stop: "+day.lunchAnchorLabel}</span>}</div>
               {(day.meals||[]).map(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);var st=soloTripMode?"yes":((summary.up>=majorityNeeded&&summary.up>summary.down)?"yes":(summary.votedCount===voteMembers.length&&summary.down>=summary.up?"no":""));var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
                 var opts=Array.isArray(m.options)?m.options:[];
                 var selectedOpt=(m.selectedOption!==undefined&&m.selectedOption!==null)?m.selectedOption:0;
                 var mealGuidance=isAreaGuidanceMealOption(m,day.destination);
+                var anchorRole=normalizeMealAnchorRole(m&&m.anchorRole,m&&m.type);
+                var anchorText=mealAnchorBadge(anchorRole,m&&m.anchorLabel);
+                var travelText=mealTravelLabel(anchorRole,m&&m.travelMinutes);
                 return(<div key={mi} style={{display:"flex",flexDirection:"column",gap:6,padding:"8px 0",borderBottom:mi<(day.meals||[]).length-1?"1px solid "+C.border:"none",opacity:st==="no"?.35:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:10}}>
                     <div style={{width:6,height:6,borderRadius:999,background:typeCol,flexShrink:0}}/>
@@ -8681,8 +8882,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                         <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>{m.rating && !mealGuidance? <span style={{fontSize:10,color:C.wrn,fontWeight:700}}>{"*"+Number(m.rating).toFixed(1)}</span> : null}
                       </div>
                       <div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,flexWrap:"wrap"}}>
+                        <span>{anchorText}</span>
                         <span>{m.cuisine}</span>
-                        {m.travelMinutes? <span>{"~"+m.travelMinutes+" min from POI"}</span> : null}
+                        {travelText? <span>{travelText}</span> : null}
                         {m.note&&<span style={{fontStyle:"italic"}}>{m.note}</span>}
                       </div>
                     </div>

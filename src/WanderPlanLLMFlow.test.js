@@ -17,6 +17,7 @@ import {
   groundPoiRowsWithRoutePlan,
   shouldReplaceWithGroundedNearbyPois,
   buildRoutePlanSignature,
+  buildDiningRowsFromSuggestions,
   classifyPoiFailureReason,
   chooseBestItineraryRows,
   buildTripShareLink,
@@ -1112,7 +1113,8 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       expect.objectContaining({
         destination: "Wellington",
         anchor: "Cuba Street",
-        locationLabel: "Wellington near Cuba Street",
+        locationLabel: "Wellington",
+        stayAnchorLabel: "Cuba Street",
       })
     );
   });
@@ -1135,18 +1137,20 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Lunch area",
+        name: "Lunch near sightseeing stop",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "poi",
       })
     );
     expect(out[0].meals[0].options[0]).toEqual(
       expect.objectContaining({
-        name: "Lunch area",
+        name: "Lunch near sightseeing stop",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "poi",
       })
     );
   });
@@ -1169,18 +1173,20 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Dinner area",
+        name: "Dinner near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
     expect(out[0].meals[0].options[0]).toEqual(
       expect.objectContaining({
-        name: "Dinner area",
+        name: "Dinner near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
   });
@@ -1209,18 +1215,20 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Dinner area",
+        name: "Dinner near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
     expect(out[0].meals[1]).toEqual(
       expect.objectContaining({
-        name: "Breakfast area",
+        name: "Breakfast near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
   });
@@ -1261,34 +1269,38 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Breakfast area",
+        name: "Breakfast near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
     expect(out[0].meals[1]).toEqual(
       expect.objectContaining({
-        name: "Lunch area",
+        name: "Lunch near sightseeing stop",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "poi",
       })
     );
     expect(out[0].meals[2]).toEqual(
       expect.objectContaining({
-        name: "Dinner area",
+        name: "Dinner near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
     expect(out[0].meals[3]).toEqual(
       expect.objectContaining({
-        name: "Dinner area",
+        name: "Dinner near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
   });
@@ -1312,15 +1324,17 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(out[0]).toEqual(
       expect.objectContaining({
         anchor: "Varanasi Ghats",
-        locationLabel: "Varanasi near Varanasi Ghats",
+        locationLabel: "Varanasi",
+        stayAnchorLabel: "Varanasi Ghats",
       })
     );
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Breakfast area",
+        name: "Breakfast near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
   });
@@ -1344,15 +1358,17 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(out[0]).toEqual(
       expect.objectContaining({
         anchor: "Grishneshwar (Aurangabad)",
-        locationLabel: "Somnath near Grishneshwar (Aurangabad)",
+        locationLabel: "Somnath",
+        stayAnchorLabel: "Grishneshwar (Aurangabad)",
       })
     );
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Breakfast area",
+        name: "Breakfast near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
+        anchorRole: "stay",
       })
     );
   });
@@ -1376,17 +1392,127 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(out[0]).toEqual(
       expect.objectContaining({
         anchor: "Ellora Caves (Grishneshwar area)",
-        locationLabel: "Somnath near Ellora Caves (Grishneshwar area)",
+        locationLabel: "Somnath",
+        lunchAnchorLabel: "Ellora Caves (Grishneshwar area)",
       })
     );
     expect(out[0].meals[0]).toEqual(
       expect.objectContaining({
-        name: "Lunch area",
+        name: "Lunch near sightseeing stop",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+        anchorRole: "poi",
+      })
+    );
+  });
+
+  test("normalizeDiningPlan converts itinerary-phrase meal names into area guidance options", () => {
+    const out = normalizeDiningPlan([
+      {
+        day: 1,
+        destination: "Aurangabad",
+        anchor: "Arrive in Grishneshwar (Aurangabad)",
+        meals: [
+          {
+            type: "Breakfast",
+            name: "Breakfast near Arrive in Grishneshwar (Aurangabad)",
+            cost: 45,
+            rating: 4.6,
+            options: [
+              { name: "Breakfast near Arrive in Grishneshwar (Aurangabad)", cost: 45, rating: 4.6 },
+              { name: "Somnath morning cafe area", cost: 35, rating: 4.4 },
+              { name: "Temple-access breakfast around Somnath", cost: 18, rating: 4.3 },
+              { name: "Somnath tea and bakery area", cost: 53, rating: 4.2 },
+            ],
+          },
+          {
+            type: "Lunch",
+            name: "Lunch near Approx. 10 min transit from Lunch in Grishneshwar (Aurangabad) to Ellora Caves (Grishneshwar area)",
+            cost: 45,
+            rating: 4.5,
+          },
+        ],
+      },
+    ]);
+    expect(out[0].meals[0]).toEqual(
+      expect.objectContaining({
+        name: "Breakfast near your stay",
         cuisine: "Area guidance",
         rating: 0,
         cost: 0,
       })
     );
+    expect(out[0].meals[0].options[0]).toEqual(
+      expect.objectContaining({
+        name: "Breakfast near your stay",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+      })
+    );
+    expect(out[0].meals[1]).toEqual(
+      expect.objectContaining({
+        name: "Lunch near sightseeing stop",
+        cuisine: "Area guidance",
+        rating: 0,
+        cost: 0,
+      })
+    );
+  });
+
+  test("buildDiningRowsFromSuggestions groups one structured dining card per destination", () => {
+    const rows = buildDiningRowsFromSuggestions([
+      {
+        meal: "Breakfast",
+        city: "Aurangabad",
+        anchor_role: "stay",
+        anchor_label: "Grishneshwar stay area",
+        near_poi: "Grishneshwar stay area",
+        name: "Breakfast near your stay",
+        options: [{ name: "Breakfast near your stay", cuisine: "Area guidance", cost: 0, rating: 0, tags: ["area-guidance", "breakfast"] }],
+      },
+      {
+        meal: "Lunch",
+        city: "Aurangabad",
+        anchor_role: "poi",
+        anchor_label: "Ellora Caves",
+        near_poi: "Ellora Caves",
+        name: "Lunch near sightseeing stop",
+        options: [{ name: "Lunch near sightseeing stop", cuisine: "Area guidance", cost: 0, rating: 0, tags: ["area-guidance", "lunch"] }],
+      },
+      {
+        meal: "Dinner",
+        city: "Aurangabad",
+        anchor_role: "stay",
+        anchor_label: "Grishneshwar stay area",
+        near_poi: "Grishneshwar stay area",
+        name: "Dinner near your stay",
+        options: [{ name: "Dinner near your stay", cuisine: "Area guidance", cost: 0, rating: 0, tags: ["area-guidance", "dinner"] }],
+      },
+      {
+        meal: "Lunch",
+        city: "Aurangabad",
+        anchor_role: "poi",
+        anchor_label: "Daulatabad Fort",
+        near_poi: "Daulatabad Fort",
+        name: "Duplicate lunch should be ignored",
+      },
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        destination: "Aurangabad",
+        locationLabel: "Aurangabad",
+        stayAnchorLabel: "Grishneshwar stay area",
+        lunchAnchorLabel: "Ellora Caves",
+      })
+    );
+    expect(rows[0].meals.map((meal) => meal.type)).toEqual(["Breakfast", "Lunch", "Dinner"]);
+    expect(rows[0].meals[0]).toEqual(expect.objectContaining({ anchorRole: "stay", anchorLabel: "Grishneshwar stay area" }));
+    expect(rows[0].meals[1]).toEqual(expect.objectContaining({ anchorRole: "poi", anchorLabel: "Ellora Caves" }));
+    expect(rows[0].meals[2]).toEqual(expect.objectContaining({ anchorRole: "stay", anchorLabel: "Grishneshwar stay area" }));
   });
 
   test("receipt helpers total parsed items and format budget values", () => {
@@ -2807,6 +2933,138 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     await waitFor(() => {
       expect(putBodies.length).toBeGreaterThan(0);
       expect(putBodies[putBodies.length - 1].destinations).toEqual(["Osaka"]);
+    });
+  });
+
+  test("persists the step 6 route plan before continuing", async () => {
+    const putBodies = [];
+    const tripId = "33333333-3333-4333-8333-333333333333";
+    const routePlan = {
+      summary: "Start in Kyoto, then continue west to Osaka for an efficient city pair.",
+      startingCity: "Kyoto",
+      endingCity: "Osaka",
+      totalDays: 5,
+      destinations: [
+        { destination: "Kyoto", days: 3, nearbySites: ["Fushimi Inari Shrine"] },
+        { destination: "Osaka", days: 2, nearbySites: ["Dotonbori"] },
+      ],
+      phases: [
+        { title: "Kansai Core", route: ["Kyoto", "Osaka"], days: 5, notes: "Minimal backtracking." },
+      ],
+    };
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const parsedUrl = new URL(String(url), "https://example.test");
+      const path = parsedUrl.pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Organizer",
+            travel_styles: ["friends"],
+            interests: { culture: true, food: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [
+            { id: "bucket-kyoto", destination: "Kyoto", name: "Kyoto", country: "Japan" },
+            { id: "bucket-osaka", destination: "Osaka", name: "Osaka", country: "Japan" },
+          ],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: tripId,
+              name: "Japan Sprint",
+              status: "planning",
+              my_status: "owner",
+              my_role: "owner",
+              duration_days: 5,
+              members: [],
+              destinations: [{ name: "Kyoto" }, { name: "Osaka" }],
+            },
+          ],
+        });
+      }
+      if (path === `/trips/${tripId}` && method === "GET") {
+        return jsonResponse({
+          trip: {
+            id: tripId,
+            name: "Japan Sprint",
+            status: "planning",
+            duration_days: 5,
+            members: [],
+          },
+        });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "GET") {
+        return jsonResponse({
+          destinations: [{ name: "Kyoto", votes: 0 }, { name: "Osaka", votes: 0 }],
+        });
+      }
+      if (path === `/trips/${tripId}/pois` && method === "GET") return jsonResponse({ pois: [] });
+      if (path === `/trips/${tripId}/planning-state` && method === "GET") {
+        return jsonResponse({
+          current_step: 5,
+          state: {
+            wizard_order_version: 2,
+            route_plan: routePlan,
+          },
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      if (path === `/trips/${tripId}/planning-state` && method === "PUT") {
+        const body = JSON.parse((options && options.body) || "{}");
+        putBodies.push(body);
+        return jsonResponse({
+          current_step: body.current_step,
+          state: body.state || {},
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:organizer-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:organizer-user",
+      JSON.stringify({
+        name: "Organizer",
+        email: "organizer@test.com",
+        styles: ["friends"],
+        interests: { culture: true, food: true },
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Japan Sprint")).not.toBeNull());
+    fireEvent.click(screen.getByText("Japan Sprint"));
+    await waitFor(() => expect(screen.queryByText("Continue Planning")).not.toBeNull());
+    fireEvent.click(screen.getByText("Continue Planning"));
+
+    await waitFor(() => expect(screen.queryByText("Use Route Plan & Continue")).not.toBeNull());
+    fireEvent.click(screen.getByText("Use Route Plan & Continue"));
+
+    await waitFor(() => {
+      const routeSaveBody = putBodies.find((body) => body && body.state && body.state.route_plan);
+      expect(routeSaveBody).toBeTruthy();
+      expect(routeSaveBody.state.route_plan.destinations.map((stop) => stop.destination)).toEqual(["Kyoto", "Osaka"]);
+      expect(routeSaveBody.state.duration_per_destination).toEqual({ Kyoto: 3, Osaka: 2 });
+    });
+
+    await waitFor(() => {
+      expect(putBodies.some((body) => body && body.current_step === 6)).toBe(true);
     });
   });
 
