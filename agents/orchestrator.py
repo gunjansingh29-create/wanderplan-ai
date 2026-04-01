@@ -2594,14 +2594,25 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
 @app.on_event("startup")
 async def _startup_db():
     global db_pool
-    dsn = os.getenv(
-        "POSTGRES_DSN",
-        "postgresql://wanderplan:wanderplan_test@localhost:15432/wanderplan_test",
+    dsn = (
+        os.getenv("POSTGRES_DSN")
+        or os.getenv("DATABASE_URL")
+        or "postgresql://wanderplan:wanderplan_test@localhost:15432/wanderplan_test"
     )
     # SQLAlchemy-style DSN is used in compose; asyncpg expects postgresql://...
     dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+    # Render and several managed Postgres providers require TLS for external URLs.
+    ssl_setting: Any = None
+    explicit_ssl = str(os.getenv("POSTGRES_SSL", "")).strip().lower()
+    if explicit_ssl in {"1", "true", "yes", "require"}:
+        ssl_setting = "require"
+    elif "sslmode=require" in dsn.lower() or "ssl=require" in dsn.lower():
+        ssl_setting = "require"
+    elif os.getenv("RENDER") and "localhost" not in dsn and "127.0.0.1" not in dsn:
+        ssl_setting = "require"
     db_pool = await asyncpg.create_pool(
-        dsn=dsn
+        dsn=dsn,
+        ssl=ssl_setting,
     )
     async with db_pool.acquire() as conn:
         await _bootstrap_schema(conn)
@@ -7483,6 +7494,26 @@ def _meal_area_label(destination: Any, anchor: Any, fallback_anchor: Any = "") -
     return candidate
 
 
+def _default_meal_anchor_role(meal: Any) -> str:
+    return "poi" if str(meal or "").strip().lower() == "lunch" else "stay"
+
+
+def _meal_anchor_context(role: str, destination: Any, anchor: Any) -> str:
+    dest = _clean_meal_anchor(destination) or "the destination"
+    label = _meal_area_label(dest, anchor, dest)
+    if role == "poi":
+        return f"the main sightseeing stop near {label}" if label and _canonical_place_key(label) != _canonical_place_key(dest) else f"the main sightseeing area in {dest}"
+    return f"your stay around {label}" if label and _canonical_place_key(label) != _canonical_place_key(dest) else f"your stay in {dest}"
+
+
+def _stay_anchor_label(stay: Any, destination: Any, fallback_anchor: Any = "") -> str:
+    row = stay if isinstance(stay, dict) else {}
+    area = str(row.get("neighborhood") or row.get("area") or "").strip()
+    if area:
+        return _meal_area_label(destination, area, fallback_anchor or destination)
+    return _meal_area_label(destination, row.get("name") or fallback_anchor or destination, fallback_anchor or destination)
+
+
 def _normalize_place(city: Any, country: Any, fallback: str = "") -> tuple[str, str]:
     c = str(city or "").strip()
     k = str(country or "").strip()
@@ -7630,6 +7661,7 @@ def _fallback_meal_options(
     city: str,
     country: str,
     near_poi: str,
+    anchor_role: str = "",
     limit: int = 3,
 ) -> list[dict[str, Any]]:
     city_key = str(city or "").strip().lower()
@@ -7656,49 +7688,50 @@ def _fallback_meal_options(
             )
         return out[:limit]
 
+    role = anchor_role or _default_meal_anchor_role(meal)
     anchor_label = _meal_area_label(city, near_poi, city or "your route")
-    label_city = city or "City"
+    context = _meal_anchor_context(role, city or "the destination", anchor_label)
     base_rows = {
         "Breakfast": [
             (
-                "Breakfast area",
-                f"Area guidance only. Compare real breakfast spots near {anchor_label}.",
+                "Breakfast near your stay",
+                f"Area guidance only. Compare real breakfast spots close to {context}.",
             ),
             (
-                "Cafe cluster",
-                f"Area guidance only. Compare real cafes near {anchor_label}.",
+                "Cafe options near your stay",
+                f"Area guidance only. Compare real cafes close to {context}.",
             ),
             (
-                "Early-start breakfast area",
-                f"Useful if you want a practical breakfast before sightseeing near {anchor_label}.",
+                "Early breakfast near your stay",
+                f"Useful when you want a practical breakfast close to {context} before heading out.",
             ),
         ],
         "Lunch": [
             (
-                "Lunch area",
-                f"Area guidance only. Compare real lunch options near {anchor_label}.",
+                "Lunch near sightseeing stop",
+                f"Area guidance only. Compare real lunch places close to {context} so midday travel stays light.",
             ),
             (
-                "Casual lunch cluster",
-                f"Area guidance only. Good for comparing simple midday spots near {anchor_label}.",
+                "Quick lunch near sightseeing stop",
+                f"Area guidance only. Good for comparing quick midday stops close to {context}.",
             ),
             (
-                "Midday dining area",
-                f"Useful if you want flexible lunch choices while staying close to {anchor_label}.",
+                "Casual lunch near sightseeing stop",
+                f"Useful when you want flexible lunch choices without drifting far from {context}.",
             ),
         ],
         "Dinner": [
             (
-                "Dinner area",
-                f"Area guidance only. Compare real dinner options near {anchor_label}.",
+                "Dinner near your stay",
+                f"Area guidance only. Compare real dinner options close to {context}.",
             ),
             (
-                "Evening dining cluster",
-                f"Area guidance only. Good for comparing dinner spots close to {anchor_label}.",
+                "Evening dinner near your stay",
+                f"Area guidance only. Good for comparing dinner spots close to {context}.",
             ),
             (
-                "Dinner cluster",
-                f"Useful if you want a realistic evening dining area near {anchor_label} without locking to one venue.",
+                "Dinner options near your stay",
+                f"Useful when you want the evening to end close to {context}.",
             ),
         ],
     }
@@ -7758,6 +7791,7 @@ def _select_meal_options(
     anchor_country: str,
     near_poi: str,
     food_candidates: list[dict[str, Any]],
+    anchor_role: str = "",
     limit: int = 3,
 ) -> list[dict[str, Any]]:
     scored = sorted(
@@ -7791,7 +7825,7 @@ def _select_meal_options(
             }
         )
     if len(picked) < limit:
-        for extra in _fallback_meal_options(meal, anchor_city, anchor_country, near_poi, limit=limit - len(picked)):
+        for extra in _fallback_meal_options(meal, anchor_city, anchor_country, near_poi, anchor_role=anchor_role, limit=limit - len(picked)):
             picked.append(extra)
     return picked[:limit]
 
@@ -7844,6 +7878,12 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
     if not isinstance(planning_state, dict):
         planning_state = {}
     route_plan = planning_state.get("route_plan") if isinstance(planning_state, dict) else {}
+    stay_snapshot = _companion_selected_stays(planning_state)
+    stay_by_destination = {
+        _canonical_place_key(row.get("destination")): row
+        for row in stay_snapshot
+        if isinstance(row, dict) and _canonical_place_key(row.get("destination"))
+    }
     locked_window = planning_state.get("availability_locked_window")
     locked_start = _safe_iso_date((locked_window or {}).get("start")) if isinstance(locked_window, dict) else None
     locked_end = _safe_iso_date((locked_window or {}).get("end")) if isinstance(locked_window, dict) else None
@@ -7932,6 +7972,15 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 }
             )
 
+    poi_by_destination: dict[str, list[dict[str, Any]]] = {}
+    for item in poi_candidates:
+        if item["category"] in {"food", "dining"}:
+            continue
+        key = _canonical_place_key(item.get("city"))
+        if not key:
+            continue
+        poi_by_destination.setdefault(key, []).append(item)
+
     activities_by_date: dict[date, list[dict[str, Any]]] = {}
     for row in itinerary_rows:
         title = str(row["title"] or "").strip()
@@ -7977,18 +8026,49 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         fallback_dest = fallback_destinations[day_idx % len(fallback_destinations)] if fallback_destinations else {"city": "", "country": ""}
         fallback_city = str((fallback_poi or {}).get("city") or fallback_dest.get("city") or "").strip()
         fallback_country = str((fallback_poi or {}).get("country") or fallback_dest.get("country") or "").strip()
+        destination_city = fallback_city or str(fallback_dest.get("city") or "").strip()
+        destination_key = _canonical_place_key(destination_city)
+        stay_row = stay_by_destination.get(destination_key)
+        destination_pois = poi_by_destination.get(destination_key, [])
         route_stop = _route_stop_lookup(route_plan, fallback_city or fallback_dest.get("city"))
         route_sites_raw = (route_stop or {}).get("nearbySites") or (route_stop or {}).get("nearby_sites") or []
         route_sites = [str(site or "").strip() for site in route_sites_raw if str(site or "").strip()] if isinstance(route_sites_raw, list) else []
         route_anchor = route_sites[0] if route_sites else ""
 
         def anchor_for_meal(meal_name: str) -> dict[str, Any]:
+            role = _default_meal_anchor_role(meal_name)
+            if role == "stay":
+                stay_anchor = _stay_anchor_label(stay_row, destination_city or fallback_city, route_anchor or destination_city)
+                return {
+                    "title": stay_anchor or destination_city or "stay area",
+                    "city": destination_city or fallback_city,
+                    "country": fallback_country,
+                    "start": None,
+                    "end": None,
+                    "role": "stay",
+                }
             if day_activities:
-                if meal_name == "Breakfast":
-                    return day_activities[0]
-                if meal_name == "Lunch":
-                    return day_activities[len(day_activities) // 2]
-                return day_activities[-1]
+                active = day_activities[len(day_activities) // 2]
+                return dict(active, role="poi")
+            if destination_pois:
+                primary_poi = destination_pois[0]
+                return {
+                    "title": str(primary_poi.get("name") or route_anchor or destination_city or "main POI").strip(),
+                    "city": str(primary_poi.get("city") or destination_city or fallback_city).strip(),
+                    "country": str(primary_poi.get("country") or fallback_country).strip(),
+                    "start": None,
+                    "end": None,
+                    "role": "poi",
+                }
+            if route_anchor:
+                return {
+                    "title": route_anchor,
+                    "city": destination_city or fallback_city,
+                    "country": fallback_country,
+                    "start": None,
+                    "end": None,
+                    "role": "poi",
+                }
             poi_name = str((fallback_poi or {}).get("name") or f"{fallback_city or 'Destination'} highlights").strip()
             return {
                 "title": poi_name,
@@ -7996,6 +8076,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 "country": fallback_country,
                 "start": None,
                 "end": None,
+                "role": role,
             }
 
         prev_anchor = None
@@ -8006,10 +8087,11 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 anchor.get("country"),
                 fallback_city,
             )
+            anchor_role = str(anchor.get("role") or _default_meal_anchor_role(meal_name)).strip().lower() or _default_meal_anchor_role(meal_name)
             near_poi = _meal_area_label(
                 anchor_city or fallback_city,
                 anchor.get("title") or fallback_city or "trip highlights",
-                route_anchor,
+                route_anchor if anchor_role == "poi" else (destination_city or fallback_city or route_anchor),
             )
 
             default_minutes = _minutes_of_day(_safe_time_hhmm(_MEAL_DEFAULT_TIME[meal_name])) or 12 * 60
@@ -8039,6 +8121,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 anchor_country,
                 near_poi,
                 food_candidates,
+                anchor_role=anchor_role,
                 limit=3,
             )
             enriched_options = []
@@ -8059,6 +8142,8 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                         "travel_minutes": int(travel_minutes),
                         "rating": float(option.get("rating") or 4.4),
                         "note": str(option.get("note") or "").strip(),
+                        "anchor_role": anchor_role,
+                        "anchor_label": near_poi,
                     }
                 )
             if not enriched_options:
@@ -8082,6 +8167,8 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                     "cost": float(top["cost"]),
                     "cuisine": top["cuisine"],
                     "near_poi": near_poi,
+                    "anchor_role": anchor_role,
+                    "anchor_label": near_poi,
                     "travel_from_poi_minutes": int(top["travel_minutes"]),
                     "travel_between_pois_minutes": int(transfer_between_pois),
                     "rating": float(top["rating"]),
