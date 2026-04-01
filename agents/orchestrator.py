@@ -2610,12 +2610,51 @@ async def _startup_db():
         ssl_setting = "require"
     elif os.getenv("RENDER") and "localhost" not in dsn and "127.0.0.1" not in dsn:
         ssl_setting = "require"
-    db_pool = await asyncpg.create_pool(
-        dsn=dsn,
-        ssl=ssl_setting,
-    )
-    async with db_pool.acquire() as conn:
-        await _bootstrap_schema(conn)
+    retry_attempts_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_ATTEMPTS", "6")).strip()
+    retry_base_delay_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_BASE_SECONDS", "1.0")).strip()
+    retry_max_delay_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_MAX_SECONDS", "12.0")).strip()
+    try:
+        retry_attempts = max(1, int(retry_attempts_raw))
+    except Exception:
+        retry_attempts = 6
+    try:
+        retry_base_delay = max(0.1, float(retry_base_delay_raw))
+    except Exception:
+        retry_base_delay = 1.0
+    try:
+        retry_max_delay = max(retry_base_delay, float(retry_max_delay_raw))
+    except Exception:
+        retry_max_delay = 12.0
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, retry_attempts + 1):
+        pool: Optional[asyncpg.Pool] = None
+        try:
+            pool = await asyncpg.create_pool(
+                dsn=dsn,
+                ssl=ssl_setting,
+            )
+            async with pool.acquire() as conn:
+                await _bootstrap_schema(conn)
+            db_pool = pool
+            return
+        except Exception as err:
+            last_error = err
+            if pool is not None:
+                try:
+                    await pool.close()
+                except Exception:
+                    pass
+            if attempt >= retry_attempts:
+                raise
+            delay = min(retry_max_delay, retry_base_delay * (2 ** (attempt - 1)))
+            print(
+                f"[startup-db] connect attempt {attempt}/{retry_attempts} failed: {err}. "
+                f"Retrying in {delay:.1f}s."
+            )
+            await asyncio.sleep(delay)
+    if last_error is not None:
+        raise last_error
 
 
 @app.on_event("shutdown")
