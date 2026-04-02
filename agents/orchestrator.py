@@ -2625,21 +2625,28 @@ async def _startup_db():
     for candidate in ssl_candidates:
         if candidate not in deduped_ssl_candidates:
             deduped_ssl_candidates.append(candidate)
-    retry_attempts_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_ATTEMPTS", "6")).strip()
-    retry_base_delay_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_BASE_SECONDS", "1.0")).strip()
-    retry_max_delay_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_MAX_SECONDS", "12.0")).strip()
+    # Render free instances and attached databases can take close to a minute to wake from inactivity.
+    # Use a generous default retry window so transient cold-start disconnects do not fail deploy startup.
+    retry_attempts_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_ATTEMPTS", "12")).strip()
+    retry_base_delay_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_BASE_SECONDS", "2.0")).strip()
+    retry_max_delay_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_MAX_SECONDS", "30.0")).strip()
     try:
         retry_attempts = max(1, int(retry_attempts_raw))
     except Exception:
-        retry_attempts = 6
+        retry_attempts = 12
     try:
         retry_base_delay = max(0.1, float(retry_base_delay_raw))
     except Exception:
-        retry_base_delay = 1.0
+        retry_base_delay = 2.0
     try:
         retry_max_delay = max(retry_base_delay, float(retry_max_delay_raw))
     except Exception:
-        retry_max_delay = 12.0
+        retry_max_delay = 30.0
+    print(
+        "[startup-db] init config: "
+        f"attempts={retry_attempts}, base_delay={retry_base_delay:.1f}s, "
+        f"max_delay={retry_max_delay:.1f}s, ssl_candidates={['require' if c == 'require' else 'disable' for c in deduped_ssl_candidates]}"
+    )
 
     last_error: Optional[Exception] = None
     for attempt in range(1, retry_attempts + 1):
