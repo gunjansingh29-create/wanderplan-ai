@@ -2642,10 +2642,21 @@ async def _startup_db():
         retry_max_delay = max(retry_base_delay, float(retry_max_delay_raw))
     except Exception:
         retry_max_delay = 30.0
+    pool_min_size_raw = str(os.getenv("POSTGRES_POOL_MIN_SIZE", "1")).strip()
+    pool_max_size_raw = str(os.getenv("POSTGRES_POOL_MAX_SIZE", "5")).strip()
+    try:
+        pool_min_size = max(1, int(pool_min_size_raw))
+    except Exception:
+        pool_min_size = 1
+    try:
+        pool_max_size = max(pool_min_size, int(pool_max_size_raw))
+    except Exception:
+        pool_max_size = max(pool_min_size, 5)
     print(
         "[startup-db] init config: "
         f"attempts={retry_attempts}, base_delay={retry_base_delay:.1f}s, "
-        f"max_delay={retry_max_delay:.1f}s, ssl_candidates={['require' if c == 'require' else 'disable' for c in deduped_ssl_candidates]}"
+        f"max_delay={retry_max_delay:.1f}s, pool_min={pool_min_size}, pool_max={pool_max_size}, "
+        f"ssl_candidates={['require' if c == 'require' else 'disable' for c in deduped_ssl_candidates]}"
     )
 
     last_error: Optional[Exception] = None
@@ -2656,6 +2667,8 @@ async def _startup_db():
                 pool = await asyncpg.create_pool(
                     dsn=dsn,
                     ssl=ssl_mode,
+                    min_size=pool_min_size,
+                    max_size=pool_max_size,
                 )
                 async with pool.acquire() as conn:
                     await _bootstrap_schema(conn)
