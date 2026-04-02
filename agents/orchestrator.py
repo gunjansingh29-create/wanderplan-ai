@@ -2606,10 +2606,25 @@ async def _startup_db():
     explicit_ssl = str(os.getenv("POSTGRES_SSL", "")).strip().lower()
     if explicit_ssl in {"1", "true", "yes", "require"}:
         ssl_setting = "require"
+    elif explicit_ssl in {"0", "false", "no", "disable", "off"}:
+        ssl_setting = None
     elif "sslmode=require" in dsn.lower() or "ssl=require" in dsn.lower():
         ssl_setting = "require"
     elif os.getenv("RENDER") and "localhost" not in dsn and "127.0.0.1" not in dsn:
         ssl_setting = "require"
+    ssl_candidates: list[Any] = [ssl_setting]
+    # If SSL mode was inferred (not explicitly configured), try the opposite mode as fallback.
+    if (
+        explicit_ssl == ""
+        and os.getenv("RENDER")
+        and "localhost" not in dsn
+        and "127.0.0.1" not in dsn
+    ):
+        ssl_candidates.append(None if ssl_setting == "require" else "require")
+    deduped_ssl_candidates: list[Any] = []
+    for candidate in ssl_candidates:
+        if candidate not in deduped_ssl_candidates:
+            deduped_ssl_candidates.append(candidate)
     retry_attempts_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_ATTEMPTS", "6")).strip()
     retry_base_delay_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_BASE_SECONDS", "1.0")).strip()
     retry_max_delay_raw = str(os.getenv("POSTGRES_STARTUP_RETRY_MAX_SECONDS", "12.0")).strip()
@@ -2628,31 +2643,34 @@ async def _startup_db():
 
     last_error: Optional[Exception] = None
     for attempt in range(1, retry_attempts + 1):
-        pool: Optional[asyncpg.Pool] = None
-        try:
-            pool = await asyncpg.create_pool(
-                dsn=dsn,
-                ssl=ssl_setting,
-            )
-            async with pool.acquire() as conn:
-                await _bootstrap_schema(conn)
-            db_pool = pool
-            return
-        except Exception as err:
-            last_error = err
-            if pool is not None:
-                try:
-                    await pool.close()
-                except Exception:
-                    pass
-            if attempt >= retry_attempts:
-                raise
-            delay = min(retry_max_delay, retry_base_delay * (2 ** (attempt - 1)))
-            print(
-                f"[startup-db] connect attempt {attempt}/{retry_attempts} failed: {err}. "
-                f"Retrying in {delay:.1f}s."
-            )
-            await asyncio.sleep(delay)
+        for ssl_mode in deduped_ssl_candidates:
+            pool: Optional[asyncpg.Pool] = None
+            try:
+                pool = await asyncpg.create_pool(
+                    dsn=dsn,
+                    ssl=ssl_mode,
+                )
+                async with pool.acquire() as conn:
+                    await _bootstrap_schema(conn)
+                db_pool = pool
+                return
+            except Exception as err:
+                last_error = err
+                if pool is not None:
+                    try:
+                        await pool.close()
+                    except Exception:
+                        pass
+                ssl_label = "require" if ssl_mode == "require" else "disable"
+                print(
+                    f"[startup-db] connect attempt {attempt}/{retry_attempts} "
+                    f"(ssl={ssl_label}) failed: {err}"
+                )
+        if attempt >= retry_attempts:
+            raise last_error if last_error is not None else RuntimeError("Postgres startup failed")
+        delay = min(retry_max_delay, retry_base_delay * (2 ** (attempt - 1)))
+        print(f"[startup-db] all ssl modes failed for attempt {attempt}. Retrying in {delay:.1f}s.")
+        await asyncio.sleep(delay)
     if last_error is not None:
         raise last_error
 
