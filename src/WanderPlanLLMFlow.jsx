@@ -8531,11 +8531,12 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         setSChat(function(p){return p.concat([{from:"user",text:msg}]);});
         var destStr=dests.map(function(d){return d.name;}).join(", ")||"your destinations";
         var currentPicked=pickedStays.map(function(s){return s.name+" ($"+s.ratePerNight+"/n) in "+s.destination;}).join("; ");
-        var sys="You are WanderPlan Accommodation Agent. User wants to modify stays. Current: "+(currentPicked||"none")+". Destinations: "+destStr+". Budget: "+effectiveTripBudgetTier+".\n\nIf user wants new options: {\"type\":\"options\",\"stays\":[{\"name\":\"Hotel\",\"destination\":\"City\",\"type\":\"Hotel\",\"rating\":4.5,\"ratePerNight\":120,\"totalNights\":3,\"amenities\":[\"WiFi\"],\"bookingSource\":\"Booking.com\",\"whyThisOne\":\"Reason\",\"cancellation\":\"Free\",\"bookingUrl\":\"https://...\",\"imageUrl\":\"https://...\"}]}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nInclude bookingUrl and imageUrl when known. ONLY JSON.";
+        var sys="You are WanderPlan Accommodation Agent. User wants to modify stays. Current: "+(currentPicked||"none")+". Destinations: "+destStr+". Budget: "+effectiveTripBudgetTier+".\n\nReturn ONLY JSON in one of these strict formats:\n{\"type\":\"options\",\"stays\":[{\"name\":\"Hotel\",\"destination\":\"City\",\"type\":\"Hotel\",\"rating\":4.5,\"ratePerNight\":120,\"totalNights\":3,\"amenities\":[\"WiFi\"],\"bookingSource\":\"Booking.com\",\"whyThisOne\":\"Reason\",\"cancellation\":\"Free\",\"bookingUrl\":\"https://...\",\"imageUrl\":\"https://...\"}]}\nOR\n{\"type\":\"options\",\"stays\":[]}\n\nRules:\n- this step is accommodation-only; do not provide meal plans, itinerary summaries, or travel tips\n- prioritize real property names or honest area guidance if exact listings are uncertain\n- include bookingUrl and imageUrl when known; otherwise leave them empty\n- do not include markdown or prose outside JSON";
         callLLM(sys,msg,1000).then(function(res){
           setSAL(false);
-          if(res&&res.type==="options"&&res.stays&&res.stays.length>0){
-            var norm=normalizeStays(res.stays,dests,effectiveTripBudgetTier,totalN);
+          var candidateRows=Array.isArray(res)?res:((res&&res.type==="options"&&Array.isArray(res.stays))?res.stays:[]);
+          if(candidateRows.length>0){
+            var norm=normalizeStays(candidateRows,dests,effectiveTripBudgetTier,totalN);
             setStays(function(prev){
               var next=(Array.isArray(prev)?prev:[]).concat(norm);
               var clearedStayLocksNext={};Object.keys(stayFinalChoices||{}).forEach(function(k){clearedStayLocksNext[k]="";});
@@ -8547,8 +8548,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             });
             setSChat(function(p){return p.concat([{from:"agent",text:"Added "+norm.length+" new option"+(norm.length!==1?"s":"")+"! Scroll up to see them."}]);});
           }
-          else if(res&&res.message){setSChat(function(p){return p.concat([{from:"agent",text:res.message}]);});}
-          else{setSChat(function(p){return p.concat([{from:"agent",text:"Try: 'cheaper hotels in Kyoto under $100' or 'Airbnb with pool in Santorini'"}]);});}
+          else{setSChat(function(p){return p.concat([{from:"agent",text:"I can only update accommodations on this step. Try: 'cheaper hotels in Kyoto under $100' or 'guesthouse near temple area'."}]);});}
         }).catch(function(){setSAL(false);setSChat(function(p){return p.concat([{from:"agent",text:"Connection issue. Try again."}]);});});
       }
 
