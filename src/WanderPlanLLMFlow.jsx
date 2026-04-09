@@ -2826,6 +2826,7 @@ export function normalizeDiningPlan(rows){
         ).trim()
       ) || (anchorRole==="poi"?anchor:optionalMealAreaLabel(destination,String(day&&day.stayAnchorLabel||day&&day.stay_anchor_label||"").trim())||anchor);
       var guidanceVariants=mealGuidanceVariants(type,destination,anchorLabel,anchorRole);
+      var spotlight=resolveMealSpotlight(destination,type,anchorLabel);
       var optionSeed=(Array.isArray(meal&&meal.options)&&meal.options.length?meal.options:[meal]).map(function(opt,optIndex){
         var rawName=String(opt&&opt.name||meal&&meal.name||guidanceVariants[Math.min(optIndex,guidanceVariants.length-1)].name).trim();
         var guidance=isAreaGuidanceMealOption(opt,destination) || isManufacturedMealName(rawName,destination);
@@ -2901,7 +2902,10 @@ export function normalizeDiningPlan(rows){
         note:String(picked.note||meal&&meal.note||"").trim(),
         travelMinutes:Number((picked.travel_minutes!==undefined)?picked.travel_minutes:(meal&&meal.travelMinutes)!==undefined?meal.travelMinutes:0)||0,
         anchorRole:normalizeMealAnchorRole(picked&&picked.anchorRole, type),
-        anchorLabel:optionalMealAreaLabel(destination,String(picked&&picked.anchorLabel||meal&&meal.anchorLabel||anchorLabel||"").trim())||anchorLabel
+        anchorLabel:optionalMealAreaLabel(destination,String(picked&&picked.anchorLabel||meal&&meal.anchorLabel||anchorLabel||"").trim())||anchorLabel,
+        focusDish:String(meal&&meal.focusDish||spotlight.dish||"").trim(),
+        focusArea:String(meal&&meal.focusArea||spotlight.area||"").trim(),
+        focusNote:String(meal&&meal.focusNote||spotlight.note||"").trim()
       };
     });
       var stayAnchorLabel=optionalMealAreaLabel(
@@ -2951,9 +2955,102 @@ function mealTypeSortValue(type){
   return 3;
 }
 
+function canonicalDestinationMealKey(value){
+  return String(value||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"");
+}
+
+var DESTINATION_MEAL_SPOTLIGHTS={
+  trimbakeshwar:{
+    Breakfast:{dish:"Poha and chai",area:"Kushavarta Kund area",note:"Keep breakfast light before the temple circuit."},
+    Lunch:{dish:"Sabudana khichdi and thalipeeth",area:"Temple complex lanes",note:"Sattvic lunch works better around darshan hours."},
+    Dinner:{dish:"Misal pav and solkadhi",area:"Town market side",note:"Classic Nashik-region flavors after evening rituals."}
+  },
+  vaidyanath:{
+    Breakfast:{dish:"Litti chokha and chai",area:"Temple approach market",note:"A hearty start before morning temple queues."},
+    Lunch:{dish:"Seasonal thali and dal-rice",area:"Deoghar local bazaar",note:"Simple regional lunch keeps the day steady."},
+    Dinner:{dish:"Regional curry with rice",area:"Main bazaar side",note:"Pick cleaner, well-rated local kitchens for dinner."}
+  },
+  deoghar:{
+    Breakfast:{dish:"Litti chokha and chai",area:"Basukinath corridor",note:"Traditional local breakfast before temple visits."},
+    Lunch:{dish:"Jharkhand thali",area:"Clock tower market area",note:"Good midday option close to town attractions."},
+    Dinner:{dish:"Regional curry and rice",area:"Deoghar market lanes",note:"Popular local dinner style with moderate spice."}
+  },
+  kedarnath:{
+    Breakfast:{dish:"Aloo paratha and tea",area:"Mandir path",note:"Warm, simple carbs are better at altitude."},
+    Lunch:{dish:"Dal-rice and vegetable curry",area:"Pilgrim food lines",note:"Prefer light sattvic meals in high-altitude weather."},
+    Dinner:{dish:"Khichdi and soup",area:"Stay-side kitchens",note:"Keep dinner light for overnight acclimatization."}
+  },
+  rameswaram:{
+    Breakfast:{dish:"Idli, pongal, and filter coffee",area:"Temple street",note:"Classic Tamil breakfast near morning darshan routes."},
+    Lunch:{dish:"South Indian thali or seafood meal",area:"Seafront market side",note:"Best time to sample local coastal lunch plates."},
+    Dinner:{dish:"Chettinad-style dinner or grilled seafood",area:"Harbor-side restaurants",note:"A strong destination for seafood-forward dinners."}
+  }
+};
+
+function mealSpotlightFallback(destination, mealType, anchorLabel){
+  var type=String(mealType||"Meal").trim().toLowerCase();
+  var area=String(anchorLabel||destination||"town center").trim()||"town center";
+  if(type==="breakfast"){
+    return {dish:"Regional breakfast specialties",area:area,note:"Start near your morning route to reduce backtracking."};
+  }
+  if(type==="lunch"){
+    return {dish:"Local thali and midday staples",area:area,note:"Choose lunch close to the main sightseeing stop."};
+  }
+  return {dish:"Signature regional dinner dishes",area:area,note:"Use dinner for destination-famous flavors near your stay."};
+}
+
+function resolveMealSpotlight(destination, mealType, anchorLabel){
+  var key=canonicalDestinationMealKey(destination);
+  var type=String(mealType||"Meal").trim();
+  var byDestination=DESTINATION_MEAL_SPOTLIGHTS[key]||null;
+  if(byDestination&&byDestination[type]){
+    var row=byDestination[type];
+    return {
+      dish:String(row.dish||"").trim(),
+      area:String(row.area||anchorLabel||destination||"").trim(),
+      note:String(row.note||"").trim()
+    };
+  }
+  return mealSpotlightFallback(destination,type,anchorLabel);
+}
+
+function mealOptionFitScore(option, spotlight){
+  var text=[
+    String(option&&option.name||""),
+    String(option&&option.cuisine||""),
+    String(option&&option.note||""),
+    Array.isArray(option&&option.tags)?option.tags.join(" "):""
+  ].join(" ").toLowerCase();
+  var score=0;
+  var dishTokens=String(spotlight&&spotlight.dish||"").toLowerCase().split(/[^a-z0-9]+/).filter(function(token){
+    return token.length>3;
+  });
+  dishTokens.forEach(function(token){
+    if(text.indexOf(token)>=0)score+=4;
+  });
+  var areaTokens=String(spotlight&&spotlight.area||"").toLowerCase().split(/[^a-z0-9]+/).filter(function(token){
+    return token.length>3;
+  });
+  areaTokens.forEach(function(token){
+    if(text.indexOf(token)>=0)score+=2;
+  });
+  score+=Number(option&&option.rating||0)*2;
+  return score;
+}
+
+function sortMealOptionsForSpotlight(options, spotlight){
+  var list=(Array.isArray(options)?options:[]).slice();
+  return list.sort(function(a,b){
+    var sb=mealOptionFitScore(b,spotlight);
+    var sa=mealOptionFitScore(a,spotlight);
+    if(sb!==sa)return sb-sa;
+    return (Number(b&&b.rating||0)-Number(a&&a.rating||0));
+  });
+}
+
 export function buildDiningRowsFromSuggestions(suggestions){
   var list=Array.isArray(suggestions)?suggestions:[];
-  var byDestination={};
+  var byDay={};
   var ordered=[];
   list.forEach(function(s){
     var destination=String(s&&(
@@ -2961,21 +3058,25 @@ export function buildDiningRowsFromSuggestions(suggestions){
       s.city||
       s.poi_city
     )||"City").trim()||"City";
-    var key=destination.toLowerCase();
-    if(!byDestination[key]){
-      byDestination[key]={
+    var dayNumber=Math.max(1,Number(s&&s.day||0)||0);
+    var dayDate=String(s&&s.date||"").trim();
+    var key=(dayDate?("date:"+dayDate):("day:"+String(dayNumber||ordered.length+1))).toLowerCase();
+    if(!byDay[key]){
+      byDay[key]={
         day:ordered.length+1,
-        date:"",
+        date:dayDate,
         destination:destination,
         anchor:"",
-        locationLabel:destination,
+        locationLabel:"",
         stayAnchorLabel:"",
         lunchAnchorLabel:"",
         meals:[]
       };
-      ordered.push(byDestination[key]);
+      if(dayNumber>0)byDay[key].day=dayNumber;
+      ordered.push(byDay[key]);
     }
-    var row=byDestination[key];
+    var row=byDay[key];
+    if(!row.destination)row.destination=destination;
     var mealType=String(s&&s.meal||"Meal").trim()||"Meal";
     if(row.meals.some(function(existing){
       return String(existing&&existing.type||"").trim().toLowerCase()===mealType.toLowerCase();
@@ -3015,11 +3116,13 @@ export function buildDiningRowsFromSuggestions(suggestions){
         anchorLabel:optionalMealAreaLabel(destination,String(o.anchorLabel||o.anchor_label||anchorLabel||o.near_poi||"").trim())||anchorLabel
       };
     });
+    var spotlight=resolveMealSpotlight(destination,mealType,anchorLabel||String(s&&s.near_poi||"").trim());
+    options=sortMealOptionsForSpotlight(options,spotlight);
     var top=options[0]||{};
     row.meals.push({
       type:mealType,
       time:s&&s.time||"",
-      date:"",
+      date:dayDate,
       options:options,
       selectedOption:0,
       name:top.name||s&&s.name||"Restaurant",
@@ -3031,7 +3134,10 @@ export function buildDiningRowsFromSuggestions(suggestions){
       note:top.note||top.near_poi||s&&s.note||s&&s.near_poi||((s&&s.tags||[]).join(", ")),
       travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s&&s.travel_from_poi_minutes||0))||0,
       anchorRole:anchorRole,
-      anchorLabel:anchorLabel
+      anchorLabel:anchorLabel,
+      focusDish:spotlight.dish,
+      focusArea:spotlight.area,
+      focusNote:spotlight.note
     });
     if(anchorRole==="poi"){
       if(anchorLabel)row.lunchAnchorLabel=anchorLabel;
@@ -3040,8 +3146,8 @@ export function buildDiningRowsFromSuggestions(suggestions){
     }
   });
   ordered.forEach(function(row,idx){
-    row.day=idx+1;
-    row.locationLabel=row.destination;
+    if(!(row.day>0))row.day=idx+1;
+    row.locationLabel=(row.date?("Day "+row.day+" - "+row.date+" - "+row.destination):("Day "+row.day+" - "+row.destination));
     row.meals.sort(function(a,b){
       return mealTypeSortValue(a&&a.type)-mealTypeSortValue(b&&b.type);
     });
@@ -8778,8 +8884,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       }
 
       return(<div>
-        {ab("Dining Agent",mealDone?(soloTripMode?"Solo trip detected. Review your location-based meal options, adjust anything you want, then continue. Dietary: "+dietStr+".":"Review your location-based meal options. Dietary: "+dietStr+". Chat to adjust."):"Planning meals across your destinations...")}
-        {!mealDone&&!mealLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent finds breakfast, lunch, and dinner options by destination and local anchor, respecting dietary needs and your approved budget. Exact day placement happens later in the itinerary.</p>{mealErr&&<p style={{fontSize:12,color:C.wrn,marginBottom:10}}>{mealErr}</p>}<button onClick={function(){
+        {ab("Dining Agent",mealDone?(soloTripMode?"Solo trip detected. Review your day-by-day meal plan, adjust venue choices, then continue. Dietary: "+dietStr+".":"Review your day-by-day meal plan. Local food highlights + selectable real venues are shown for each meal. Dietary: "+dietStr+"."):"Planning day-by-day meals across your destinations...")}
+        {!mealDone&&!mealLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent builds a day-by-day breakfast/lunch/dinner plan with famous local food cues, then attaches real venue options that fit those choices and your budget.</p>{mealErr&&<p style={{fontSize:12,color:C.wrn,marginBottom:10}}>{mealErr}</p>}<button onClick={function(){
           setML(true);
           setMealErr("");
           if(authToken&&currentTripId){
@@ -8860,7 +8966,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           </div>)}
           {meals.map(function(day,di){
             return(<div key={di} style={{marginBottom:16}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>{day.destination||("Location "+day.day)}</span><span style={{fontSize:12,color:C.tx3}}>Breakfast and dinner stay close to your stay. Lunch stays near the main sightseeing stop.</span>{day.stayAnchorLabel&&<span style={{fontSize:10,padding:"4px 8px",borderRadius:999,background:C.surface,color:C.tealL,border:"1px solid "+C.teal+"30"}}>{"Your stay: "+day.stayAnchorLabel}</span>}{day.lunchAnchorLabel&&<span style={{fontSize:10,padding:"4px 8px",borderRadius:999,background:C.surface,color:C.sky,border:"1px solid "+C.sky+"30"}}>{"Sightseeing stop: "+day.lunchAnchorLabel}</span>}</div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}><div style={{width:24,height:24,borderRadius:7,background:C.teal+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.tealL}}>{day.day}</div><span style={{fontSize:14,fontWeight:700}}>{day.destination||("Location "+day.day)}</span>{day.date&&<span style={{fontSize:11,color:C.tx3}}>{day.date}</span>}<span style={{fontSize:12,color:C.tx3}}>Breakfast and dinner stay near your stay area. Lunch stays near the main sightseeing stop.</span>{day.stayAnchorLabel&&<span style={{fontSize:10,padding:"4px 8px",borderRadius:999,background:C.surface,color:C.tealL,border:"1px solid "+C.teal+"30"}}>{"Your stay: "+day.stayAnchorLabel}</span>}{day.lunchAnchorLabel&&<span style={{fontSize:10,padding:"4px 8px",borderRadius:999,background:C.surface,color:C.sky,border:"1px solid "+C.sky+"30"}}>{"Sightseeing stop: "+day.lunchAnchorLabel}</span>}</div>
               {(day.meals||[]).map(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,voteMembers);var st=soloTripMode?"yes":((summary.up>=majorityNeeded&&summary.up>summary.down)?"yes":(summary.votedCount===voteMembers.length&&summary.down>=summary.up?"no":""));var typeCol=m.type==="Breakfast"?C.wrn:m.type==="Lunch"?C.sky:C.coral;
                 var opts=Array.isArray(m.options)?m.options:[];
                 var selectedOpt=(m.selectedOption!==undefined&&m.selectedOption!==null)?m.selectedOption:0;
@@ -8877,22 +8983,31 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                         {m.time&&<span style={{fontSize:10,color:C.tx3}}>{m.time}</span>}
                         <span style={{fontSize:13,fontWeight:600,textDecoration:st==="no"?"line-through":"none"}}>{m.name}</span>{m.rating && !mealGuidance? <span style={{fontSize:10,color:C.wrn,fontWeight:700}}>{"*"+Number(m.rating).toFixed(1)}</span> : null}
                       </div>
+                      {(m.focusDish||m.focusArea||m.focusNote)&&<div style={{display:"flex",gap:8,fontSize:11,color:C.tealL,flexWrap:"wrap"}}>
+                        {m.focusDish&&<span>{"Try: "+m.focusDish}</span>}
+                        {m.focusArea&&<span>{"Near: "+m.focusArea}</span>}
+                        {m.focusNote&&<span style={{fontStyle:"italic"}}>{m.focusNote}</span>}
+                      </div>}
                       <div style={{display:"flex",gap:8,fontSize:11,color:C.tx3,flexWrap:"wrap"}}>
                         <span>{anchorText}</span>
                         <span>{m.cuisine}</span>
                         {travelText? <span>{travelText}</span> : null}
-                        {m.note&&<span style={{fontStyle:"italic"}}>{m.note}</span>}
+                        {m.note&&<span style={{fontStyle:"italic"}}>{"Venue fit: "+m.note}</span>}
                       </div>
                     </div>
                     {!mealGuidance&&<span style={{fontSize:13,fontWeight:600,color:C.goldT,flexShrink:0}}>{"$"+(m.cost||0)}</span>}
                     <span style={{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:999,background:st==="yes"?C.grnBg:(st==="no"?C.redBg:C.wrnBg),color:st==="yes"?C.grn:(st==="no"?C.red:C.wrn),flexShrink:0}}>{soloTripMode?"Ready":(st==="yes"?"Approved":(st==="no"?"Rejected":("Voting "+summary.votedCount+"/"+voteMembers.length)))}</span>
                   </div>
-                  {opts.length>1&&(<div style={{display:"flex",gap:6,flexWrap:"wrap",paddingLeft:16}}>
+                  {opts.length>0&&(<div style={{display:"flex",flexDirection:"column",gap:6,paddingLeft:16}}>
                         {opts.map(function(opt,oi){
                         var picked=selectedOpt===oi;
                         var optGuidance=isAreaGuidanceMealOption(opt,day.destination);
-                        var chipLabel=optGuidance?opt.name:(opt.name+" *"+Number(opt.rating||0).toFixed(1)+" $"+(opt.cost||0));
-                        return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"4px 8px",borderRadius:999,fontSize:10,cursor:"pointer"}}>{chipLabel}</button>;
+                        var line1=optGuidance?opt.name:(opt.name+" *"+Number(opt.rating||0).toFixed(1)+"  $"+(opt.cost||0));
+                        var line2=(opt.cuisine||"Local")+(opt.note?(" - "+opt.note):"");
+                        return <button key={oi} onClick={function(e){e.stopPropagation();chooseMealOption(di,mi,oi);}} style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2,textAlign:"left",border:"1px solid "+(picked?C.teal:C.border),background:picked?C.teal+"12":C.bg,color:picked?C.tealL:C.tx2,padding:"7px 10px",borderRadius:10,fontSize:11,cursor:"pointer"}}>
+                          <span style={{fontWeight:700}}>{line1}</span>
+                          {!optGuidance&&<span style={{fontSize:10,color:picked?C.tealL:C.tx3}}>{line2}</span>}
+                        </button>;
                       })}
                   </div>)}
                   {!soloTripMode&&(<div style={{display:"flex",flexWrap:"wrap",gap:8,paddingLeft:16}}>
@@ -8910,7 +9025,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               })}
             </div>);
           })}
-          <div style={{fontSize:12,color:C.tx3,marginBottom:12}}>Showing {meals.length} location-based meal clusters. Exact day placement happens in the itinerary step.</div>
+          <div style={{fontSize:12,color:C.tx3,marginBottom:12}}>Showing {meals.length} day-by-day meal plans with local food highlights and selectable venue options.</div>
 
           {/* Chat for modifications */}
           <div style={{background:C.bg,borderRadius:12,border:"1px solid "+C.border,overflow:"hidden",marginTop:4}}>

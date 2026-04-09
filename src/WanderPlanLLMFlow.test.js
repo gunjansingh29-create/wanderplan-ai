@@ -1504,7 +1504,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(rows[0]).toEqual(
       expect.objectContaining({
         destination: "Aurangabad",
-        locationLabel: "Aurangabad",
+        locationLabel: "Day 1 - Aurangabad",
         stayAnchorLabel: "Grishneshwar stay area",
         lunchAnchorLabel: "Ellora Caves",
       })
@@ -1513,6 +1513,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(rows[0].meals[0]).toEqual(expect.objectContaining({ anchorRole: "stay", anchorLabel: "Grishneshwar stay area" }));
     expect(rows[0].meals[1]).toEqual(expect.objectContaining({ anchorRole: "poi", anchorLabel: "Ellora Caves" }));
     expect(rows[0].meals[2]).toEqual(expect.objectContaining({ anchorRole: "stay", anchorLabel: "Grishneshwar stay area" }));
+    expect(rows[0].meals[0]).toEqual(expect.objectContaining({ focusDish: expect.any(String), focusArea: expect.any(String), focusNote: expect.any(String) }));
   });
 
   test("receipt helpers total parsed items and format budget values", () => {
