@@ -3596,6 +3596,7 @@ export default function WanderPlan(){
   var tripInviteInFlightRef=useRef(false);
   var inviteTripFilterAppliedRef=useRef(false);
   var planningStateUpdatedAtRef=useRef("");
+  var airportResolveCacheRef=useRef({});
   var autoTripAcceptRef=useRef({});
   var poiAutoGenerateRef=useRef({});
   // Wizard interaction states
@@ -6976,6 +6977,62 @@ export default function WanderPlan(){
     function normAirportCode(value){
       return String(value||"").replace(/[^A-Za-z]/g,"").toUpperCase().slice(0,3);
     }
+    function airportAliasFallbackCode(value){
+      var raw=String(value||"").trim().toLowerCase();
+      if(!raw)return "";
+      var aliases=[
+        {keys:["grishneshwar","aurangabad"],code:"IXU"},
+        {keys:["kedarnath","guptkashi","haridwar","rishikesh"],code:"DED"},
+        {keys:["mahakaleshwar","ujjain"],code:"IDR"},
+        {keys:["mallikarjuna","srisailam"],code:"HYD"},
+        {keys:["nageshwar","dwarka"],code:"JGA"},
+        {keys:["omkareshwar"],code:"IDR"},
+        {keys:["rameswaram"],code:"IXM"},
+        {keys:["shrikhand kailash","shrikhand"],code:"IXC"},
+        {keys:["somnath","veraval"],code:"DIU"},
+        {keys:["trimbakeshwar","nashik"],code:"ISK"},
+        {keys:["vaidyanath","deoghar"],code:"DGH"}
+      ];
+      for(var i=0;i<aliases.length;i++){
+        var row=aliases[i]||{};
+        var keys=Array.isArray(row.keys)?row.keys:[];
+        var hit=keys.some(function(k){return raw.indexOf(String(k||"").toLowerCase())>=0;});
+        if(hit){
+          var code=normAirportCode(row.code||"");
+          if(code.length===3)return code;
+        }
+      }
+      return "";
+    }
+    function airportLookupQueries(value){
+      var raw=String(value||"").trim();
+      if(raw.length<2)return [];
+      var seen={};
+      var out=[];
+      function add(q){
+        var text=String(q||"").trim().replace(/\s+/g," ");
+        if(text.length<2)return;
+        var key=text.toLowerCase();
+        if(seen[key])return;
+        seen[key]=1;
+        out.push(text);
+      }
+      add(raw);
+      raw.replace(/\(([^)]+)\)/g,function(_,inner){
+        add(inner);
+        return _;
+      });
+      var withoutParens=raw.replace(/\([^)]*\)/g," ").replace(/\s+/g," ").trim();
+      add(withoutParens);
+      withoutParens.split(/\s+-\s+|\s+\/\s+|,\s*/g).forEach(function(part){add(part);});
+      raw.split(/\s+-\s+|\s+\/\s+|,\s*/g).forEach(function(part){add(part);});
+      var words=withoutParens.split(/\s+/).filter(Boolean);
+      if(words.length>=2){
+        add(words[words.length-1]);
+        add(words.slice(-2).join(" "));
+      }
+      return out.slice(0,6);
+    }
     function explicitAirportCode(value){
       var raw=String(value||"").trim();
       if(/^[A-Za-z]{3}$/.test(raw))return raw.toUpperCase();
@@ -6988,13 +7045,29 @@ export default function WanderPlan(){
       if(explicit)return explicit;
       var query=String(value||"").trim();
       if(query.length<2)return String(fallbackCode||"").trim().toUpperCase();
-      try{
-        var res=await apiJson("/airports/search?q="+encodeURIComponent(query),{method:"GET"},authToken);
-        var airports=Array.isArray(res&&res.airports)?res.airports:[];
-        var best=airports[0]||null;
-        var bestCode=String(best&&best.iata||"").trim().toUpperCase();
-        if(bestCode)return bestCode;
-      }catch(e){}
+      var queries=airportLookupQueries(query);
+      for(var i=0;i<queries.length;i++){
+        var lookup=String(queries[i]||"").trim();
+        if(lookup.length<2)continue;
+        var cacheKey=lookup.toLowerCase();
+        var cached=airportResolveCacheRef.current[cacheKey];
+        if(cached!==undefined){
+          if(String(cached||"").trim())return String(cached||"").trim().toUpperCase();
+          continue;
+        }
+        try{
+          var res=await apiJson("/airports/search?q="+encodeURIComponent(lookup),{method:"GET"},authToken);
+          var airports=Array.isArray(res&&res.airports)?res.airports:[];
+          var best=airports[0]||null;
+          var bestCode=String(best&&best.iata||"").trim().toUpperCase();
+          airportResolveCacheRef.current[cacheKey]=bestCode||"";
+          if(bestCode)return bestCode;
+        }catch(e){
+          airportResolveCacheRef.current[cacheKey]="";
+        }
+      }
+      var aliasCode=airportAliasFallbackCode(query);
+      if(aliasCode)return aliasCode;
       return String(fallbackCode||"").trim().toUpperCase();
     }
     function currentLockedFlightWindow(){
@@ -8447,7 +8520,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           <p style={{fontSize:12,color:C.tx2,marginBottom:6}}>Set the starting airport and final return airport. Destination cities are inserted underneath, auto-dated from the locked trip window, and can be reordered or overridden by any traveler.</p>
           <p style={{fontSize:11,color:C.tx3}}>Round-trip routing automatically returns through Destination 1 before the final leg home.</p>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
+        <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
           <input value={flightDates.origin||""} onChange={function(e){updFlight("origin",e.target.value,false);}} onBlur={function(e){updFlight("origin",e.target.value,true);}} placeholder="Starting city or airport (e.g. Detroit)" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
           <input value={flightDates.final_airport||""} onChange={function(e){updFlight("final_airport",e.target.value,false);}} onBlur={function(e){updFlight("final_airport",e.target.value,true);}} placeholder="Final return city or airport" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
           <input value={flightDates.depart||""} readOnly type="date" style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:C.tx2}}/>
@@ -8458,18 +8531,18 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             var isReturnStop=!!stop.is_return_stop;
             var canMoveUp=!isReturnStop&&idx>0;
             var canMoveDown=!isReturnStop&&idx<routePlan.length-1;
-            return(<div key={stop.destination+"-"+idx+(isReturnStop?"-return":"")} style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"minmax(220px,1.15fr) minmax(360px,1.35fr) auto",gap:8,alignItems:isNarrow?"stretch":"center"}}>
+            return(<div key={stop.destination+"-"+idx+(isReturnStop?"-return":"")} style={{padding:"10px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.surface}}>
               <div style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,minWidth:0}}>
                 <p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{isReturnStop?"Return through destination 1":"Destination "+(idx+1)}</p>
                 <p style={{fontSize:13,fontWeight:700,color:"#fff",wordBreak:"break-word"}}>{stop.destination}</p>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"minmax(200px,1.2fr) minmax(170px,1fr)",gap:8,minWidth:0}}>
+              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"minmax(0,1fr) minmax(130px,.55fr) auto",gap:8,minWidth:0,marginTop:8,alignItems:"center"}}>
                 <input value={stop.airport||""} title={stop.airport||""} readOnly={isReturnStop} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"airport",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"airport",e.target.value,true);}} placeholder={stop.destination+" city or airport"} style={{width:"100%",minWidth:0,padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
-                <input value={stop.travel_date||""} title={stop.travel_date||""} readOnly={isReturnStop} onClick={isReturnStop?undefined:tryShowDatePicker} onFocus={isReturnStop?undefined:tryShowDatePicker} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,true);}} type="date" style={{width:"100%",minWidth:160,padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
-              </div>
-              <div style={{display:"flex",gap:6,justifyContent:isNarrow?"flex-end":"flex-start"}}>
-                <button onClick={function(){moveRouteStop(idx,-1);}} disabled={!canMoveUp} style={{minWidth:38,height:34,padding:"0 8px",borderRadius:8,border:"1px solid "+C.border,background:!canMoveUp?C.surface:C.bg,color:!canMoveUp?C.tx3:"#fff",cursor:!canMoveUp?"default":"pointer"}}>Up</button>
-                <button onClick={function(){moveRouteStop(idx,1);}} disabled={!canMoveDown} style={{minWidth:38,height:34,padding:"0 8px",borderRadius:8,border:"1px solid "+C.border,background:!canMoveDown?C.surface:C.bg,color:!canMoveDown?C.tx3:"#fff",cursor:!canMoveDown?"default":"pointer"}}>Dn</button>
+                <input value={stop.travel_date||""} title={stop.travel_date||""} readOnly={isReturnStop} onClick={isReturnStop?undefined:tryShowDatePicker} onFocus={isReturnStop?undefined:tryShowDatePicker} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,true);}} type="date" style={{width:"100%",minWidth:0,padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
+                <div style={{display:"flex",gap:6,justifyContent:isNarrow?"flex-start":"flex-end"}}>
+                  <button onClick={function(){moveRouteStop(idx,-1);}} disabled={!canMoveUp} style={{minWidth:38,height:34,padding:"0 8px",borderRadius:8,border:"1px solid "+C.border,background:!canMoveUp?C.surface:C.bg,color:!canMoveUp?C.tx3:"#fff",cursor:!canMoveUp?"default":"pointer"}}>Up</button>
+                  <button onClick={function(){moveRouteStop(idx,1);}} disabled={!canMoveDown} style={{minWidth:38,height:34,padding:"0 8px",borderRadius:8,border:"1px solid "+C.border,background:!canMoveDown?C.surface:C.bg,color:!canMoveDown?C.tx3:"#fff",cursor:!canMoveDown?"default":"pointer"}}>Dn</button>
+                </div>
               </div>
             </div>);
           })}
