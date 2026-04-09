@@ -9338,6 +9338,29 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       var stayTotal=pStays.reduce(function(s,st){return s+(st.ratePerNight||0)*(st.totalNights||3);},0);
       var nextStatus=String((viewTrip&&viewTrip.status)||(newTrip&&newTrip.status)||(tr&&tr.status)||"").trim().toLowerCase();
       var tripActive=nextStatus==="active"||nextStatus==="completed";
+      var routeStops=normalizedFlightRoutePlan();
+      var routeNames=(routeStops||[]).map(function(stop){return String(stop&&stop.destination||"").trim();}).filter(Boolean);
+      var routePreview=(routeNames.length<=6)
+        ? routeNames.join(" -> ")
+        : (routeNames.slice(0,6).join(" -> ")+" -> ...");
+      var tripDateLabel=(flightDates.depart&&flightDates.ret)
+        ? (String(flightDates.depart).slice(0,10)+" to "+String(flightDates.ret).slice(0,10))
+        : "--";
+      var tripDaysLabel=(itin.length>0?itin.length:(sharedDurationDays||10));
+      var originLabel=String(flightDates.origin||"").trim()||"your origin";
+      var finalLabel=String(flightDates.final_airport||flightDates.origin||"").trim()||"your origin";
+      var poiHighlights=accPois.map(function(p){return String(p&&p.name||"").trim();}).filter(Boolean);
+      var stayHighlights=pStays.map(function(s){return String(s&&s.name||"").trim();}).filter(Boolean);
+      var mealHighlights=appMeals.map(function(m){return String(m&&m.name||"").trim();}).filter(Boolean);
+      var summaryLines=[
+        tripDaysLabel+"-day plan for "+grpSize+" traveler"+(grpSize===1?"":"s")+" across "+Math.max(routeNames.length,dests.length)+" destinations ("+tripDateLabel+").",
+        "Route: "+(routePreview||dests.map(function(d){return d.name;}).join(" -> ")||"--")+".",
+        "Travel: starts from "+originLabel+" and returns to "+finalLabel+"; flights are "+(flightConfirmed?"confirmed":"pending confirmation")+".",
+        "Selections so far: "+accPois.length+" approved activities, "+pStays.length+" stays, and "+appMeals.length+" approved meals.",
+      ];
+      if(poiHighlights.length>0)summaryLines.push("Top activity highlights: "+poiHighlights.slice(0,4).join(", ")+".");
+      if(stayHighlights.length>0)summaryLines.push("Stay plan: "+stayHighlights.slice(0,3).join(" + ")+".");
+      if(mealHighlights.length>0)summaryLines.push("Meal highlights: "+mealHighlights.slice(0,4).join(", ")+".");
 
       return(<div style={{textAlign:"center",padding:"20px 0"}}>
         <div style={{fontSize:48,marginBottom:16}}>!</div>
@@ -9356,6 +9379,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             {l:"Flights",v:flightConfirmed?"Confirmed":"Needs confirmation"},
             {l:"Est. Total",v:"$"+(totalItinCost+stayTotal)+"/person"},
           ].map(function(r){return(<div key={r.l} style={{display:"flex",justifyContent:"space-between",fontSize:14,marginBottom:4}}><span style={{color:C.tx3}}>{r.l}</span><span style={{fontWeight:600}}>{r.v}</span></div>);})}
+        </div>
+        <div style={{background:C.surface,borderRadius:14,padding:16,textAlign:"left",marginBottom:16,border:"1px solid "+C.border}}>
+          <h4 style={{fontSize:15,fontWeight:700,color:C.goldT,marginBottom:10}}>Trip Summary</h4>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {summaryLines.map(function(line,idx){
+              return <p key={"trip-summary-"+idx} style={{fontSize:13,color:C.tx2,lineHeight:1.5}}>{line}</p>;
+            })}
+          </div>
         </div>
         {!tripActive&&<button onClick={confirmTripAndActivate} disabled={itinLoad||!flightConfirmed} style={{fontSize:15,fontWeight:600,color:C.bg,padding:"14px 40px",borderRadius:12,background:(itinLoad||!flightConfirmed)?C.border:("linear-gradient(135deg,"+C.gold+","+C.goldT+")"),border:"none",cursor:(itinLoad||!flightConfirmed)?"default":"pointer"}}>
           {itinLoad?"Confirming...":"Confirm Trip"}
