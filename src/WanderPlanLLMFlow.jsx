@@ -8773,23 +8773,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           });
           return;
         }
-        var destStr=dests.map(function(d){return d.name;}).join(", ")||"your destinations";
-        var sys="You are WanderPlan Dining Agent. User wants to modify meals. Destinations: "+destStr+". Dietary: "+dietStr+". Budget: "+user.budget+".\n\nIf new restaurants: {\"type\":\"meals\",\"day\":{\"day\":1,\"destination\":\"City\",\"meals\":[{\"type\":\"Dinner\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":30,\"rating\":4.6,\"dietaryOk\":true,\"note\":\"Why great\",\"options\":[{\"name\":\"Restaurant A\",\"cuisine\":\"Local\",\"cost\":28,\"rating\":4.7,\"note\":\"Popular local dinner spot\"},{\"name\":\"Restaurant B\",\"cuisine\":\"Modern\",\"cost\":34,\"rating\":4.5,\"note\":\"Well-rated chef-led option\"},{\"name\":\"Restaurant C\",\"cuisine\":\"Street Food\",\"cost\":18,\"rating\":4.4,\"note\":\"Casual neighborhood favorite\"}]}]}}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nReturn 3 distinct rated restaurant options per meal when possible. ONLY JSON.";
-        callLLM(sys,msg,800).then(function(res){
-          setMAL(false);
-          if(res&&res.type==="meals"&&res.day){
-            setMeals(function(p){
-              var next=normalizeDiningPlan((Array.isArray(p)?p:[]).concat([res.day]));
-              saveTripPlanningState({state:{meal_plan:next,meal_votes:mealVotes}}).then(function(){
-                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
-              });
-              return next;
-            });
-            setMChat(function(p){return p.concat([{from:"agent",text:"Added new meal suggestions! Scroll up to review."}]);});
-          }
-          else if(res&&res.message){setMChat(function(p){return p.concat([{from:"agent",text:res.message}]);});}
-          else{setMChat(function(p){return p.concat([{from:"agent",text:"Try: 'romantic dinner in Santorini' or 'vegan ramen in Kyoto' or 'cheap street food'"}]);});}
-        }).catch(function(){setMAL(false);setMChat(function(p){return p.concat([{from:"agent",text:"Connection issue. Try again."}]);});});
+        setMAL(false);
+        setMChat(function(p){return p.concat([{from:"agent",text:"Real venue refresh needs an active saved trip. Open this trip from your account and try again."}]);});
       }
 
       return(<div>
@@ -8815,13 +8800,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
             });
           }else{
-            askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
-              var nextMeals=normalizeDiningPlan(res&&res.length?res:[]);
-              setMeals(nextMeals);setML(false);setMD(true);
-              saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
-                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
-              });
-            });
+            setML(false);
+            setMealErr("Real venue suggestions need an active saved trip. Re-open the trip from your account and retry.");
           }
         }} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>Plan Meals</button></div>)}
         {mealLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Finding restaurants across destinations...</p></div>)}
