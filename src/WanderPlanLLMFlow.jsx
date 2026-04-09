@@ -836,6 +836,74 @@ function flightRoutePlanSignature(plan){
   }));
 }
 
+var DEST_AIRPORT_ALIAS_ROWS=[
+  {keys:["grishneshwar","aurangabad"],code:"IXU"},
+  {keys:["kedarnath","guptkashi","haridwar","rishikesh"],code:"DED"},
+  {keys:["mahakaleshwar","ujjain"],code:"IDR"},
+  {keys:["mallikarjuna","srisailam"],code:"HYD"},
+  {keys:["nageshwar","dwarka"],code:"JGA"},
+  {keys:["omkareshwar"],code:"IDR"},
+  {keys:["rameswaram"],code:"IXM"},
+  {keys:["shrikhand kailash","shrikhand"],code:"IXC"},
+  {keys:["somnath","veraval"],code:"DIU"},
+  {keys:["trimbakeshwar","nashik"],code:"ISK"},
+  {keys:["vaidyanath","deoghar"],code:"DGH"}
+];
+
+function normAirportCode(value){
+  return String(value||"").replace(/[^A-Za-z]/g,"").toUpperCase().slice(0,3);
+}
+
+function airportAliasFallbackCode(value){
+  var raw=String(value||"").trim().toLowerCase();
+  if(!raw)return "";
+  for(var i=0;i<DEST_AIRPORT_ALIAS_ROWS.length;i++){
+    var row=DEST_AIRPORT_ALIAS_ROWS[i]||{};
+    var keys=Array.isArray(row.keys)?row.keys:[];
+    var hit=keys.some(function(k){return raw.indexOf(String(k||"").toLowerCase())>=0;});
+    if(hit){
+      var code=normAirportCode(row.code||"");
+      if(code.length===3)return code;
+    }
+  }
+  return "";
+}
+
+function routePlanDestinationOrder(destinations, savedPlan){
+  var base=(Array.isArray(destinations)?destinations:[]).map(function(dest){
+    return typeof dest==="string"?String(dest||"").trim():String(dest&&dest.name||dest&&dest.destination||"").trim();
+  }).filter(Boolean);
+  var canonical=[];
+  var seenBase={};
+  base.forEach(function(name){
+    var key=String(name||"").trim().toLowerCase();
+    if(!key||seenBase[key])return;
+    seenBase[key]=name;
+    canonical.push(name);
+  });
+  if(canonical.length===0)return canonical;
+  var byLower={};
+  canonical.forEach(function(name){
+    byLower[String(name||"").trim().toLowerCase()]=name;
+  });
+  var ordered=[];
+  var seen={};
+  (Array.isArray(savedPlan)?savedPlan:[]).forEach(function(stop){
+    var raw=String(stop&&stop.destination||"").trim();
+    var mapped=byLower[String(raw||"").toLowerCase()];
+    if(!mapped)return;
+    if(seen[mapped])return;
+    seen[mapped]=1;
+    ordered.push(mapped);
+  });
+  canonical.forEach(function(name){
+    if(seen[name])return;
+    seen[name]=1;
+    ordered.push(name);
+  });
+  return ordered;
+}
+
 function buildFlightRoutePlan(destinations, durationPerDestination, lockedWindow, savedPlan){
   var list=(Array.isArray(destinations)?destinations:[]).map(function(dest){
     return typeof dest==="string"?String(dest||"").trim():String(dest&&dest.name||dest&&dest.destination||"").trim();
@@ -861,9 +929,15 @@ function buildFlightRoutePlan(destinations, durationPerDestination, lockedWindow
     var autoDate=String(cursor||"").slice(0,10);
     var savedDate=String(saved.travel_date||"").slice(0,10);
     var finalDate=String((saved.manual_date&&savedDate)?savedDate:(autoDate||savedDate||"")).slice(0,10);
+    var savedAirport=String(saved.airport||"").trim();
+    var airportLabel=savedAirport||name;
+    if(!savedAirport||savedAirport.toLowerCase()===String(name||"").trim().toLowerCase()){
+      var aliasCode=airportAliasFallbackCode(name);
+      if(aliasCode)airportLabel=name+" ("+aliasCode+")";
+    }
     var stop={
       destination:name,
-      airport:String(saved.airport||name).trim()||name,
+      airport:String(airportLabel||name).trim()||name,
       travel_date:finalDate
     };
     if(saved.manual_date&&savedDate)stop.manual_date=true;
@@ -4766,7 +4840,12 @@ export default function WanderPlan(){
     var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")
       ? availabilityData.locked_window
       : ((flightDates.depart&&flightDates.ret)?{start:String(flightDates.depart||"").slice(0,10),end:String(flightDates.ret||"").slice(0,10)}:null);
-    var normalized=buildFlightRoutePlan(flightPlannerDests,effectiveDurPerDest,lockedWindow,flightLegInputs);
+    var normalized=buildFlightRoutePlan(
+      routePlanDestinationOrder(flightPlannerDests,flightLegInputs),
+      effectiveDurPerDest,
+      lockedWindow,
+      flightLegInputs
+    );
     if(flightRoutePlanSignature(flightLegInputs)!==flightRoutePlanSignature(normalized)){
       setFLI(normalized);
     }
@@ -7077,7 +7156,13 @@ export default function WanderPlan(){
       return null;
     }
     function normalizedFlightRoutePlan(planOverride){
-      return buildFlightRoutePlan(flightPlannerDests,effectiveDurPerDest,currentLockedFlightWindow(),planOverride!==undefined?planOverride:flightLegInputs);
+      var savedPlan=(planOverride!==undefined?planOverride:flightLegInputs);
+      return buildFlightRoutePlan(
+        routePlanDestinationOrder(flightPlannerDests,savedPlan),
+        effectiveDurPerDest,
+        currentLockedFlightWindow(),
+        savedPlan
+      );
     }
     function displayedRoundTripRoutePlan(planOverride){
       var normalized=normalizedFlightRoutePlan(planOverride);
