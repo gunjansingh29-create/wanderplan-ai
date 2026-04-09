@@ -4797,6 +4797,55 @@ export default function WanderPlan(){
     flightDates.final_airport
   ]);
   useEffect(function(){
+    var cancelled=false;
+    async function hydrateNearestDestinationAirports(){
+      if(!loaded||!authToken||sc!=="wizard"||wizStep!==14)return;
+      var normalized=normalizedFlightRoutePlan();
+      var unresolvedIndexes=[];
+      normalized.forEach(function(stop,idx){
+        var destination=String(stop&&stop.destination||"").trim();
+        var airport=String(stop&&stop.airport||"").trim();
+        if(destination.length<2)return;
+        if(!airport||airport.toLowerCase()===destination.toLowerCase()){
+          unresolvedIndexes.push(idx);
+        }
+      });
+      if(unresolvedIndexes.length===0)return;
+      var nextPlan=normalized.slice(0);
+      var changed=false;
+      for(var i=0;i<unresolvedIndexes.length;i++){
+        if(cancelled)return;
+        var stopIdx=unresolvedIndexes[i];
+        var stop=nextPlan[stopIdx]||{};
+        var destinationName=String(stop.destination||"").trim();
+        if(destinationName.length<2)continue;
+        var resolvedCode=await resolveAirportCode(destinationName,"");
+        if(cancelled)return;
+        if(!resolvedCode||resolvedCode.length!==3)continue;
+        var priorAirport=String(stop.airport||"").trim();
+        if(priorAirport&&priorAirport.toLowerCase()!==destinationName.toLowerCase())continue;
+        nextPlan[stopIdx]=Object.assign({},stop,{airport:destinationName+" ("+resolvedCode+")"});
+        changed=true;
+      }
+      if(!cancelled&&changed&&flightRoutePlanSignature(nextPlan)!==flightRoutePlanSignature(normalized)){
+        persistFlightRoute(flightDates,nextPlan);
+      }
+    }
+    hydrateNearestDestinationAirports();
+    return function(){cancelled=true;};
+  },[
+    loaded,
+    authToken,
+    sc,
+    wizStep,
+    flightRoutePlanSignature(flightLegInputs),
+    JSON.stringify((flightPlannerDests||[]).map(function(d){return d&&d.name||d;})),
+    availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start,
+    availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.end,
+    flightDates.depart,
+    flightDates.ret
+  ]);
+  useEffect(function(){
     var startDate=(availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start)||flightDates.depart||"";
     if(!itinDone||!startDate)return;
     setItin(function(prev){
