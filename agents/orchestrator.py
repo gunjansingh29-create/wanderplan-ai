@@ -7627,6 +7627,238 @@ def _cuisine_from_tags(tags: list[str], default_value: str = "Local") -> str:
     return first.replace("_", " ").replace("-", " ").title()
 
 
+_SUPPORTED_BUDGET_TIERS = {"budget", "moderate", "premium", "luxury"}
+_DEFAULT_DAILY_BUDGET_BY_TIER: dict[str, float] = {
+    "budget": 100.0,
+    "moderate": 180.0,
+    "premium": 320.0,
+    "luxury": 520.0,
+}
+_GOOGLE_PRICE_LEVEL_BY_TIER: dict[str, tuple[int, int]] = {
+    "budget": (0, 1),
+    "moderate": (1, 2),
+    "premium": (2, 3),
+    "luxury": (3, 4),
+}
+_COST_BY_GOOGLE_PRICE_LEVEL: dict[int, float] = {
+    0: 10.0,
+    1: 18.0,
+    2: 32.0,
+    3: 55.0,
+    4: 85.0,
+}
+_MEAL_BUDGET_SHARE: dict[str, float] = {
+    "Breakfast": 0.28,
+    "Lunch": 0.34,
+    "Dinner": 0.38,
+}
+_MEAL_MIN_BUDGET_FLOOR: dict[str, float] = {
+    "Breakfast": 8.0,
+    "Lunch": 10.0,
+    "Dinner": 12.0,
+}
+
+
+def _normalize_budget_tier(value: Any) -> str:
+    tier = str(value or "").strip().lower()
+    if tier in _SUPPORTED_BUDGET_TIERS:
+        return tier
+    return "moderate"
+
+
+def _default_daily_budget_for_tier(tier: Any) -> float:
+    key = _normalize_budget_tier(tier)
+    return float(_DEFAULT_DAILY_BUDGET_BY_TIER.get(key, _DEFAULT_DAILY_BUDGET_BY_TIER["moderate"]))
+
+
+def _meal_budget_cap(daily_target: float, meal: str) -> float:
+    daily = max(40.0, float(daily_target or 0))
+    dining_daily = max(10.0, daily * 0.25)
+    meal_name = str(meal or "").strip().title() or "Lunch"
+    share = float(_MEAL_BUDGET_SHARE.get(meal_name, 1 / 3))
+    floor = float(_MEAL_MIN_BUDGET_FLOOR.get(meal_name, 10.0))
+    return round(max(floor, dining_daily * share), 2)
+
+
+def _osm_restaurant_candidates(
+    meal: str,
+    city: str,
+    country: str,
+    budget_tier: str,
+    per_meal_budget_cap: float,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    city_name = str(city or "").strip()
+    country_name = str(country or "").strip()
+    if not city_name:
+        return []
+    lookup = f"{city_name}, {country_name}" if country_name else city_name
+    nominatim_url = "https://nominatim.openstreetmap.org/search?" + urlencode(
+        {"q": lookup, "format": "json", "limit": "1"}
+    )
+    try:
+        req = urllib_request.Request(
+            nominatim_url,
+            headers={"User-Agent": "WanderPlanAI/1.0 (+https://wanderplan-ai.onrender.com)"},
+        )
+        with urllib_request.urlopen(req, timeout=8) as resp:
+            nominatim_payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if not isinstance(nominatim_payload, list) or not nominatim_payload:
+            return []
+        lat = float(nominatim_payload[0].get("lat"))
+        lon = float(nominatim_payload[0].get("lon"))
+    except Exception:
+        return []
+    radius_m = 5000
+    overpass_query = f"""
+    [out:json][timeout:12];
+    (
+      node["amenity"~"restaurant|cafe|fast_food"](around:{radius_m},{lat},{lon});
+      way["amenity"~"restaurant|cafe|fast_food"](around:{radius_m},{lat},{lon});
+    );
+    out tags center;
+    """
+    try:
+        overpass_req = urllib_request.Request(
+            "https://overpass-api.de/api/interpreter",
+            data=overpass_query.encode("utf-8"),
+            method="POST",
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+                "User-Agent": "WanderPlanAI/1.0 (+https://wanderplan-ai.onrender.com)",
+            },
+        )
+        with urllib_request.urlopen(overpass_req, timeout=12) as resp:
+            overpass_payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return []
+    meal_name = str(meal or "").strip().title() or "Lunch"
+    tier = _normalize_budget_tier(budget_tier)
+    base_cost = per_meal_budget_cap if per_meal_budget_cap > 0 else _meal_budget_cap(_default_daily_budget_for_tier(tier), meal_name)
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for idx, row in enumerate(overpass_payload.get("elements") or []):
+        if len(out) >= limit:
+            break
+        tags = row.get("tags") if isinstance(row, dict) else None
+        if not isinstance(tags, dict):
+            continue
+        name = str(tags.get("name") or "").strip()
+        if not name:
+            continue
+        key_name = name.lower()
+        if key_name in seen:
+            continue
+        seen.add(key_name)
+        amenity = str(tags.get("amenity") or "restaurant").strip().lower()
+        multiplier = 0.8 if amenity == "cafe" else (0.7 if amenity == "fast_food" else 1.0)
+        estimated_cost = round(max(6.0, base_cost * multiplier), 2)
+        out.append(
+            {
+                "id": f"osm-{meal_name.lower()}-{idx+1}",
+                "name": name,
+                "city": city_name,
+                "country": country_name,
+                "tags": [meal_name.lower(), amenity, "restaurant", "openstreetmap"],
+                "rating": 4.2,
+                "cost": estimated_cost,
+                "note": "OpenStreetMap venue; price shown is a budget-fit estimate.",
+            }
+        )
+    return out
+
+
+def _google_places_candidates(
+    meal: str,
+    city: str,
+    country: str,
+    near_poi: str,
+    budget_tier: str,
+    per_meal_budget_cap: float,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    key = str(os.getenv("GOOGLE_PLACES_API_KEY") or "").strip()
+    if not key:
+        return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+    meal_name = str(meal or "").strip().title() or "Lunch"
+    city_name = str(city or "").strip()
+    country_name = str(country or "").strip()
+    anchor = str(near_poi or "").strip()
+    if not city_name:
+        return []
+    min_price, max_price = _GOOGLE_PRICE_LEVEL_BY_TIER.get(
+        _normalize_budget_tier(budget_tier),
+        _GOOGLE_PRICE_LEVEL_BY_TIER["moderate"],
+    )
+    base_query = f"{meal_name} restaurant in {city_name}"
+    if anchor:
+        query = f"{meal_name} restaurant near {anchor}, {city_name}"
+    elif country_name:
+        query = f"{base_query}, {country_name}"
+    else:
+        query = base_query
+    url = (
+        "https://maps.googleapis.com/maps/api/place/textsearch/json?"
+        + urlencode(
+            {
+                "query": query,
+                "type": "restaurant",
+                "key": key,
+                "minprice": str(min_price),
+                "maxprice": str(max_price),
+            }
+        )
+    )
+    try:
+        with urllib_request.urlopen(url, timeout=9) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+    status = str(payload.get("status") or "").strip().upper()
+    if status not in {"OK", "ZERO_RESULTS"}:
+        return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for idx, row in enumerate(payload.get("results") or []):
+        if len(out) >= limit:
+            break
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        key_name = name.lower()
+        if key_name in seen:
+            continue
+        seen.add(key_name)
+        price_level = int(row.get("price_level") or min_price)
+        estimated_cost = float(_COST_BY_GOOGLE_PRICE_LEVEL.get(price_level, _COST_BY_GOOGLE_PRICE_LEVEL[min_price]))
+        if per_meal_budget_cap > 0 and estimated_cost > (per_meal_budget_cap * 1.6):
+            continue
+        rating = float(row.get("rating") or 4.2)
+        total_ratings = int(row.get("user_ratings_total") or 0)
+        raw_types = row.get("types") if isinstance(row.get("types"), list) else []
+        tags = [str(t or "").strip().lower() for t in raw_types if str(t or "").strip()]
+        if meal_name.lower() not in tags:
+            tags.append(meal_name.lower())
+        tags.extend(["restaurant", "google-places"])
+        out.append(
+            {
+                "id": f"gplace-{meal_name.lower()}-{idx+1}",
+                "name": name,
+                "city": city_name,
+                "country": country_name,
+                "tags": tags,
+                "rating": rating,
+                "cost": estimated_cost,
+                "note": f"Google Places rating {rating:.1f} ({max(total_ratings, 0)} reviews).",
+            }
+        )
+    if out:
+        return out
+    return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+
+
 _DINING_CITY_CATALOG: dict[str, dict[str, list[dict[str, Any]]]] = {
     "auckland": {
         "Breakfast": [
@@ -7739,12 +7971,21 @@ def _fallback_meal_options(
     country: str,
     near_poi: str,
     anchor_role: str = "",
+    max_cost: float = 0.0,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
     city_key = str(city or "").strip().lower()
     city_catalog = _DINING_CITY_CATALOG.get(city_key, {})
     seeded = list(city_catalog.get(meal, []))
     if seeded:
+        target_cost = max(0.0, float(max_cost or 0))
+        if target_cost > 0:
+            within = [row for row in seeded if float(row.get("cost") or 0) <= (target_cost * 1.35)]
+            if within:
+                seeded = within
+            seeded = sorted(seeded, key=lambda row: abs(float(row.get("cost") or 0) - target_cost))
+        else:
+            seeded = sorted(seeded, key=lambda row: float(row.get("rating") or 0), reverse=True)
         out: list[dict[str, Any]] = []
         for idx, row in enumerate(seeded):
             if len(out) >= limit:
@@ -7869,6 +8110,7 @@ def _select_meal_options(
     near_poi: str,
     food_candidates: list[dict[str, Any]],
     anchor_role: str = "",
+    max_cost: float = 0.0,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
     scored = sorted(
@@ -7883,6 +8125,9 @@ def _select_meal_options(
         name = str(row.get("name") or "").strip()
         if not name:
             continue
+        row_cost = float(row.get("cost") or 0)
+        if max_cost > 0 and row_cost > 0 and row_cost > (max_cost * 1.35):
+            continue
         key = name.lower()
         if key in seen:
             continue
@@ -7894,7 +8139,7 @@ def _select_meal_options(
                 "city": str(row.get("city") or "").strip(),
                 "country": str(row.get("country") or "").strip(),
                 "tags": row.get("tags") or [],
-                "cost": float(row.get("cost") or 0),
+                "cost": row_cost,
                 "cuisine": _cuisine_from_tags(row.get("tags") or []),
                 "near_poi": near_poi,
                 "rating": float(row.get("rating") or 4.4),
@@ -7902,7 +8147,15 @@ def _select_meal_options(
             }
         )
     if len(picked) < limit:
-        for extra in _fallback_meal_options(meal, anchor_city, anchor_country, near_poi, anchor_role=anchor_role, limit=limit - len(picked)):
+        for extra in _fallback_meal_options(
+            meal,
+            anchor_city,
+            anchor_country,
+            near_poi,
+            anchor_role=anchor_role,
+            max_cost=max_cost,
+            limit=limit - len(picked),
+        ):
             picked.append(extra)
     return picked[:limit]
 
@@ -7919,6 +8172,10 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         )
         planning_state_row = await conn.fetchrow(
             "SELECT state FROM trip_planning_states WHERE trip_id = $1",
+            trip_id,
+        )
+        budget_row = await conn.fetchrow(
+            "SELECT daily_target FROM budgets WHERE trip_id = $1",
             trip_id,
         )
         destination_rows = await conn.fetch(
@@ -7954,6 +8211,11 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
     planning_state = (planning_state_row["state"] or {}) if planning_state_row else {}
     if not isinstance(planning_state, dict):
         planning_state = {}
+    active_budget_tier = _normalize_budget_tier(
+        planning_state.get("shared_budget_tier") if isinstance(planning_state, dict) else "moderate"
+    )
+    configured_daily_target = float((budget_row["daily_target"] if budget_row else 0) or 0)
+    effective_daily_target = configured_daily_target if configured_daily_target > 0 else _default_daily_budget_for_tier(active_budget_tier)
     route_plan = planning_state.get("route_plan") if isinstance(planning_state, dict) else {}
     stay_snapshot = _companion_selected_stays(planning_state)
     stay_by_destination = {
@@ -8096,6 +8358,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         )
 
     suggestions: list[dict[str, Any]] = []
+    live_food_cache: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for day_idx, day_date in enumerate(ordered_day_dates):
         day_number = day_idx + 1
         day_activities = activities_by_date.get(day_date, [])
@@ -8197,8 +8460,27 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 anchor_city,
                 anchor_country,
                 near_poi,
-                food_candidates,
+                (
+                    food_candidates
+                    + live_food_cache.setdefault(
+                        (
+                            str(meal_name or "").lower(),
+                            str(anchor_city or "").strip().lower(),
+                            active_budget_tier,
+                        ),
+                        _google_places_candidates(
+                            meal=meal_name,
+                            city=anchor_city,
+                            country=anchor_country,
+                            near_poi=near_poi,
+                            budget_tier=active_budget_tier,
+                            per_meal_budget_cap=_meal_budget_cap(effective_daily_target, meal_name),
+                            limit=8,
+                        ),
+                    )
+                ),
                 anchor_role=anchor_role,
+                max_cost=_meal_budget_cap(effective_daily_target, meal_name),
                 limit=3,
             )
             enriched_options = []
