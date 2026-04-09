@@ -8409,18 +8409,18 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             var isReturnStop=!!stop.is_return_stop;
             var canMoveUp=!isReturnStop&&idx>0;
             var canMoveDown=!isReturnStop&&idx<routePlan.length-1;
-            return(<div key={stop.destination+"-"+idx+(isReturnStop?"-return":"")} style={{display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(0,1fr) auto",gap:8,alignItems:"center"}}>
-              <div style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border}}>
+            return(<div key={stop.destination+"-"+idx+(isReturnStop?"-return":"")} style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"minmax(220px,1.15fr) minmax(360px,1.35fr) auto",gap:8,alignItems:isNarrow?"stretch":"center"}}>
+              <div style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,minWidth:0}}>
                 <p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{isReturnStop?"Return through destination 1":"Destination "+(idx+1)}</p>
-                <p style={{fontSize:13,fontWeight:700,color:"#fff"}}>{stop.destination}</p>
+                <p style={{fontSize:13,fontWeight:700,color:"#fff",wordBreak:"break-word"}}>{stop.destination}</p>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}}>
-                <input value={stop.airport||""} readOnly={isReturnStop} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"airport",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"airport",e.target.value,true);}} placeholder={stop.destination+" city or airport"} style={{padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
-                <input value={stop.travel_date||""} readOnly={isReturnStop} onClick={isReturnStop?undefined:tryShowDatePicker} onFocus={isReturnStop?undefined:tryShowDatePicker} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,true);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
+              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"minmax(200px,1.2fr) minmax(170px,1fr)",gap:8,minWidth:0}}>
+                <input value={stop.airport||""} title={stop.airport||""} readOnly={isReturnStop} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"airport",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"airport",e.target.value,true);}} placeholder={stop.destination+" city or airport"} style={{width:"100%",minWidth:0,padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
+                <input value={stop.travel_date||""} title={stop.travel_date||""} readOnly={isReturnStop} onClick={isReturnStop?undefined:tryShowDatePicker} onFocus={isReturnStop?undefined:tryShowDatePicker} onChange={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,false);}} onBlur={function(e){if(!isReturnStop)updRouteStop(idx,"travel_date",e.target.value,true);}} type="date" style={{width:"100%",minWidth:160,padding:"10px 12px",borderRadius:8,background:isReturnStop?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:isReturnStop?C.tx2:"#fff"}}/>
               </div>
-              <div style={{display:"flex",gap:6}}>
-                <button onClick={function(){moveRouteStop(idx,-1);}} disabled={!canMoveUp} style={{width:34,height:34,borderRadius:8,border:"1px solid "+C.border,background:!canMoveUp?C.surface:C.bg,color:!canMoveUp?C.tx3:"#fff",cursor:!canMoveUp?"default":"pointer"}}>Up</button>
-                <button onClick={function(){moveRouteStop(idx,1);}} disabled={!canMoveDown} style={{width:34,height:34,borderRadius:8,border:"1px solid "+C.border,background:!canMoveDown?C.surface:C.bg,color:!canMoveDown?C.tx3:"#fff",cursor:!canMoveDown?"default":"pointer"}}>Dn</button>
+              <div style={{display:"flex",gap:6,justifyContent:isNarrow?"flex-end":"flex-start"}}>
+                <button onClick={function(){moveRouteStop(idx,-1);}} disabled={!canMoveUp} style={{minWidth:38,height:34,padding:"0 8px",borderRadius:8,border:"1px solid "+C.border,background:!canMoveUp?C.surface:C.bg,color:!canMoveUp?C.tx3:"#fff",cursor:!canMoveUp?"default":"pointer"}}>Up</button>
+                <button onClick={function(){moveRouteStop(idx,1);}} disabled={!canMoveDown} style={{minWidth:38,height:34,padding:"0 8px",borderRadius:8,border:"1px solid "+C.border,background:!canMoveDown?C.surface:C.bg,color:!canMoveDown?C.tx3:"#fff",cursor:!canMoveDown?"default":"pointer"}}>Dn</button>
               </div>
             </div>);
           })}
