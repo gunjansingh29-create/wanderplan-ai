@@ -837,7 +837,7 @@ function flightRoutePlanSignature(plan){
 }
 
 var DEST_AIRPORT_ALIAS_ROWS=[
-  {keys:["grishneshwar","aurangabad"],code:"IXU"},
+  {keys:["grishneshwar","aurangabad"],code:"BOM"},
   {keys:["kedarnath","guptkashi","haridwar","rishikesh"],code:"DED"},
   {keys:["mahakaleshwar","ujjain"],code:"IDR"},
   {keys:["mallikarjuna","srisailam"],code:"HYD"},
@@ -7052,36 +7052,6 @@ export default function WanderPlan(){
         setBSL(false);
         setBSE(String(e&&e.message||"Could not save budget to backend"));
       });
-    }
-    function normAirportCode(value){
-      return String(value||"").replace(/[^A-Za-z]/g,"").toUpperCase().slice(0,3);
-    }
-    function airportAliasFallbackCode(value){
-      var raw=String(value||"").trim().toLowerCase();
-      if(!raw)return "";
-      var aliases=[
-        {keys:["grishneshwar","aurangabad"],code:"IXU"},
-        {keys:["kedarnath","guptkashi","haridwar","rishikesh"],code:"DED"},
-        {keys:["mahakaleshwar","ujjain"],code:"IDR"},
-        {keys:["mallikarjuna","srisailam"],code:"HYD"},
-        {keys:["nageshwar","dwarka"],code:"JGA"},
-        {keys:["omkareshwar"],code:"IDR"},
-        {keys:["rameswaram"],code:"IXM"},
-        {keys:["shrikhand kailash","shrikhand"],code:"IXC"},
-        {keys:["somnath","veraval"],code:"DIU"},
-        {keys:["trimbakeshwar","nashik"],code:"ISK"},
-        {keys:["vaidyanath","deoghar"],code:"DGH"}
-      ];
-      for(var i=0;i<aliases.length;i++){
-        var row=aliases[i]||{};
-        var keys=Array.isArray(row.keys)?row.keys:[];
-        var hit=keys.some(function(k){return raw.indexOf(String(k||"").toLowerCase())>=0;});
-        if(hit){
-          var code=normAirportCode(row.code||"");
-          if(code.length===3)return code;
-        }
-      }
-      return "";
     }
     function airportLookupQueries(value){
       var raw=String(value||"").trim();
