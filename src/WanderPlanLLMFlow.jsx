@@ -3550,6 +3550,7 @@ export default function WanderPlan(){
   var[mealVotes,setMealVotes]=useState({});
   var[mealLoad,setML]=useState(false);
   var[mealDone,setMD]=useState(false);
+  var[mealErr,setMealErr]=useState("");
   var[mealAsk,setMA]=useState("");
   var[mealAskLoad,setMAL]=useState(false);
   var[mealChat,setMChat]=useState([]);
@@ -8750,6 +8751,28 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       function sendMealChat(){
         if(!mealAsk.trim()||mealAskLoad)return;var msg=mealAsk.trim();setMA("");setMAL(true);
         setMChat(function(p){return p.concat([{from:"user",text:msg}]);});
+        if(authToken&&currentTripId){
+          setMealErr("");
+          apiJson("/trips/"+currentTripId+"/dining/suggestions",{method:"GET"},authToken).then(function(r){
+            var sug=(r&&r.suggestions)||[];
+            setMAL(false);
+            if(sug.length>0){
+              var nextMeals=normalizeDiningPlan(buildDiningRowsFromSuggestions(sug));
+              setMeals(nextMeals);
+              setMD(true);
+              saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:mealVotes}}).then(function(){
+                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+              });
+              setMChat(function(p){return p.concat([{from:"agent",text:"Refreshed real venue options from backend with your current budget settings."}]);});
+              return;
+            }
+            setMChat(function(p){return p.concat([{from:"agent",text:"No real venue suggestions are available right now for this trip. Try again in a moment."}]);});
+          }).catch(function(){
+            setMAL(false);
+            setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
+          });
+          return;
+        }
         var destStr=dests.map(function(d){return d.name;}).join(", ")||"your destinations";
         var sys="You are WanderPlan Dining Agent. User wants to modify meals. Destinations: "+destStr+". Dietary: "+dietStr+". Budget: "+user.budget+".\n\nIf new restaurants: {\"type\":\"meals\",\"day\":{\"day\":1,\"destination\":\"City\",\"meals\":[{\"type\":\"Dinner\",\"name\":\"Restaurant\",\"cuisine\":\"Local\",\"cost\":30,\"rating\":4.6,\"dietaryOk\":true,\"note\":\"Why great\",\"options\":[{\"name\":\"Restaurant A\",\"cuisine\":\"Local\",\"cost\":28,\"rating\":4.7,\"note\":\"Popular local dinner spot\"},{\"name\":\"Restaurant B\",\"cuisine\":\"Modern\",\"cost\":34,\"rating\":4.5,\"note\":\"Well-rated chef-led option\"},{\"name\":\"Restaurant C\",\"cuisine\":\"Street Food\",\"cost\":18,\"rating\":4.4,\"note\":\"Casual neighborhood favorite\"}]}]}}\n\nIf question: {\"type\":\"advice\",\"message\":\"response\"}\n\nReturn 3 distinct rated restaurant options per meal when possible. ONLY JSON.";
         callLLM(sys,msg,800).then(function(res){
@@ -8771,8 +8794,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 
       return(<div>
         {ab("Dining Agent",mealDone?(soloTripMode?"Solo trip detected. Review your location-based meal options, adjust anything you want, then continue. Dietary: "+dietStr+".":"Review your location-based meal options. Dietary: "+dietStr+". Chat to adjust."):"Planning meals across your destinations...")}
-        {!mealDone&&!mealLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent finds breakfast, lunch, and dinner options by destination and local anchor, respecting dietary needs and your approved budget. Exact day placement happens later in the itinerary.</p><button onClick={function(){
+        {!mealDone&&!mealLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent finds breakfast, lunch, and dinner options by destination and local anchor, respecting dietary needs and your approved budget. Exact day placement happens later in the itinerary.</p>{mealErr&&<p style={{fontSize:12,color:C.wrn,marginBottom:10}}>{mealErr}</p>}<button onClick={function(){
           setML(true);
+          setMealErr("");
           if(authToken&&currentTripId){
             apiJson("/trips/"+currentTripId+"/dining/suggestions",{method:"GET"},authToken).then(function(r){
               var sug=(r&&r.suggestions)||[];
@@ -8784,20 +8808,12 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                 });
                 return;
               }
-              return askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
-                var nextMeals=normalizeDiningPlan(res&&res.length?res:[]);
-                setMeals(nextMeals);setML(false);setMD(true);
-                saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
-                  refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
-                });
-              });
-            }).catch(function(){askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
-              var nextMeals=normalizeDiningPlan(res&&res.length?res:[]);
-              setMeals(nextMeals);setML(false);setMD(true);
-              saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:{}}}).then(function(){
-                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
-              });
-            });});
+              setML(false);
+              setMealErr("Could not load real venue suggestions yet. Please retry in a moment.");
+            }).catch(function(){
+              setML(false);
+              setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+            });
           }else{
             askDining(dests,user.budget,user.dietary,totalDays,grpSize).then(function(res){
               var nextMeals=normalizeDiningPlan(res&&res.length?res:[]);

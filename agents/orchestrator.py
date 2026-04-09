@@ -7592,10 +7592,15 @@ def _stay_anchor_label(stay: Any, destination: Any, fallback_anchor: Any = "") -
 
 
 def _normalize_place(city: Any, country: Any, fallback: str = "") -> tuple[str, str]:
-    c = str(city or "").strip()
+    c = _clean_meal_anchor(city)
     k = str(country or "").strip()
-    if not c and fallback:
-        c = str(fallback).strip()
+    fb = _clean_meal_anchor(fallback)
+    if c:
+        c = _meal_area_label(fb or c, c, fb or c)
+    if not c and fb:
+        c = fb
+    # Trim trailing qualifiers like "City (Region)" to improve geocoder hit-rate.
+    c = re.sub(r"\s*\([^)]*\)\s*$", "", c).strip()
     return (c, k)
 
 
@@ -8006,74 +8011,22 @@ def _fallback_meal_options(
             )
         return out[:limit]
 
-    role = anchor_role or _default_meal_anchor_role(meal)
-    anchor_label = _meal_area_label(city, near_poi, city or "your route")
-    context = _meal_anchor_context(role, city or "the destination", anchor_label)
-    base_rows = {
-        "Breakfast": [
-            (
-                "Breakfast near your stay",
-                f"Area guidance only. Compare real breakfast spots close to {context}.",
-            ),
-            (
-                "Cafe options near your stay",
-                f"Area guidance only. Compare real cafes close to {context}.",
-            ),
-            (
-                "Early breakfast near your stay",
-                f"Useful when you want a practical breakfast close to {context} before heading out.",
-            ),
-        ],
-        "Lunch": [
-            (
-                "Lunch near sightseeing stop",
-                f"Area guidance only. Compare real lunch places close to {context} so midday travel stays light.",
-            ),
-            (
-                "Quick lunch near sightseeing stop",
-                f"Area guidance only. Good for comparing quick midday stops close to {context}.",
-            ),
-            (
-                "Casual lunch near sightseeing stop",
-                f"Useful when you want flexible lunch choices without drifting far from {context}.",
-            ),
-        ],
-        "Dinner": [
-            (
-                "Dinner near your stay",
-                f"Area guidance only. Compare real dinner options close to {context}.",
-            ),
-            (
-                "Evening dinner near your stay",
-                f"Area guidance only. Good for comparing dinner spots close to {context}.",
-            ),
-            (
-                "Dinner options near your stay",
-                f"Useful when you want the evening to end close to {context}.",
-            ),
-        ],
-    }
-    out: list[dict[str, Any]] = []
-    for idx, row in enumerate(base_rows.get(meal, [])):
-        if len(out) >= limit:
-            break
-        name = str(row[0]).strip()
-        note = str(row[1]).strip()
-        out.append(
-            {
-                "option_id": f"fallback-{meal.lower()}-{idx + 1}",
-                "name": name,
-                "city": city,
-                "country": country,
-                "tags": [meal.lower(), "area-guidance", "local"],
-                "cost": 0.0,
-                "cuisine": "Area guidance",
-                "near_poi": near_poi,
-                "rating": 0.0,
-                "note": note,
-            }
+    # Final fallback: one extra live lookup attempt with normalized city labels.
+    normalized_city, normalized_country = _normalize_place(city, country, city)
+    budget_cap = max(0.0, float(max_cost or 0))
+    if normalized_city:
+        live_rows = _osm_restaurant_candidates(
+            meal=meal,
+            city=normalized_city,
+            country=normalized_country,
+            budget_tier="moderate",
+            per_meal_budget_cap=budget_cap if budget_cap > 0 else _meal_budget_cap(_default_daily_budget_for_tier("moderate"), meal),
+            limit=limit,
         )
-    return out
+        if live_rows:
+            return live_rows[:limit]
+    # Do not manufacture restaurant names if no real candidates are available.
+    return []
 
 
 def _meal_candidate_score(
