@@ -3713,6 +3713,7 @@ export default function WanderPlan(){
   var autoTripAcceptRef=useRef({});
   var poiAutoGenerateRef=useRef({});
   var durationDraftSaveTimerRef=useRef(null);
+  var mealDraftSaveTimerRef=useRef(null);
   // Wizard interaction states
   var[destMemberVotes,setDMV]=useState({});
   var[tripJoined,setTJ]=useState({});
@@ -4764,6 +4765,27 @@ export default function WanderPlan(){
       }
     };
   },[wizStep,durPerDest,authToken,currentTripId,newTrip&&newTrip.id]);
+  useEffect(function(){
+    if(wizStep!==11)return;
+    var tid=resolveWizardTripId(currentTripId,newTrip);
+    if(!(authToken&&tid&&isUuidLike(tid)))return;
+    if(!mealDone||!Array.isArray(meals)||meals.length===0)return;
+    if(mealDraftSaveTimerRef.current)clearTimeout(mealDraftSaveTimerRef.current);
+    mealDraftSaveTimerRef.current=setTimeout(function(){
+      saveTripPlanningState({
+        state:{
+          meal_plan:normalizeDiningPlan(meals),
+          meal_votes:(mealVotes&&typeof mealVotes==="object")?Object.assign({},mealVotes):{}
+        }
+      }).catch(function(){return null;});
+    },500);
+    return function(){
+      if(mealDraftSaveTimerRef.current){
+        clearTimeout(mealDraftSaveTimerRef.current);
+        mealDraftSaveTimerRef.current=null;
+      }
+    };
+  },[wizStep,mealDone,meals,mealVotes,authToken,currentTripId,newTrip&&newTrip.id]);
   function refreshCompanionNow(tid,silent){
     var tripId=String(tid||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
     if(!(loaded&&authToken&&tripId&&isUuidLike(tripId)))return Promise.resolve(null);
@@ -9170,9 +9192,22 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           aliases.forEach(function(alias){row[alias]=vote;});
           next[rowMeta.key]=row;
           saveTripPlanningState({state:{meal_votes:next}}).then(function(){
-            refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+            refreshTripPlanningState(authToken,activeDiningTripId).catch(function(){});
           });
           return next;
+        });
+      }
+      function confirmMealPlanAndContinue(){
+        if(!(authToken&&activeDiningTripId&&isUuidLike(activeDiningTripId))){
+          setCSM("Trip context missing. Please refresh and retry confirming meals.");
+          return;
+        }
+        var mealSnapshot=normalizeDiningPlan(meals);
+        var voteSnapshot=(mealVotes&&typeof mealVotes==="object")?Object.assign({},mealVotes):{};
+        saveTripPlanningState({state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).then(function(){
+          adv();
+        }).catch(function(){
+          setCSM("Could not save meal plan. Please retry.");
         });
       }
 
@@ -9476,7 +9511,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             <div style={{display:"flex",gap:6,padding:"8px 10px",borderTop:mealChat.length>0?"1px solid "+C.border:"none"}}><input value={mealAsk} onChange={function(e){setMA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendMealChat();}} placeholder="'vegan ramen in Kyoto' or 'cheaper dinners'" disabled={mealAskLoad} style={{flex:1,padding:"8px 11px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:12,color:"#fff",opacity:mealAskLoad?.5:1}}/><button onClick={sendMealChat} disabled={mealAskLoad} style={{padding:"7px 12px",borderRadius:8,border:"none",background:mealAskLoad?C.border:C.teal,color:mealAskLoad?C.tx3:"#fff",fontSize:11,fontWeight:600,cursor:mealAskLoad?"default":"pointer"}}>Ask</button></div>
           </div>
 
-          {allDecided&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{soloTripMode?meals.reduce(function(total,day){return total+((day.meals||[]).length||0);},0):approvedMeals.length} meals {soloTripMode?"ready":"approved"}. Est. food cost for sample: ${totalMealCost}</p></div>{goBtn("Confirm Meal Plan")}</div>)}
+          {allDecided&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{soloTripMode?meals.reduce(function(total,day){return total+((day.meals||[]).length||0);},0):approvedMeals.length} meals {soloTripMode?"ready":"approved"}. Est. food cost for sample: ${totalMealCost}</p></div><button onClick={confirmMealPlanAndContinue} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Confirm Meal Plan</button></div>)}
           {!allDecided&&mealDone&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>{soloTripMode?"Finish reviewing the meal plan to continue.":"Accept or reject each meal to continue."}</p>}
         </div>)}
         {mealDone&&meals.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"12px 0"}}>No meal plan generated. Describe what you want:</p><div style={{display:"flex",gap:6}}><input value={mealAsk} onChange={function(e){setMA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendMealChat();}} placeholder="e.g. 'plan meals for Kyoto, mostly local food'" style={{flex:1,padding:"9px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/><button onClick={sendMealChat} style={{padding:"8px 14px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>Ask</button></div></div>)}
