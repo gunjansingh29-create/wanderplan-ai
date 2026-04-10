@@ -9314,10 +9314,59 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         var votes=(nextVotes&&typeof nextVotes==="object")?Object.assign({},nextVotes):{};
         setMeals(plan);
         setMD(plan.length>0);
+        setMealErr("");
         return saveTripPlanningState({state:{meal_plan:plan,meal_votes:votes}}).then(function(){
           refreshTripPlanningState(authToken,activeDiningTripId).catch(function(){});
           return plan;
         });
+      }
+      function buildLocalMealGuidanceRows(orderedDests){
+        var rows=[];
+        var list=Array.isArray(orderedDests)?orderedDests:[];
+        list.forEach(function(dest,idx){
+          var destName=String(dest&&dest.name||dest||"").trim()||("Destination "+(idx+1));
+          var slots=[
+            {meal:"Breakfast",time:"08:00",anchorRole:"stay"},
+            {meal:"Lunch",time:"13:00",anchorRole:"poi"},
+            {meal:"Dinner",time:"19:00",anchorRole:"stay"}
+          ];
+          slots.forEach(function(slot){
+            var spotlight=resolveMealSpotlight(destName,slot.meal,slot.anchorRole==="poi"?"main sightseeing stop":"your stay");
+            var baseName=slot.meal+" near "+(slot.anchorRole==="poi"?"sightseeing stop":"your stay");
+            var options=[0,1,2].map(function(optIdx){
+              var suffix=optIdx===0?"":(optIdx===1?" option B":" option C");
+              return {
+                option_id:canonicalTripDestinationName(destName)+"-"+slot.meal.toLowerCase()+"-"+String(optIdx+1),
+                name:baseName+suffix,
+                city:destName,
+                cuisine:slot.meal==="Breakfast"?"Regional breakfast":(slot.meal==="Lunch"?"Local lunch":"Regional dinner"),
+                cost:slot.meal==="Breakfast"?12:(slot.meal==="Lunch"?18:24),
+                rating:4.2-(optIdx*0.1),
+                tags:["local","guidance"],
+                near_poi:String(spotlight&&spotlight.area||"").trim(),
+                travel_minutes:slot.meal==="Lunch"?18:12,
+                note:String(spotlight&&spotlight.note||"").trim(),
+                anchorRole:slot.anchorRole,
+                anchorLabel:String(spotlight&&spotlight.area||"").trim()
+              };
+            });
+            rows.push({
+              day:idx+1,
+              destination:destName,
+              meal:slot.meal,
+              time:slot.time,
+              name:baseName,
+              cuisine:options[0].cuisine,
+              cost:options[0].cost,
+              rating:options[0].rating,
+              note:options[0].note,
+              anchor_role:slot.anchorRole,
+              anchor_label:options[0].anchorLabel,
+              options:options
+            });
+          });
+        });
+        return normalizeDiningPlan(buildDiningRowsFromSuggestions(rows));
       }
       function loadGuidanceMealFallback(orderedDests,nextVotes,label){
         var budgetTier=resolveTripBudgetTier(sharedBudgetTier,user.budget);
@@ -9332,6 +9381,17 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               return p.concat([{from:"agent",text:(label?label+" ":"")+"Live venue service is currently unavailable. Loaded AI meal guidance so planning can continue. Venue options are guidance-only until backend recovers."}]);
             });
             return rows;
+          });
+        }).catch(function(){
+          var localRows=buildLocalMealGuidanceRows(orderedDests);
+          if(!Array.isArray(localRows)||localRows.length===0){
+            throw new Error("local_guidance_failed");
+          }
+          return persistMealsSnapshot(localRows,nextVotes).then(function(){
+            setMChat(function(p){
+              return p.concat([{from:"agent",text:(label?label+" ":"")+"Live dining and AI services are unavailable. Loaded offline meal guidance so you can continue planning."}]);
+            });
+            return localRows;
           });
         });
       }
