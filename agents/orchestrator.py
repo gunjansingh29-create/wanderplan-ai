@@ -8433,6 +8433,12 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 anchor.get("country"),
                 fallback_city,
             )
+            # Keep restaurant search grounded to the active destination city when
+            # itinerary location hints are verbose route text instead of place names.
+            if destination_key and _canonical_place_key(anchor_city) != destination_key:
+                anchor_city = destination_city or fallback_city
+                if not anchor_country:
+                    anchor_country = fallback_country
             anchor_role = str(anchor.get("role") or _default_meal_anchor_role(meal_name)).strip().lower() or _default_meal_anchor_role(meal_name)
             near_poi = _meal_area_label(
                 anchor_city or fallback_city,
