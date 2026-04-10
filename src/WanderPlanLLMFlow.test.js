@@ -1463,6 +1463,8 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         anchor_role: "stay",
         anchor_label: "Grishneshwar stay area",
         near_poi: "Grishneshwar stay area",
+        focus_dish: "Poha and chai",
+        focus_note: "Classic local breakfast before temple visits.",
         name: "Breakfast near your stay",
         options: [{ name: "Breakfast near your stay", cuisine: "Area guidance", cost: 0, rating: 0, tags: ["area-guidance", "breakfast"] }],
       },
@@ -1507,7 +1509,13 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(rows[0].meals[0]).toEqual(expect.objectContaining({ anchorRole: "stay", anchorLabel: "Grishneshwar stay area" }));
     expect(rows[0].meals[1]).toEqual(expect.objectContaining({ anchorRole: "poi", anchorLabel: "Ellora Caves" }));
     expect(rows[0].meals[2]).toEqual(expect.objectContaining({ anchorRole: "stay", anchorLabel: "Grishneshwar stay area" }));
-    expect(rows[0].meals[0]).toEqual(expect.objectContaining({ focusDish: expect.any(String), focusArea: expect.any(String), focusNote: expect.any(String) }));
+    expect(rows[0].meals[0]).toEqual(
+      expect.objectContaining({
+        focusDish: "Poha and chai",
+        focusArea: expect.any(String),
+        focusNote: "Classic local breakfast before temple visits.",
+      })
+    );
   });
 
   test("receipt helpers total parsed items and format budget values", () => {

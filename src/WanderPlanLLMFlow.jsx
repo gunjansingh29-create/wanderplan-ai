@@ -3209,6 +3209,9 @@ export function buildDiningRowsFromSuggestions(suggestions){
     });
     if(realOnly.length>0)options=realOnly;
     var spotlight=resolveMealSpotlight(destination,mealType,anchorLabel||String(s&&s.near_poi||"").trim());
+    var focusDish=String(s&&(s.focus_dish||s.focusDish)||spotlight.dish||"").trim();
+    var focusArea=String(s&&(s.focus_area||s.focusArea)||spotlight.area||anchorLabel||"").trim();
+    var focusNote=String(s&&(s.focus_note||s.focusNote)||spotlight.note||"").trim();
     options=sortMealOptionsForSpotlight(options,spotlight);
     var top=options[0]||{};
     row.meals.push({
@@ -3227,9 +3230,9 @@ export function buildDiningRowsFromSuggestions(suggestions){
       travelMinutes:Number((top.travel_minutes!==undefined)?top.travel_minutes:(s&&s.travel_from_poi_minutes||0))||0,
       anchorRole:anchorRole,
       anchorLabel:anchorLabel,
-      focusDish:spotlight.dish,
-      focusArea:spotlight.area,
-      focusNote:spotlight.note
+      focusDish:focusDish,
+      focusArea:focusArea,
+      focusNote:focusNote
     });
     if(anchorRole==="poi"){
       if(anchorLabel)row.lunchAnchorLabel=anchorLabel;

@@ -2080,6 +2080,159 @@ def _anthropic_messages_proxy(body: LLMMessageRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="LLM error: invalid JSON response from Anthropic") from err
 
 
+def _anthropic_response_text(payload: Any) -> str:
+    data = payload if isinstance(payload, dict) else {}
+    content = data.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("type") or "").strip().lower() != "text":
+                continue
+            parts.append(str(block.get("text") or "").strip())
+        return "\n".join([part for part in parts if part]).strip()
+    if isinstance(content, str):
+        return content.strip()
+    return ""
+
+
+def _dining_llm_destination_themes(
+    destinations: list[dict[str, str]],
+    budget_tier: str,
+    dietary: list[str],
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {}
+
+    normalized_destinations: list[dict[str, str]] = []
+    seen_dest: set[str] = set()
+    for row in destinations:
+        city = str((row or {}).get("city") or "").strip()
+        country = str((row or {}).get("country") or "").strip()
+        key = _canonical_place_key(city)
+        if not key or key in seen_dest:
+            continue
+        seen_dest.add(key)
+        normalized_destinations.append({"city": city, "country": country})
+    if not normalized_destinations:
+        return {}
+    normalized_destinations = normalized_destinations[:16]
+
+    system = (
+        "You design meal themes for travel days. "
+        "Return ONLY strict JSON object format with key 'destinations'. "
+        "For each destination return exactly breakfast, lunch, dinner arrays with 3 concise rows each. "
+        "Each row must be {\"dish\":\"...\",\"cuisine\":\"...\",\"note\":\"...\",\"keywords\":[\"...\"]}. "
+        "Do not output restaurant names, venue names, hotels, or placeholders like 'near your stay'. "
+        "Dish should be local/famous food ideas; note should be practical and short."
+    )
+    user_payload = {
+        "budget_tier": _normalize_budget_tier(budget_tier),
+        "dietary": [str(d or "").strip() for d in dietary if str(d or "").strip()],
+        "destinations": normalized_destinations,
+        "schema": {
+            "destinations": [
+                {
+                    "destination": "City",
+                    "breakfast": [{"dish": "string", "cuisine": "string", "note": "string", "keywords": ["string"]}],
+                    "lunch": [{"dish": "string", "cuisine": "string", "note": "string", "keywords": ["string"]}],
+                    "dinner": [{"dish": "string", "cuisine": "string", "note": "string", "keywords": ["string"]}],
+                }
+            ]
+        },
+    }
+    model = (
+        os.getenv("DINING_LLM_MODEL", "").strip()
+        or os.getenv("ANTHROPIC_MODEL", "").strip()
+        or os.getenv("LLM_MODEL", "claude-sonnet-4-20250514").strip()
+    )
+    try:
+        response = _anthropic_messages_proxy(
+            LLMMessageRequest(
+                model=model,
+                max_tokens=1800,
+                temperature=0.2,
+                system=system,
+                messages=[{"role": "user", "content": json.dumps(user_payload)}],
+            )
+        )
+    except Exception:
+        return {}
+
+    raw_text = _anthropic_response_text(response)
+    parsed = _extract_json_block(raw_text)
+    rows = parsed.get("destinations") if isinstance(parsed, dict) else None
+    if not isinstance(rows, list):
+        return {}
+
+    out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+
+    def normalize_rows(raw_rows: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_rows, list):
+            return []
+        themes: list[dict[str, Any]] = []
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                continue
+            dish = str(row.get("dish") or "").strip()
+            cuisine = str(row.get("cuisine") or "").strip()
+            note = str(row.get("note") or "").strip()
+            if not dish:
+                continue
+            if _is_synthetic_meal_candidate_name(dish):
+                continue
+            keywords = []
+            for kw in (row.get("keywords") or []):
+                text = str(kw or "").strip().lower()
+                if not text:
+                    continue
+                if _is_synthetic_meal_candidate_name(text):
+                    continue
+                keywords.append(text)
+            if cuisine:
+                keywords.extend([token for token in re.split(r"[^a-z0-9]+", cuisine.lower()) if len(token) > 2])
+            keywords.extend([token for token in re.split(r"[^a-z0-9]+", dish.lower()) if len(token) > 2])
+            deduped_keywords: list[str] = []
+            seen_kw: set[str] = set()
+            for kw in keywords:
+                if kw in seen_kw:
+                    continue
+                seen_kw.add(kw)
+                deduped_keywords.append(kw)
+            themes.append(
+                {
+                    "dish": dish,
+                    "cuisine": cuisine or "Local",
+                    "note": note,
+                    "keywords": deduped_keywords[:8],
+                }
+            )
+            if len(themes) >= 3:
+                break
+        return themes
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        destination = str(row.get("destination") or row.get("city") or "").strip()
+        dest_key = _canonical_place_key(destination)
+        if not dest_key:
+            continue
+        breakfast = normalize_rows(row.get("breakfast"))
+        lunch = normalize_rows(row.get("lunch"))
+        dinner = normalize_rows(row.get("dinner"))
+        if not (breakfast or lunch or dinner):
+            continue
+        out[dest_key] = {
+            "Breakfast": breakfast,
+            "Lunch": lunch,
+            "Dinner": dinner,
+        }
+    return out
+
+
 POI_CATALOG: dict[str, list[dict[str, Any]]] = {
     "food": [
         {"name": "Tsukiji Outer Market", "category": "food", "city": "Tokyo", "country": "Japan", "tags": ["food", "market", "seafood"], "rating": 4.5, "cost": 15},
@@ -8097,6 +8250,7 @@ def _meal_candidate_score(
     candidate: dict[str, Any],
     anchor_city: str,
     anchor_country: str,
+    theme_terms: Optional[list[str]] = None,
 ) -> float:
     city = str(candidate.get("city") or "").strip().lower()
     country = str(candidate.get("country") or "").strip().lower()
@@ -8116,6 +8270,21 @@ def _meal_candidate_score(
         score += 12.0
     if "food" in tags or "dining" in tags:
         score += 8.0
+    if theme_terms:
+        joined = " ".join(
+            [
+                str(candidate.get("name") or "").lower(),
+                str(candidate.get("note") or "").lower(),
+                str(candidate.get("cuisine") or "").lower(),
+                " ".join(tags),
+            ]
+        )
+        for term in theme_terms:
+            token = str(term or "").strip().lower()
+            if len(token) < 3:
+                continue
+            if token in joined:
+                score += 6.0
     return score
 
 
@@ -8128,10 +8297,14 @@ def _select_meal_options(
     anchor_role: str = "",
     max_cost: float = 0.0,
     limit: int = 3,
+    theme_terms: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     scored = sorted(
         food_candidates,
-        key=lambda c: (-_meal_candidate_score(meal, c, anchor_city, anchor_country), str(c.get("name") or "").lower()),
+        key=lambda c: (
+            -_meal_candidate_score(meal, c, anchor_city, anchor_country, theme_terms=theme_terms),
+            str(c.get("name") or "").lower(),
+        ),
     )
     picked: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -8225,6 +8398,15 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
             """,
             trip_id,
         )
+        member_profile_rows = await conn.fetch(
+            """
+            SELECT up.dietary
+            FROM trip_members tm
+            LEFT JOIN user_profiles up ON up.user_id = tm.user_id
+            WHERE tm.trip_id = $1 AND tm.status = 'accepted'
+            """,
+            trip_id,
+        )
 
     planning_state = (planning_state_row["state"] or {}) if planning_state_row else {}
     if not isinstance(planning_state, dict):
@@ -8232,6 +8414,23 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
     active_budget_tier = _normalize_budget_tier(
         planning_state.get("shared_budget_tier") if isinstance(planning_state, dict) else "moderate"
     )
+    dietary_preferences: list[str] = []
+    dietary_seen: set[str] = set()
+    for row in member_profile_rows:
+        for item in (row["dietary"] or []):
+            label = str(item or "").strip()
+            key = label.lower()
+            if label and key not in dietary_seen:
+                dietary_seen.add(key)
+                dietary_preferences.append(label)
+    explicit_health = planning_state.get("health_accessibility") if isinstance(planning_state, dict) else {}
+    if isinstance(explicit_health, dict):
+        for item in (explicit_health.get("dietary_restrictions") or []):
+            label = str(item or "").strip()
+            key = label.lower()
+            if label and key not in dietary_seen:
+                dietary_seen.add(key)
+                dietary_preferences.append(label)
     configured_daily_target = float((budget_row["daily_target"] if budget_row else 0) or 0)
     effective_daily_target = configured_daily_target if configured_daily_target > 0 else _default_daily_budget_for_tier(active_budget_tier)
     route_plan = planning_state.get("route_plan") if isinstance(planning_state, dict) else {}
@@ -8277,6 +8476,14 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         for row in destination_rows
         if str(row["destination"] or "").strip()
     ]
+    llm_destination_themes: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    if fallback_destinations:
+        llm_destination_themes = await asyncio.to_thread(
+            _dining_llm_destination_themes,
+            fallback_destinations,
+            active_budget_tier,
+            dietary_preferences,
+        )
 
     poi_candidates: list[dict[str, Any]] = []
     food_candidates: list[dict[str, Any]] = []
@@ -8374,6 +8581,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         fallback_country = str((fallback_poi or {}).get("country") or fallback_dest.get("country") or "").strip()
         destination_city = fallback_city or str(fallback_dest.get("city") or "").strip()
         destination_key = _canonical_place_key(destination_city)
+        destination_themes = llm_destination_themes.get(destination_key) or {}
         stay_row = stay_by_destination.get(destination_key)
         destination_pois = poi_by_destination.get(destination_key, [])
         route_stop = _route_stop_lookup(route_plan, fallback_city or fallback_dest.get("city"))
@@ -8467,6 +8675,29 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                     anchor_country,
                 )
 
+            meal_theme_rows = destination_themes.get(meal_name) if isinstance(destination_themes, dict) else []
+            selected_theme: dict[str, Any] = {}
+            if isinstance(meal_theme_rows, list) and meal_theme_rows:
+                selected_theme = meal_theme_rows[day_idx % len(meal_theme_rows)] if len(meal_theme_rows) > 0 else {}
+            focus_dish = str((selected_theme or {}).get("dish") or "").strip()
+            focus_note = str((selected_theme or {}).get("note") or "").strip()
+            focus_cuisine = str((selected_theme or {}).get("cuisine") or "").strip()
+            theme_terms = [str(term or "").strip().lower() for term in ((selected_theme or {}).get("keywords") or []) if str(term or "").strip()]
+            if focus_cuisine:
+                theme_terms.extend([token for token in re.split(r"[^a-z0-9]+", focus_cuisine.lower()) if len(token) > 2])
+            if focus_dish:
+                theme_terms.extend([token for token in re.split(r"[^a-z0-9]+", focus_dish.lower()) if len(token) > 2])
+            # keep only compact, meaningful tokens
+            compact_theme_terms: list[str] = []
+            seen_theme_terms: set[str] = set()
+            for term in theme_terms:
+                if len(term) < 3 or len(term) > 24:
+                    continue
+                if term in seen_theme_terms:
+                    continue
+                seen_theme_terms.add(term)
+                compact_theme_terms.append(term)
+
             options = _select_meal_options(
                 meal_name,
                 anchor_city,
@@ -8494,6 +8725,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 anchor_role=anchor_role,
                 max_cost=_meal_budget_cap(effective_daily_target, meal_name),
                 limit=3,
+                theme_terms=compact_theme_terms,
             )
             enriched_options = []
             for option in options:
@@ -8544,6 +8776,10 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                     "travel_between_pois_minutes": int(transfer_between_pois),
                     "rating": float(top["rating"]),
                     "note": str(top.get("note") or "").strip(),
+                    "focus_dish": focus_dish,
+                    "focus_note": focus_note,
+                    "focus_area": near_poi,
+                    "theme_source": "llm" if focus_dish else "heuristic",
                     "options": enriched_options,
                 }
             )
