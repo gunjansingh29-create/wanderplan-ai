@@ -9319,6 +9319,22 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           return plan;
         });
       }
+      function loadGuidanceMealFallback(orderedDests,nextVotes,label){
+        var budgetTier=resolveTripBudgetTier(sharedBudgetTier,user.budget);
+        return withTimeoutPromise(
+          Promise.resolve(askDining(orderedDests,budgetTier,user.dietary,totalDays,grpSize)),
+          25000
+        ).then(function(aiRows){
+          var rows=normalizeDiningPlan(Array.isArray(aiRows)?aiRows:[]);
+          if(rows.length===0)throw new Error("empty_fallback");
+          return persistMealsSnapshot(rows,nextVotes).then(function(){
+            setMChat(function(p){
+              return p.concat([{from:"agent",text:(label?label+" ":"")+"Live venue service is currently unavailable. Loaded AI meal guidance so planning can continue. Venue options are guidance-only until backend recovers."}]);
+            });
+            return rows;
+          });
+        });
+      }
 
       function sendMealChat(){
         if(!mealAsk.trim()||mealAskLoad)return;var msg=mealAsk.trim();setMA("");setMAL(true);
@@ -9382,7 +9398,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                     }).catch(function(){});
                     return;
                   }
-                  setMChat(function(p){return p.concat([{from:"agent",text:"No real venue suggestions are available right now for this trip. Try again in a moment."}]);});
+                  loadGuidanceMealFallback(orderedDests,mealVotes,"").catch(function(){
+                    setMChat(function(p){return p.concat([{from:"agent",text:"No real venue suggestions are available right now for this trip. Try again in a moment."}]);});
+                  });
                 }).catch(function(){
                   setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
                 });
@@ -9402,7 +9420,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                     }).catch(function(){});
                     return;
                   }
-                  setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
+                  loadGuidanceMealFallback(orderedDests,mealVotes,"").catch(function(){
+                    setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
+                  });
                 }).catch(function(){
                   setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
                 });
@@ -9427,7 +9447,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                 }).catch(function(){});
                 return;
               }
-              setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
+              loadGuidanceMealFallback(orderedDests,mealVotes,"").catch(function(){
+                setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
+              });
             }).catch(function(){
               setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
             });
@@ -9501,11 +9523,19 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                       }).catch(function(){});
                       return;
                     }
-                    setML(false);
-                    setMealErr("Could not load real venue suggestions yet. Please retry in a moment.");
+                    loadGuidanceMealFallback(orderedDests,{},"Fallback activated.").then(function(){
+                      setML(false);
+                    }).catch(function(){
+                      setML(false);
+                      setMealErr("Could not load real venue suggestions yet. Please retry in a moment.");
+                    });
                   }).catch(function(){
-                    setML(false);
-                    setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                    loadGuidanceMealFallback(orderedDests,{},"Fallback activated.").then(function(){
+                      setML(false);
+                    }).catch(function(){
+                      setML(false);
+                      setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                    });
                   });
                 }).catch(function(){
                   fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
@@ -9524,11 +9554,19 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                       }).catch(function(){});
                       return;
                     }
-                    setML(false);
-                    setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                    loadGuidanceMealFallback(orderedDests,{},"Fallback activated.").then(function(){
+                      setML(false);
+                    }).catch(function(){
+                      setML(false);
+                      setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                    });
                   }).catch(function(){
-                    setML(false);
-                    setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                    loadGuidanceMealFallback(orderedDests,{},"Fallback activated.").then(function(){
+                      setML(false);
+                    }).catch(function(){
+                      setML(false);
+                      setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                    });
                   });
                 });
                 return;
@@ -9552,11 +9590,19 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                   }).catch(function(){});
                   return;
                 }
-                setML(false);
-                setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                loadGuidanceMealFallback(orderedDests,{},"Fallback activated.").then(function(){
+                  setML(false);
+                }).catch(function(){
+                  setML(false);
+                  setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                });
               }).catch(function(){
-                setML(false);
-                setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                loadGuidanceMealFallback(orderedDests,{},"Fallback activated.").then(function(){
+                  setML(false);
+                }).catch(function(){
+                  setML(false);
+                  setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                });
               });
             });
           }else{
