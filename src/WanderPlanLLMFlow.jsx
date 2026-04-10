@@ -9325,7 +9325,28 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
     {wizStep===15&&(function(){
       var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
       var grpSize=(jc||0)+1;
-      var pStays=[];Object.keys(stayPick).forEach(function(dn){var grp=(function(){var g={};stays.forEach(function(s){var d=s.destination||"Other";if(!g[d])g[d]=[];g[d].push(s);});return g;})();if(grp[dn]&&grp[dn][stayPick[dn]])pStays.push(grp[dn][stayPick[dn]]);});
+      var staysByDest={};
+      stays.forEach(function(s,idx){
+        var d=String(s&&s.destination||"Other");
+        if(!staysByDest[d])staysByDest[d]=[];
+        staysByDest[d].push({stay:s,idx:idx,localIndex:staysByDest[d].length});
+      });
+      var orderedDestNames=dests.map(function(d){return String(d&&d.name||"").trim();}).filter(Boolean);
+      var pStays=orderedDestNames.map(function(destName){
+        var entries=staysByDest[destName]||[];
+        if(entries.length===0)return null;
+        var selectedIdx=stayPick[destName];
+        var selectedByPick=entries.find(function(entry){return entry.localIndex===selectedIdx;});
+        if(selectedByPick)return selectedByPick.stay;
+        var lockedKey=String((stayFinalChoices&&stayFinalChoices[destName])||"");
+        if(lockedKey){
+          var selectedByLock=entries.find(function(entry){
+            return canonicalStayVoteKey(entry.stay,entry.idx)===lockedKey;
+          });
+          if(selectedByLock)return selectedByLock.stay;
+        }
+        return null;
+      }).filter(Boolean);
       var finalVoteMembers=[{
         id:currentPlannerId,
         userId:userIdFromToken(authToken),
@@ -9334,6 +9355,24 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       finalVoteMembers=dedupeVoteVoters(finalVoteMembers);
       var finalMajorityNeeded=Math.floor(Math.max(finalVoteMembers.length,1)/2)+1;
       var appMeals=[];meals.forEach(function(day,di){(day.meals||[]).forEach(function(m,mi){var summary=summarizeMealVotes(mealVotes,day,m,di,mi,finalVoteMembers);if(summary.up>=finalMajorityNeeded&&summary.up>summary.down)appMeals.push(m);});});
+      var itineraryActivityCount=0;
+      var itineraryMealCount=0;
+      (itin||[]).forEach(function(day){
+        (day&&day.items||[]).forEach(function(item){
+          var t=String(item&&item.type||"").trim().toLowerCase();
+          if(t==="activity")itineraryActivityCount+=1;
+          if(t==="meal")itineraryMealCount+=1;
+        });
+      });
+      var activityCount=accPois.length>0?accPois.length:itineraryActivityCount;
+      var allMealSlots=meals.reduce(function(total,day){return total+((day&&day.meals||[]).length||0);},0);
+      var mealCount=appMeals.length;
+      if(soloTripMode&&mealCount===0)mealCount=allMealSlots;
+      if(mealCount===0&&itineraryMealCount>0)mealCount=itineraryMealCount;
+      var lockedWindowForSummary=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
+      var startDateForSummary=String((lockedWindowForSummary&&lockedWindowForSummary.start)||flightDates.depart||"").slice(0,10);
+      var endDateForSummary=String((lockedWindowForSummary&&lockedWindowForSummary.end)||flightDates.ret||"").slice(0,10);
+      var computedTripDays=Math.max(1,Number(inclusiveIsoDays(startDateForSummary,endDateForSummary)||itin.length||sharedDurationDays||10));
       var totalItinCost=itin.reduce(function(s,d){return s+(d.items||[]).reduce(function(s2,it){return s2+(it.cost||0);},0);},0);
       var stayTotal=pStays.reduce(function(s,st){return s+(st.ratePerNight||0)*(st.totalNights||3);},0);
       var nextStatus=String((viewTrip&&viewTrip.status)||(newTrip&&newTrip.status)||(tr&&tr.status)||"").trim().toLowerCase();
@@ -9343,20 +9382,37 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       var routePreview=(routeNames.length<=6)
         ? routeNames.join(" -> ")
         : (routeNames.slice(0,6).join(" -> ")+" -> ...");
-      var tripDateLabel=(flightDates.depart&&flightDates.ret)
-        ? (String(flightDates.depart).slice(0,10)+" to "+String(flightDates.ret).slice(0,10))
+      var tripDateLabel=(startDateForSummary&&endDateForSummary)
+        ? (startDateForSummary+" to "+endDateForSummary)
         : "--";
-      var tripDaysLabel=(itin.length>0?itin.length:(sharedDurationDays||10));
+      var tripDaysLabel=computedTripDays;
       var originLabel=String(flightDates.origin||"").trim()||"your origin";
       var finalLabel=String(flightDates.final_airport||flightDates.origin||"").trim()||"your origin";
-      var poiHighlights=accPois.map(function(p){return String(p&&p.name||"").trim();}).filter(Boolean);
+      var poiHighlights=(accPois.length>0
+        ? accPois.map(function(p){return String(p&&p.name||"").trim();}).filter(Boolean)
+        : (itin||[]).reduce(function(list,day){
+            (day&&day.items||[]).forEach(function(item){
+              if(String(item&&item.type||"").trim().toLowerCase()!=="activity")return;
+              var title=String(item&&item.title||"").trim();
+              if(title)list.push(title);
+            });
+            return list;
+          },[]));
       var stayHighlights=pStays.map(function(s){return String(s&&s.name||"").trim();}).filter(Boolean);
-      var mealHighlights=appMeals.map(function(m){return String(m&&m.name||"").trim();}).filter(Boolean);
+      var mealHighlights=(appMeals.length>0
+        ? appMeals.map(function(m){return String(m&&m.name||"").trim();}).filter(Boolean)
+        : meals.reduce(function(list,day){
+            (day&&day.meals||[]).forEach(function(m){
+              var name=String(m&&m.name||"").trim();
+              if(name)list.push(name);
+            });
+            return list;
+          },[]));
       var summaryLines=[
         tripDaysLabel+"-day plan for "+grpSize+" traveler"+(grpSize===1?"":"s")+" across "+Math.max(routeNames.length,dests.length)+" destinations ("+tripDateLabel+").",
         "Route: "+(routePreview||dests.map(function(d){return d.name;}).join(" -> ")||"--")+".",
         "Travel: starts from "+originLabel+" and returns to "+finalLabel+"; flights are "+(flightConfirmed?"confirmed":"pending confirmation")+".",
-        "Selections so far: "+accPois.length+" approved activities, "+pStays.length+" stays, and "+appMeals.length+" approved meals.",
+        "Selections so far: "+activityCount+" activities, "+pStays.length+" stays, and "+mealCount+" meals.",
       ];
       if(poiHighlights.length>0)summaryLines.push("Top activity highlights: "+poiHighlights.slice(0,4).join(", ")+".");
       if(stayHighlights.length>0)summaryLines.push("Stay plan: "+stayHighlights.slice(0,3).join(" + ")+".");
@@ -9370,12 +9426,12 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           <h3 style={{fontWeight:700,fontSize:18,marginBottom:12}}>{tr.name||"Your Trip"}</h3>
           {[
             {l:"Destinations",v:dests.map(function(d){return d.name;}).join(" + ")||"--"},
-            {l:"Duration",v:itin.length>0?itin.length+" days":"10 days"},
+            {l:"Duration",v:tripDaysLabel+" days"},
             {l:"Travelers",v:grpSize+" people"},
-            {l:"Activities",v:accPois.length+" approved"},
+            {l:"Activities",v:activityCount+" planned"},
             {l:"Stays",v:pStays.map(function(s){return s.name;}).join(" + ")||"--"},
-            {l:"Meals",v:appMeals.length+" meals planned"},
-            {l:"Trip dates",v:(flightDates.depart&&flightDates.ret)?(String(flightDates.depart).slice(0,10)+" to "+String(flightDates.ret).slice(0,10)):"--"},
+            {l:"Meals",v:mealCount+" meals planned"},
+            {l:"Trip dates",v:tripDateLabel},
             {l:"Flights",v:flightConfirmed?"Confirmed":"Needs confirmation"},
             {l:"Est. Total",v:"$"+(totalItinCost+stayTotal)+"/person"},
           ].map(function(r){return(<div key={r.l} style={{display:"flex",justifyContent:"space-between",fontSize:14,marginBottom:4}}><span style={{color:C.tx3}}>{r.l}</span><span style={{fontWeight:600}}>{r.v}</span></div>);})}
