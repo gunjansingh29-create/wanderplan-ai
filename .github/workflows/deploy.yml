@@ -57,7 +57,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate staging host reachability
+        id: staging_host
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST="${{ secrets.STAGING_HOST }}"
+          SKIP="false"
+
+          if [ -z "${HOST}" ]; then
+            echo "::warning::STAGING_HOST is empty. Skipping staging deploy."
+            SKIP="true"
+          fi
+
+          if [ "${SKIP}" = "false" ]; then
+            case "${HOST}" in
+              *.local|localhost|127.*|10.*|192.168.*)
+                echo "::warning::STAGING_HOST (${HOST}) is not reachable from GitHub-hosted runners. Skipping staging deploy."
+                SKIP="true"
+                ;;
+            esac
+          fi
+
+          if [ "${SKIP}" = "false" ]; then
+            if [[ "${HOST}" =~ ^172\.([1][6-9]|2[0-9]|3[0-1])\. ]]; then
+              echo "::warning::STAGING_HOST (${HOST}) is a private RFC1918 address. Skipping staging deploy."
+              SKIP="true"
+            fi
+          fi
+
+          if [ "${SKIP}" = "false" ]; then
+            if ! getent ahosts "${HOST}" >/dev/null 2>&1; then
+              echo "::warning::STAGING_HOST (${HOST}) is not DNS-resolvable from this runner. Skipping staging deploy."
+              SKIP="true"
+            fi
+          fi
+
+          echo "skip=${SKIP}" >> "${GITHUB_OUTPUT}"
+
       - name: Deploy to staging
+        if: steps.staging_host.outputs.skip != 'true'
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.STAGING_HOST }}
@@ -84,7 +123,12 @@ jobs:
               exit 1
             fi
 
+      - name: Staging deploy skipped
+        if: steps.staging_host.outputs.skip == 'true'
+        run: echo "Staging deploy skipped due to host validation."
+
       - name: Smoke test staging
+        if: steps.staging_host.outputs.skip != 'true'
         run: |
           sleep 10
           # Health check all agents
