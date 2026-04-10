@@ -7922,7 +7922,8 @@ def _osm_restaurant_candidates(
             nominatim_url,
             headers={"User-Agent": "WanderPlanAI/1.0 (+https://wanderplan-ai.onrender.com)"},
         )
-        with urllib_request.urlopen(req, timeout=8) as resp:
+        nominatim_timeout = max(2.0, min(float(os.getenv("OSM_NOMINATIM_TIMEOUT_SECONDS", "4.0") or 4.0), 12.0))
+        with urllib_request.urlopen(req, timeout=nominatim_timeout) as resp:
             nominatim_payload = json.loads(resp.read().decode("utf-8", errors="replace"))
         if not isinstance(nominatim_payload, list) or not nominatim_payload:
             return []
@@ -7949,7 +7950,8 @@ def _osm_restaurant_candidates(
                 "User-Agent": "WanderPlanAI/1.0 (+https://wanderplan-ai.onrender.com)",
             },
         )
-        with urllib_request.urlopen(overpass_req, timeout=12) as resp:
+        overpass_timeout = max(3.0, min(float(os.getenv("OSM_OVERPASS_TIMEOUT_SECONDS", "6.0") or 6.0), 18.0))
+        with urllib_request.urlopen(overpass_req, timeout=overpass_timeout) as resp:
             overpass_payload = json.loads(resp.read().decode("utf-8", errors="replace"))
     except Exception:
         return []
@@ -7999,6 +8001,7 @@ def _google_places_candidates(
     limit: int = 8,
 ) -> list[dict[str, Any]]:
     key = str(os.getenv("GOOGLE_PLACES_API_KEY") or "").strip()
+    allow_google_error_fallback_to_osm = str(os.getenv("DINING_GOOGLE_ERROR_FALLBACK_TO_OSM", "0")).strip().lower() in {"1", "true", "yes"}
     if not key:
         return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
     meal_name = str(meal or "").strip().title() or "Lunch"
@@ -8031,13 +8034,18 @@ def _google_places_candidates(
         )
     )
     try:
-        with urllib_request.urlopen(url, timeout=9) as resp:
+        google_timeout = max(2.5, min(float(os.getenv("GOOGLE_PLACES_TIMEOUT_SECONDS", "5.0") or 5.0), 15.0))
+        with urllib_request.urlopen(url, timeout=google_timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8", errors="replace"))
     except Exception:
-        return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+        if allow_google_error_fallback_to_osm:
+            return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+        return []
     status = str(payload.get("status") or "").strip().upper()
     if status not in {"OK", "ZERO_RESULTS"}:
-        return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+        if allow_google_error_fallback_to_osm:
+            return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+        return []
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for idx, row in enumerate(payload.get("results") or []):
@@ -8077,7 +8085,9 @@ def _google_places_candidates(
         )
     if out:
         return out
-    return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+    if allow_google_error_fallback_to_osm:
+        return _osm_restaurant_candidates(meal, city, country, budget_tier, per_meal_budget_cap, limit=limit)
+    return []
 
 
 _DINING_CITY_CATALOG: dict[str, dict[str, list[dict[str, Any]]]] = {
@@ -8351,6 +8361,60 @@ def _select_meal_options(
     return picked[:limit]
 
 
+async def _prefetch_live_food_candidates(
+    targets: list[dict[str, Any]],
+    budget_tier: str,
+    effective_daily_target: float,
+) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+    cache: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    if not targets:
+        return cache
+    try:
+        concurrency = max(2, min(int(os.getenv("DINING_PREFETCH_CONCURRENCY", "6") or 6), 12))
+    except Exception:
+        concurrency = 6
+    semaphore = asyncio.Semaphore(concurrency)
+    seen: set[tuple[str, str, str]] = set()
+    tasks: list[asyncio.Task] = []
+
+    async def run_one(
+        key: tuple[str, str, str],
+        meal_name: str,
+        city: str,
+        country: str,
+        near_poi: str,
+    ) -> None:
+        async with semaphore:
+            rows = await asyncio.to_thread(
+                _google_places_candidates,
+                meal_name,
+                city,
+                country,
+                near_poi,
+                budget_tier,
+                _meal_budget_cap(effective_daily_target, meal_name),
+                8,
+            )
+            cache[key] = rows if isinstance(rows, list) else []
+
+    for row in targets:
+        meal_name = str(row.get("meal") or "").strip().title()
+        city = str(row.get("city") or "").strip()
+        country = str(row.get("country") or "").strip()
+        near_poi = str(row.get("near_poi") or "").strip() or f"{meal_name} in {city}"
+        if not meal_name or not city:
+            continue
+        key = (meal_name.lower(), city.lower(), budget_tier)
+        if key in seen:
+            continue
+        seen.add(key)
+        tasks.append(asyncio.create_task(run_one(key, meal_name, city, country, near_poi)))
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return cache
+
+
 @app.get("/trips/{trip_id}/dining/suggestions")
 async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_user_id)):
     if db_pool is None:
@@ -8484,6 +8548,42 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
             active_budget_tier,
             dietary_preferences,
         )
+    prefetch_targets: list[dict[str, Any]] = []
+    for row in fallback_destinations:
+        city, country = _normalize_place(row.get("city"), row.get("country"), row.get("city"))
+        if not city:
+            continue
+        for meal_name in _MEAL_SLOTS:
+            prefetch_targets.append(
+                {
+                    "meal": meal_name,
+                    "city": city,
+                    "country": country,
+                    "near_poi": f"{meal_name} in {city}",
+                }
+            )
+    live_food_cache: dict[tuple[str, str, str], list[dict[str, Any]]] = await _prefetch_live_food_candidates(
+        prefetch_targets,
+        active_budget_tier,
+        effective_daily_target,
+    )
+
+    async def get_live_food_candidates(meal_name: str, city: str, country: str, near_poi: str) -> list[dict[str, Any]]:
+        key = (str(meal_name or "").strip().lower(), str(city or "").strip().lower(), active_budget_tier)
+        if key in live_food_cache:
+            return live_food_cache[key]
+        rows = await asyncio.to_thread(
+            _google_places_candidates,
+            meal_name,
+            city,
+            country,
+            near_poi,
+            active_budget_tier,
+            _meal_budget_cap(effective_daily_target, meal_name),
+            8,
+        )
+        live_food_cache[key] = rows if isinstance(rows, list) else []
+        return live_food_cache[key]
 
     poi_candidates: list[dict[str, Any]] = []
     food_candidates: list[dict[str, Any]] = []
@@ -8571,7 +8671,6 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         )
 
     suggestions: list[dict[str, Any]] = []
-    live_food_cache: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for day_idx, day_date in enumerate(ordered_day_dates):
         day_number = day_idx + 1
         day_activities = activities_by_date.get(day_date, [])
@@ -8698,30 +8797,18 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
                 seen_theme_terms.add(term)
                 compact_theme_terms.append(term)
 
+            live_rows = await get_live_food_candidates(
+                meal_name,
+                anchor_city,
+                anchor_country,
+                near_poi,
+            )
             options = _select_meal_options(
                 meal_name,
                 anchor_city,
                 anchor_country,
                 near_poi,
-                (
-                    food_candidates
-                    + live_food_cache.setdefault(
-                        (
-                            str(meal_name or "").lower(),
-                            str(anchor_city or "").strip().lower(),
-                            active_budget_tier,
-                        ),
-                        _google_places_candidates(
-                            meal=meal_name,
-                            city=anchor_city,
-                            country=anchor_country,
-                            near_poi=near_poi,
-                            budget_tier=active_budget_tier,
-                            per_meal_budget_cap=_meal_budget_cap(effective_daily_target, meal_name),
-                            limit=8,
-                        ),
-                    )
-                ),
+                food_candidates + live_rows,
                 anchor_role=anchor_role,
                 max_cost=_meal_budget_cap(effective_daily_target, meal_name),
                 limit=3,
