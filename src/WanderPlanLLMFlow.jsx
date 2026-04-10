@@ -4031,17 +4031,57 @@ export default function WanderPlan(){
           spent:0
         };
       });
+      var planningMetaRows=await Promise.all((mapped||[]).map(async function(tripItem){
+        if(!tripItem||!isUuidLike(tripItem.id))return null;
+        if(String(tripItem.status||"").trim().toLowerCase()==="invited")return null;
+        try{
+          var ps=await apiJson("/trips/"+tripItem.id+"/planning-state",{method:"GET"},tok);
+          var state=(ps&&ps.state&&typeof ps.state==="object")?ps.state:{};
+          var rawStep=Number(ps&&ps.current_step);
+          var stepValue=Number.isFinite(rawStep)?normalizeWizardStepIndex(rawStep,state.wizard_order_version):0;
+          var lockedWindow=(state&&state.availability_locked_window&&typeof state.availability_locked_window==="object")?state.availability_locked_window:null;
+          var flightDateState=(state&&state.flight_dates&&typeof state.flight_dates==="object")?state.flight_dates:{};
+          var startDate=String((lockedWindow&&lockedWindow.start)||flightDateState.depart||"").slice(0,10);
+          var endDate=String((lockedWindow&&lockedWindow.end)||flightDateState.ret||"").slice(0,10);
+          var dateLabel=(startDate&&endDate)?(startDate+" to "+endDate):(startDate||endDate||"");
+          var daysLocked=Math.max(0,Number(state&&state.duration_days_locked)||0);
+          var inferredDays=(startDate&&endDate)?Math.max(0,inclusiveIsoDays(startDate,endDate)||0):0;
+          var dayValue=Math.max(daysLocked,inferredDays,Math.max(0,Number(tripItem.days)||0));
+          return {
+            id:tripItem.id,
+            step:Math.max(0,Number(stepValue)||0),
+            dates:dateLabel,
+            days:dayValue
+          };
+        }catch(e){
+          return null;
+        }
+      }));
+      var planningMetaById={};
+      (planningMetaRows||[]).forEach(function(row){
+        if(!row||!row.id)return;
+        planningMetaById[row.id]=row;
+      });
+      var enrichedMapped=mapped.map(function(tripItem){
+        var meta=planningMetaById[tripItem.id]||{};
+        return Object.assign({},tripItem,{
+          step:meta.step!==undefined?Math.max(0,Number(meta.step)||0):Math.max(0,Number(tripItem.step)||0),
+          dates:String(meta.dates||tripItem.dates||""),
+          days:Math.max(0,Number(meta.days||tripItem.days)||0)
+        });
+      });
       setTrips(function(prev){
-        if(mapped.length===0)return prev||[];
+        if(enrichedMapped.length===0)return prev||[];
         var prevMap={};(prev||[]).forEach(function(p){if(p&&p.id)prevMap[p.id]=p;});
-        var synced=mapped.map(function(t){
+        var synced=enrichedMapped.map(function(t){
           var p=prevMap[t.id];
           if(!p)return t;
           return Object.assign({},t,{
             destNames:(t.destNames&&t.destNames.trim())?t.destNames:(p.destNames||""),
             dests:(Array.isArray(t.dests)&&t.dests.length)?t.dests:(Array.isArray(p.dests)?p.dests:[]),
-            step:Number(p.step||0)||0,
-            dates:p.dates||"",
+            step:Number(t.step||p.step||0)||0,
+            dates:t.dates||p.dates||"",
+            days:Math.max(0,Number(t.days||p.days)||0),
             budget:Number(p.budget||0)||0,
             spent:Number(p.spent||0)||0
           });
@@ -4069,7 +4109,7 @@ export default function WanderPlan(){
       if(peerProfiles.length>0)mergeCrewFromPeers(peerProfiles);
       setNT(function(prev){
         if(!prev||!prev.id)return prev;
-        var found=mapped.find(function(t){return t.id===prev.id;});
+        var found=enrichedMapped.find(function(t){return t.id===prev.id;});
         if(!found)return prev;
         return Object.assign({},prev,{
           members:found.members,
@@ -4080,7 +4120,29 @@ export default function WanderPlan(){
           owner_id:found.owner_id,
           name:found.name,
           destNames:found.destNames,
-          dests:Array.isArray(found.dests)?found.dests.slice():[]
+          dests:Array.isArray(found.dests)?found.dests.slice():[],
+          step:Number(found.step||0)||0,
+          dates:String(found.dates||""),
+          days:Math.max(0,Number(found.days)||0)
+        });
+      });
+      setVT(function(prev){
+        if(!prev||!prev.id)return prev;
+        var found=enrichedMapped.find(function(t){return t.id===prev.id;});
+        if(!found)return prev;
+        return Object.assign({},prev,{
+          members:found.members,
+          status:found.status,
+          trip_status:found.trip_status,
+          my_status:found.my_status,
+          my_role:found.my_role,
+          owner_id:found.owner_id,
+          name:found.name,
+          destNames:found.destNames,
+          dests:Array.isArray(found.dests)?found.dests.slice():[],
+          step:Number(found.step||0)||0,
+          dates:String(found.dates||""),
+          days:Math.max(0,Number(found.days)||0)
         });
       });
     }catch(e){}
