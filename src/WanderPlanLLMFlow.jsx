@@ -9157,6 +9157,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       var grpSize=(jc||0)+1;var dietStr=(user.dietary||[]).join(", ")||"none";
       var totalDays=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays((availabilityData&&availabilityData.locked_window||{}).start,(availabilityData&&availabilityData.locked_window||{}).end)||10);
       var activeDiningTripId=resolveWizardTripId(currentTripId,newTrip,tr);
+      var DINING_CALL_TIMEOUT_MS=12000;
       var voteMembers=[{
         id:currentPlannerId,
         userId:userIdFromToken(authToken),
@@ -9258,23 +9259,54 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         });
         return out;
       }
+      function withTimeoutPromise(promise,timeoutMs){
+        return new Promise(function(resolve,reject){
+          var done=false;
+          var timer=setTimeout(function(){
+            if(done)return;
+            done=true;
+            reject(new Error("Request timed out"));
+          },Math.max(1000,Number(timeoutMs)||DINING_CALL_TIMEOUT_MS));
+          Promise.resolve(promise).then(function(value){
+            if(done)return;
+            done=true;
+            clearTimeout(timer);
+            resolve(value);
+          }).catch(function(err){
+            if(done)return;
+            done=true;
+            clearTimeout(timer);
+            reject(err);
+          });
+        });
+      }
+      function fetchDiningApi(path){
+        return withTimeoutPromise(apiJson(path,{method:"GET"},authToken),DINING_CALL_TIMEOUT_MS);
+      }
       function readDiningSuggestions(resp){
         return Array.isArray(resp&&resp.suggestions)?resp.suggestions:[];
       }
-      async function fetchDayBasedDiningSuggestions(){
+      async function fetchDayBasedDiningSuggestions(dayStart,dayEnd){
         var maxDays=Math.max(1,Math.min(21,totalDays||1));
-        var out=[];
-        for(var dayNum=1;dayNum<=maxDays;dayNum++){
-          try{
-            var dayResp=await apiJson("/trips/"+activeDiningTripId+"/dining/suggestions?day="+dayNum+"&meal=any&limit=50",{method:"GET"},authToken);
-            var daySuggestions=readDiningSuggestions(dayResp).map(function(row){
-              if(!(row&&typeof row==="object"))return row;
-              if(row.day!==undefined&&row.day!==null)return row;
-              return Object.assign({},row,{day:dayNum});
-            });
-            if(daySuggestions.length>0)out=mergeSuggestionRows(out,daySuggestions);
-          }catch(e){}
+        var start=Math.max(1,Math.min(maxDays,Number(dayStart)||1));
+        var end=Math.max(start,Math.min(maxDays,Number(dayEnd)||maxDays));
+        var jobs=[];
+        for(var dayNum=start;dayNum<=end;dayNum++){
+          jobs.push((function(dn){
+            return fetchDiningApi("/trips/"+activeDiningTripId+"/dining/suggestions?day="+dn+"&meal=any&limit=50").then(function(dayResp){
+              return readDiningSuggestions(dayResp).map(function(row){
+                if(!(row&&typeof row==="object"))return row;
+                if(row.day!==undefined&&row.day!==null)return row;
+                return Object.assign({},row,{day:dn});
+              });
+            }).catch(function(){return [];});
+          })(dayNum));
         }
+        var settled=await Promise.all(jobs);
+        var out=[];
+        settled.forEach(function(rows){
+          if(Array.isArray(rows)&&rows.length>0)out=mergeSuggestionRows(out,rows);
+        });
         return out;
       }
       function persistMealsSnapshot(nextMeals,nextVotes){
@@ -9297,7 +9329,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           var destCount=orderedDests.length;
           var firstChunk=Math.min(2,Math.max(1,destCount||1));
           var firstPath="/trips/"+activeDiningTripId+"/dining/suggestions"+(destCount>2?("?destination_offset=0&destination_limit="+firstChunk):"");
-          apiJson(firstPath,{method:"GET"},authToken).then(function(r){
+          fetchDiningApi(firstPath).then(function(r){
             var sug=readDiningSuggestions(r);
             setMAL(false);
             if(sug.length>0){
@@ -9305,7 +9337,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               persistMealsSnapshot(nextMeals,mealVotes);
               if(destCount>firstChunk){
                 setMChat(function(p){return p.concat([{from:"agent",text:"Refreshed first "+firstChunk+" destinations. Loading remaining destinations now..."}]);});
-                apiJson("/trips/"+activeDiningTripId+"/dining/suggestions?destination_offset="+firstChunk,{method:"GET"},authToken).then(function(nextResp){
+                fetchDiningApi("/trips/"+activeDiningTripId+"/dining/suggestions?destination_offset="+firstChunk).then(function(nextResp){
                   var nextSug=readDiningSuggestions(nextResp);
                   if(nextSug.length>0){
                     var appendedMeals=normalizeDiningPlan(buildDiningRowsFromSuggestions(nextSug));
@@ -9327,7 +9359,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               return;
             }
             if(destCount>2){
-              apiJson("/trips/"+activeDiningTripId+"/dining/suggestions",{method:"GET"},authToken).then(function(fallbackResp){
+              fetchDiningApi("/trips/"+activeDiningTripId+"/dining/suggestions").then(function(fallbackResp){
                 var fallbackSug=readDiningSuggestions(fallbackResp);
                 if(fallbackSug.length>0){
                   var fallbackMeals=normalizeDiningPlan(buildDiningRowsFromSuggestions(fallbackSug));
@@ -9335,11 +9367,19 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                   setMChat(function(p){return p.concat([{from:"agent",text:"Loaded real venue options using full-trip fallback fetch."}]);});
                   return;
                 }
-                fetchDayBasedDiningSuggestions().then(function(daySug){
+                fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
                   if(daySug.length>0){
                     var dayMeals=normalizeDiningPlan(buildDiningRowsFromSuggestions(daySug));
                     persistMealsSnapshot(dayMeals,mealVotes);
-                    setMChat(function(p){return p.concat([{from:"agent",text:"Loaded real venue options using day-by-day fallback fetch."}]);});
+                    setMChat(function(p){return p.concat([{from:"agent",text:"Loaded first fallback meal options quickly. Fetching additional days in background..."}]);});
+                    fetchDayBasedDiningSuggestions(3,Math.max(3,Math.min(21,totalDays||1))).then(function(moreDaySug){
+                      if(moreDaySug.length===0)return;
+                      setMeals(function(prevMeals){
+                        var mergedDayMeals=mergeDiningPlanRows(prevMeals,normalizeDiningPlan(buildDiningRowsFromSuggestions(moreDaySug)));
+                        persistMealsSnapshot(mergedDayMeals,mealVotes).catch(function(){return null;});
+                        return mergedDayMeals;
+                      });
+                    }).catch(function(){});
                     return;
                   }
                   setMChat(function(p){return p.concat([{from:"agent",text:"No real venue suggestions are available right now for this trip. Try again in a moment."}]);});
@@ -9347,11 +9387,19 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                   setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
                 });
               }).catch(function(){
-                fetchDayBasedDiningSuggestions().then(function(daySug){
+                fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
                   if(daySug.length>0){
                     var dayMeals=normalizeDiningPlan(buildDiningRowsFromSuggestions(daySug));
                     persistMealsSnapshot(dayMeals,mealVotes);
-                    setMChat(function(p){return p.concat([{from:"agent",text:"Loaded real venue options using day-by-day fallback fetch."}]);});
+                    setMChat(function(p){return p.concat([{from:"agent",text:"Loaded first fallback meal options quickly. Fetching additional days in background..."}]);});
+                    fetchDayBasedDiningSuggestions(3,Math.max(3,Math.min(21,totalDays||1))).then(function(moreDaySug){
+                      if(moreDaySug.length===0)return;
+                      setMeals(function(prevMeals){
+                        var mergedDayMeals=mergeDiningPlanRows(prevMeals,normalizeDiningPlan(buildDiningRowsFromSuggestions(moreDaySug)));
+                        persistMealsSnapshot(mergedDayMeals,mealVotes).catch(function(){return null;});
+                        return mergedDayMeals;
+                      });
+                    }).catch(function(){});
                     return;
                   }
                   setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
@@ -9364,11 +9412,19 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             setMChat(function(p){return p.concat([{from:"agent",text:"No real venue suggestions are available right now for this trip. Try again in a moment."}]);});
           }).catch(function(){
             setMAL(false);
-            fetchDayBasedDiningSuggestions().then(function(daySug){
+            fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
               if(daySug.length>0){
                 var dayMeals=normalizeDiningPlan(buildDiningRowsFromSuggestions(daySug));
                 persistMealsSnapshot(dayMeals,mealVotes);
-                setMChat(function(p){return p.concat([{from:"agent",text:"Loaded real venue options using day-by-day fallback fetch."}]);});
+                setMChat(function(p){return p.concat([{from:"agent",text:"Loaded first fallback meal options quickly. Fetching additional days in background..."}]);});
+                fetchDayBasedDiningSuggestions(3,Math.max(3,Math.min(21,totalDays||1))).then(function(moreDaySug){
+                  if(moreDaySug.length===0)return;
+                  setMeals(function(prevMeals){
+                    var mergedDayMeals=mergeDiningPlanRows(prevMeals,normalizeDiningPlan(buildDiningRowsFromSuggestions(moreDaySug)));
+                    persistMealsSnapshot(mergedDayMeals,mealVotes).catch(function(){return null;});
+                    return mergedDayMeals;
+                  });
+                }).catch(function(){});
                 return;
               }
               setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
@@ -9392,7 +9448,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             var destCount=orderedDests.length;
             var firstChunk=Math.min(2,Math.max(1,destCount||1));
             var firstPath="/trips/"+activeDiningTripId+"/dining/suggestions"+(destCount>2?("?destination_offset=0&destination_limit="+firstChunk):"");
-            apiJson(firstPath,{method:"GET"},authToken).then(function(r){
+            fetchDiningApi(firstPath).then(function(r){
               var sug=readDiningSuggestions(r);
               if(sug.length>0){
                 var rows=normalizeDiningPlan(buildDiningRowsFromSuggestions(sug));
@@ -9400,7 +9456,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                 persistMealsSnapshot(rows,{});
                 if(destCount>firstChunk){
                   setMChat(function(p){return p.concat([{from:"agent",text:"Loaded first "+firstChunk+" destinations. Fetching the rest in background..."}]);});
-                  apiJson("/trips/"+activeDiningTripId+"/dining/suggestions?destination_offset="+firstChunk,{method:"GET"},authToken).then(function(nextResp){
+                  fetchDiningApi("/trips/"+activeDiningTripId+"/dining/suggestions?destination_offset="+firstChunk).then(function(nextResp){
                     var nextSug=readDiningSuggestions(nextResp);
                     if(nextSug.length>0){
                       var nextRows=normalizeDiningPlan(buildDiningRowsFromSuggestions(nextSug));
@@ -9420,7 +9476,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                 return;
               }
               if(destCount>2){
-                apiJson("/trips/"+activeDiningTripId+"/dining/suggestions",{method:"GET"},authToken).then(function(fallbackResp){
+                fetchDiningApi("/trips/"+activeDiningTripId+"/dining/suggestions").then(function(fallbackResp){
                   var fallbackSug=readDiningSuggestions(fallbackResp);
                   if(fallbackSug.length>0){
                     var fallbackRows=normalizeDiningPlan(buildDiningRowsFromSuggestions(fallbackSug));
@@ -9429,12 +9485,20 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                     setMChat(function(p){return p.concat([{from:"agent",text:"Loaded meal options using full-trip fallback fetch."}]);});
                     return;
                   }
-                  fetchDayBasedDiningSuggestions().then(function(daySug){
+                  fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
                     if(daySug.length>0){
                       var dayRows=normalizeDiningPlan(buildDiningRowsFromSuggestions(daySug));
                       setML(false);
                       persistMealsSnapshot(dayRows,{});
-                      setMChat(function(p){return p.concat([{from:"agent",text:"Loaded meal options using day-by-day fallback fetch."}]);});
+                      setMChat(function(p){return p.concat([{from:"agent",text:"Loaded first fallback meal options quickly. Fetching additional days in background..."}]);});
+                      fetchDayBasedDiningSuggestions(3,Math.max(3,Math.min(21,totalDays||1))).then(function(moreDaySug){
+                        if(moreDaySug.length===0)return;
+                        setMeals(function(prevMeals){
+                          var mergedDayMeals=mergeDiningPlanRows(prevMeals,normalizeDiningPlan(buildDiningRowsFromSuggestions(moreDaySug)));
+                          persistMealsSnapshot(mergedDayMeals,{}).catch(function(){return null;});
+                          return mergedDayMeals;
+                        });
+                      }).catch(function(){});
                       return;
                     }
                     setML(false);
@@ -9444,12 +9508,20 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                     setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
                   });
                 }).catch(function(){
-                  fetchDayBasedDiningSuggestions().then(function(daySug){
+                  fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
                     if(daySug.length>0){
                       var dayRows=normalizeDiningPlan(buildDiningRowsFromSuggestions(daySug));
                       setML(false);
                       persistMealsSnapshot(dayRows,{});
-                      setMChat(function(p){return p.concat([{from:"agent",text:"Loaded meal options using day-by-day fallback fetch."}]);});
+                      setMChat(function(p){return p.concat([{from:"agent",text:"Loaded first fallback meal options quickly. Fetching additional days in background..."}]);});
+                      fetchDayBasedDiningSuggestions(3,Math.max(3,Math.min(21,totalDays||1))).then(function(moreDaySug){
+                        if(moreDaySug.length===0)return;
+                        setMeals(function(prevMeals){
+                          var mergedDayMeals=mergeDiningPlanRows(prevMeals,normalizeDiningPlan(buildDiningRowsFromSuggestions(moreDaySug)));
+                          persistMealsSnapshot(mergedDayMeals,{}).catch(function(){return null;});
+                          return mergedDayMeals;
+                        });
+                      }).catch(function(){});
                       return;
                     }
                     setML(false);
@@ -9464,12 +9536,20 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               setML(false);
               setMealErr("Could not load real venue suggestions yet. Please retry in a moment.");
             }).catch(function(){
-              fetchDayBasedDiningSuggestions().then(function(daySug){
+              fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
                 if(daySug.length>0){
                   var dayRows=normalizeDiningPlan(buildDiningRowsFromSuggestions(daySug));
                   setML(false);
                   persistMealsSnapshot(dayRows,{});
-                  setMChat(function(p){return p.concat([{from:"agent",text:"Loaded meal options using day-by-day fallback fetch."}]);});
+                  setMChat(function(p){return p.concat([{from:"agent",text:"Loaded first fallback meal options quickly. Fetching additional days in background..."}]);});
+                  fetchDayBasedDiningSuggestions(3,Math.max(3,Math.min(21,totalDays||1))).then(function(moreDaySug){
+                    if(moreDaySug.length===0)return;
+                    setMeals(function(prevMeals){
+                      var mergedDayMeals=mergeDiningPlanRows(prevMeals,normalizeDiningPlan(buildDiningRowsFromSuggestions(moreDaySug)));
+                      persistMealsSnapshot(mergedDayMeals,{}).catch(function(){return null;});
+                      return mergedDayMeals;
+                    });
+                  }).catch(function(){});
                   return;
                 }
                 setML(false);
