@@ -1123,6 +1123,24 @@ function normalizePoiStateMap(rowsMap, poiList, sharedPool){
   return out;
 }
 
+function normalizePoiDecisionStateMap(statusMap, poiList, sharedPool){
+  var rows=mergePoiListsByCanonical(
+    Array.isArray(poiList)?poiList:[],
+    (sharedPool&&typeof sharedPool==="object")?sharedPool:{}
+  );
+  var src=(statusMap&&typeof statusMap==="object")?statusMap:{};
+  var out={};
+  rows.forEach(function(poi,idx){
+    var rowMeta=readPoiVoteRow(src,poi,idx);
+    var raw=src[rowMeta.key];
+    if(raw===undefined)raw=src[idx];
+    if(raw===undefined)raw=src[String(idx)];
+    var v=String(raw||"").trim().toLowerCase();
+    if(v==="yes"||v==="no")out[rowMeta.key]=v;
+  });
+  return out;
+}
+
 function readPoiSelectionRow(selectionMap,poi,idx){
   var map=(selectionMap&&typeof selectionMap==="object")?selectionMap:{};
   var key=canonicalPoiVoteKey(poi,idx);
@@ -3694,6 +3712,7 @@ export default function WanderPlan(){
   var airportResolveCacheRef=useRef({});
   var autoTripAcceptRef=useRef({});
   var poiAutoGenerateRef=useRef({});
+  var durationDraftSaveTimerRef=useRef(null);
   // Wizard interaction states
   var[destMemberVotes,setDMV]=useState({});
   var[tripJoined,setTJ]=useState({});
@@ -4561,7 +4580,12 @@ export default function WanderPlan(){
         setRoutePlan(normalizedRoutePlan);
         setRPD(!!(normalizedRoutePlan&&Array.isArray(normalizedRoutePlan.destinations)&&normalizedRoutePlan.destinations.length));
       }
-      setPV(normalizePoiStateMap(st.poi_votes,pois,st.poi_option_pool));
+      var planningPool=(st.poi_option_pool&&typeof st.poi_option_pool==="object")?st.poi_option_pool:poiOptionPool;
+      var mergedPlanningPois=mergePoiListsByCanonical(pois,planningPool);
+      setPV(normalizePoiStateMap(st.poi_votes,mergedPlanningPois,planningPool));
+      if(st.poi_status&&typeof st.poi_status==="object"){
+        setPS(normalizePoiDecisionStateMap(st.poi_status,mergedPlanningPois,planningPool));
+      }
       if(st.poi_option_pool&&typeof st.poi_option_pool==="object"){
         setPOP(st.poi_option_pool);
         setPois(function(prev){
@@ -4572,13 +4596,13 @@ export default function WanderPlan(){
           return merged;
         });
       }
-      setPMC(normalizePoiStateMap(st.poi_member_choices,pois,st.poi_option_pool));
-      if(st.poi_member_choices&&typeof st.poi_member_choices==="object"){
+      setPMC(normalizePoiStateMap(st.poi_member_choices,mergedPlanningPois,planningPool));
+      if(st.poi_member_choices&&typeof st.poi_member_choices==="object"&&!(st.poi_status&&typeof st.poi_status==="object")){
         var me=getCurrentPlannerId();
         if(me){
           setPS(function(prev){
             var next=Object.assign({},prev||{});
-            (pois||[]).forEach(function(p,idx){
+            (mergedPlanningPois||[]).forEach(function(p,idx){
               var rowMeta=readPoiSelectionRow(st.poi_member_choices,p,idx);
               var v=String((rowMeta.row&&rowMeta.row[me])||"").trim().toLowerCase();
               if(v==="yes"||v==="no")next[idx]=v;
@@ -4635,14 +4659,21 @@ export default function WanderPlan(){
       if(patch.current_step!==undefined)body.current_step=Number(patch.current_step)||0;
       if(patch.state&&typeof patch.state==="object"){
         body.state=Object.assign({},patch.state);
+        var poolForNormalization=(body.state.poi_option_pool!==undefined)
+          ? ((body.state.poi_option_pool&&typeof body.state.poi_option_pool==="object")?body.state.poi_option_pool:{})
+          : ((poiOptionPool&&typeof poiOptionPool==="object")?poiOptionPool:{});
+        var rowsForNormalization=mergePoiListsByCanonical(pois,poolForNormalization);
         if(body.state.dest_member_votes&&typeof body.state.dest_member_votes==="object"){
           body.state.dest_member_votes=normalizeDestinationVoteState(body.state.dest_member_votes);
         }
         if(body.state.poi_votes&&typeof body.state.poi_votes==="object"){
-          body.state.poi_votes=normalizePoiStateMap(body.state.poi_votes,pois,poiOptionPool);
+          body.state.poi_votes=normalizePoiStateMap(body.state.poi_votes,rowsForNormalization,poolForNormalization);
         }
         if(body.state.poi_member_choices&&typeof body.state.poi_member_choices==="object"){
-          body.state.poi_member_choices=normalizePoiStateMap(body.state.poi_member_choices,pois,poiOptionPool);
+          body.state.poi_member_choices=normalizePoiStateMap(body.state.poi_member_choices,rowsForNormalization,poolForNormalization);
+        }
+        if(body.state.poi_status&&typeof body.state.poi_status==="object"){
+          body.state.poi_status=normalizePoiDecisionStateMap(body.state.poi_status,rowsForNormalization,poolForNormalization);
         }
       }
     }
@@ -4663,8 +4694,11 @@ export default function WanderPlan(){
         if(state.dest_member_votes&&typeof state.dest_member_votes==="object"){
           setDMV(normalizeDestinationVoteState(state.dest_member_votes));
         }
-        if(state.poi_votes&&typeof state.poi_votes==="object")setPV(normalizePoiStateMap(state.poi_votes,pois,state.poi_option_pool||poiOptionPool));
-        if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(normalizePoiStateMap(state.poi_member_choices,pois,state.poi_option_pool||poiOptionPool));
+        var returnedPool=(state.poi_option_pool&&typeof state.poi_option_pool==="object")?state.poi_option_pool:poiOptionPool;
+        var returnedPoiRows=mergePoiListsByCanonical(pois,returnedPool);
+        if(state.poi_votes&&typeof state.poi_votes==="object")setPV(normalizePoiStateMap(state.poi_votes,returnedPoiRows,returnedPool));
+        if(state.poi_member_choices&&typeof state.poi_member_choices==="object")setPMC(normalizePoiStateMap(state.poi_member_choices,returnedPoiRows,returnedPool));
+        if(state.poi_status&&typeof state.poi_status==="object")setPS(normalizePoiDecisionStateMap(state.poi_status,returnedPoiRows,returnedPool));
         if(state.duration_days_locked!==undefined)setSDD(Math.max(0,Number(state.duration_days_locked)||0));
         if(state.duration_revision_signature!==undefined)setSDSig(String(state.duration_revision_signature||"").trim());
         if(state.duration_per_destination&&typeof state.duration_per_destination==="object")setDPD(state.duration_per_destination);
@@ -4715,6 +4749,21 @@ export default function WanderPlan(){
       return r;
     }).catch(function(){return null;});
   }
+  useEffect(function(){
+    if(wizStep!==9)return;
+    var tid=resolveWizardTripId(currentTripId,newTrip);
+    if(!(authToken&&tid&&isUuidLike(tid)))return;
+    if(durationDraftSaveTimerRef.current)clearTimeout(durationDraftSaveTimerRef.current);
+    durationDraftSaveTimerRef.current=setTimeout(function(){
+      saveTripPlanningState({state:{duration_per_destination:Object.assign({},durPerDest||{})}}).catch(function(){return null;});
+    },500);
+    return function(){
+      if(durationDraftSaveTimerRef.current){
+        clearTimeout(durationDraftSaveTimerRef.current);
+        durationDraftSaveTimerRef.current=null;
+      }
+    };
+  },[wizStep,durPerDest,authToken,currentTripId,newTrip&&newTrip.id]);
   function refreshCompanionNow(tid,silent){
     var tripId=String(tid||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
     if(!(loaded&&authToken&&tripId&&isUuidLike(tripId)))return Promise.resolve(null);
@@ -7124,11 +7173,15 @@ export default function WanderPlan(){
     }
     function saveBudgetThenAdvance(){
       setBSE("");
-      if(!(authToken&&currentTripId)){adv();return;}
+      var budgetTripId=resolveWizardTripId(currentTripId,newTrip,tr);
+      if(!(authToken&&budgetTripId&&isUuidLike(budgetTripId))){
+        setBSE("Trip context missing. Please refresh and try again.");
+        return;
+      }
       var chosenTier=String(sharedBudgetTier||user.budget||"moderate").trim().toLowerCase()||"moderate";
       setBSL(true);
       saveTripPlanningState({state:{shared_budget_tier:chosenTier}}).catch(function(){return null;}).then(function(){
-        return apiJson("/trips/"+currentTripId+"/budget",{method:"POST",body:{daily_budget:budgetDailyValue(chosenTier),currency:"USD"}},authToken);
+        return apiJson("/trips/"+budgetTripId+"/budget",{method:"POST",body:{daily_budget:budgetDailyValue(chosenTier),currency:"USD"}},authToken);
       }).then(function(){
         setBSL(false);adv();
       }).catch(function(e){
@@ -7979,7 +8032,9 @@ export default function WanderPlan(){
         }
         var syncStatus=Object.assign({},poiStatus||{});
         acceptedIdx.forEach(function(i){syncStatus[i]="yes";});
-        syncTripPoisToBackend(syncStatus).finally(function(){adv();});
+        saveTripPlanningState({state:{poi_status:syncStatus,poi_votes:normalizePoiStateMap(poiVotes,poiRows,poiOptionPool),poi_member_choices:normalizePoiStateMap(poiMemberChoices,poiRows,poiOptionPool)}}).catch(function(){return null;}).finally(function(){
+          syncTripPoisToBackend(syncStatus,poiRows).finally(function(){adv();});
+        });
       }
       var poiGroupPrefs=wizardPoiGroupPrefs;
       var poiCurrentSignature=poiCurrentSignatureGlobal;
@@ -8191,7 +8246,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         });
         setPS(nextStatus);
         logWizAction("record_selection",{key:"pois.voting",value:ranked.map(function(r){return {name:r.poi.name,up:r.up,down:r.down,approved:r.up>=r.down};})});
-        syncTripPoisToBackend(nextStatus).finally(function(){adv();});
+        saveTripPlanningState({state:{poi_status:nextStatus,poi_votes:normalizePoiStateMap(poiVotes,poiRows,poiOptionPool),poi_member_choices:normalizePoiStateMap(poiMemberChoices,poiRows,poiOptionPool)}}).catch(function(){return null;}).finally(function(){
+          syncTripPoisToBackend(nextStatus,poiRows).finally(function(){adv();});
+        });
       }
       if(soloTripMode){
         return(<div>
@@ -8412,7 +8469,11 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           flight_dates:nextFlightDates,
           flights_confirmed:shouldResetTravel?false:flightConfirmed,
           flight_booking_links:shouldResetTravel?[]:flightBookLinks
-        }}).finally(function(){adv();});
+        }}).then(function(){
+          adv();
+        }).catch(function(){
+          setCSM("Could not save duration changes. Please try again.");
+        });
       }
 
       return(<div>
