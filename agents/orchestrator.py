@@ -8416,7 +8416,12 @@ async def _prefetch_live_food_candidates(
 
 
 @app.get("/trips/{trip_id}/dining/suggestions")
-async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_user_id)):
+async def dining_suggestions(
+    trip_id: str,
+    destination_offset: int = 0,
+    destination_limit: int = 0,
+    user_id: str = Depends(get_current_user_id),
+):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     async with db_pool.acquire() as conn:
@@ -8532,7 +8537,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         base_date = (trip_row["created_at"].date() if trip_row and trip_row["created_at"] else date.today())
         ordered_day_dates = [base_date + timedelta(days=i) for i in range(default_duration)]
 
-    fallback_destinations = [
+    fallback_destinations_all = [
         {
             "city": str(row["destination"] or "").strip(),
             "country": str(row["country"] or "").strip(),
@@ -8540,6 +8545,95 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         for row in destination_rows
         if str(row["destination"] or "").strip()
     ]
+    route_stops = route_plan.get("destinations") if isinstance(route_plan, dict) and isinstance(route_plan.get("destinations"), list) else []
+    route_day_map: dict[str, int] = {}
+    route_order: list[str] = []
+    for stop in route_stops:
+        if not isinstance(stop, dict):
+            continue
+        stop_key = _canonical_place_key(stop.get("destination") or stop.get("name"))
+        if not stop_key:
+            continue
+        try:
+            stop_days = max(1, int(stop.get("days") or stop.get("duration_days") or 1))
+        except Exception:
+            stop_days = 1
+        route_day_map[stop_key] = stop_days
+        if stop_key not in route_order:
+            route_order.append(stop_key)
+
+    by_key: dict[str, dict[str, str]] = {}
+    for row in fallback_destinations_all:
+        key = _canonical_place_key(row.get("city"))
+        if key and key not in by_key:
+            by_key[key] = row
+    ordered_destinations: list[dict[str, str]] = []
+    for key in route_order:
+        if key in by_key:
+            ordered_destinations.append(by_key[key])
+    for row in fallback_destinations_all:
+        key = _canonical_place_key(row.get("city"))
+        if not key:
+            continue
+        if not any(_canonical_place_key(item.get("city")) == key for item in ordered_destinations):
+            ordered_destinations.append(row)
+    if not ordered_destinations:
+        ordered_destinations = fallback_destinations_all
+
+    try:
+        scoped_offset = max(0, int(destination_offset or 0))
+    except Exception:
+        scoped_offset = 0
+    try:
+        scoped_limit = max(0, int(destination_limit or 0))
+    except Exception:
+        scoped_limit = 0
+    scoped_offset = min(scoped_offset, max(0, len(ordered_destinations) - 1)) if ordered_destinations else 0
+    if scoped_limit > 0:
+        fallback_destinations = ordered_destinations[scoped_offset : scoped_offset + scoped_limit]
+    else:
+        fallback_destinations = ordered_destinations[scoped_offset:]
+    if not fallback_destinations:
+        fallback_destinations = ordered_destinations[:]
+
+    total_day_count = len(ordered_day_dates)
+    if total_day_count <= 0:
+        total_day_count = default_duration
+    per_dest_default = max(1, int(round(total_day_count / max(1, len(ordered_destinations))))) if ordered_destinations else 1
+
+    ordered_keys = [_canonical_place_key(row.get("city")) for row in ordered_destinations]
+    pre_days = 0
+    for key in ordered_keys[:scoped_offset]:
+        if not key:
+            continue
+        pre_days += route_day_map.get(key, per_dest_default)
+    if scoped_limit > 0:
+        subset_days = 0
+        for row in fallback_destinations:
+            key = _canonical_place_key(row.get("city"))
+            if not key:
+                continue
+            subset_days += route_day_map.get(key, per_dest_default)
+    else:
+        subset_days = max(1, total_day_count - pre_days)
+    if subset_days <= 0:
+        subset_days = max(1, per_dest_default * max(1, len(fallback_destinations)))
+
+    day_number_base = 1
+    if ordered_day_dates:
+        slice_start = min(max(0, pre_days), len(ordered_day_dates))
+        slice_end = min(len(ordered_day_dates), slice_start + max(1, subset_days))
+        scoped_day_dates = ordered_day_dates[slice_start:slice_end]
+        if not scoped_day_dates:
+            scoped_day_dates = ordered_day_dates[: max(1, min(len(ordered_day_dates), subset_days))]
+            slice_start = 0
+        day_number_base = slice_start + 1
+        ordered_day_dates = scoped_day_dates
+    else:
+        base_date = (trip_row["created_at"].date() if trip_row and trip_row["created_at"] else date.today()) + timedelta(days=max(0, pre_days))
+        ordered_day_dates = [base_date + timedelta(days=i) for i in range(max(1, subset_days))]
+        day_number_base = max(1, pre_days + 1)
+
     llm_destination_themes: dict[str, dict[str, list[dict[str, Any]]]] = {}
     if fallback_destinations:
         llm_destination_themes = await asyncio.to_thread(
@@ -8672,7 +8766,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
 
     suggestions: list[dict[str, Any]] = []
     for day_idx, day_date in enumerate(ordered_day_dates):
-        day_number = day_idx + 1
+        day_number = day_number_base + day_idx
         day_activities = activities_by_date.get(day_date, [])
         fallback_poi = poi_candidates[day_idx % len(poi_candidates)] if poi_candidates else None
         fallback_dest = fallback_destinations[day_idx % len(fallback_destinations)] if fallback_destinations else {"city": "", "country": ""}
