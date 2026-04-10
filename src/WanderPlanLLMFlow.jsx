@@ -9134,6 +9134,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
     {wizStep===11&&(function(){
       var grpSize=(jc||0)+1;var dietStr=(user.dietary||[]).join(", ")||"none";
       var totalDays=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays((availabilityData&&availabilityData.locked_window||{}).start,(availabilityData&&availabilityData.locked_window||{}).end)||10);
+      var activeDiningTripId=resolveWizardTripId(currentTripId,newTrip,tr);
       var voteMembers=[{
         id:currentPlannerId,
         userId:userIdFromToken(authToken),
@@ -9208,12 +9209,12 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       function sendMealChat(){
         if(!mealAsk.trim()||mealAskLoad)return;var msg=mealAsk.trim();setMA("");setMAL(true);
         setMChat(function(p){return p.concat([{from:"user",text:msg}]);});
-        if(authToken&&currentTripId){
+        if(authToken&&activeDiningTripId&&isUuidLike(activeDiningTripId)){
           setMealErr("");
           var orderedDests=orderDestinationsByRoutePlan(dests,routePlan);
           var destCount=orderedDests.length;
           var firstChunk=Math.min(2,Math.max(1,destCount||1));
-          var firstPath="/trips/"+currentTripId+"/dining/suggestions"+(destCount>2?("?destination_offset=0&destination_limit="+firstChunk):"");
+          var firstPath="/trips/"+activeDiningTripId+"/dining/suggestions"+(destCount>2?("?destination_offset=0&destination_limit="+firstChunk):"");
           apiJson(firstPath,{method:"GET"},authToken).then(function(r){
             var sug=(r&&r.suggestions)||[];
             setMAL(false);
@@ -9222,18 +9223,18 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               setMeals(nextMeals);
               setMD(true);
               saveTripPlanningState({state:{meal_plan:nextMeals,meal_votes:mealVotes}}).then(function(){
-                refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+                refreshTripPlanningState(authToken,activeDiningTripId).catch(function(){});
               });
               if(destCount>firstChunk){
                 setMChat(function(p){return p.concat([{from:"agent",text:"Refreshed first "+firstChunk+" destinations. Loading remaining destinations now..."}]);});
-                apiJson("/trips/"+currentTripId+"/dining/suggestions?destination_offset="+firstChunk,{method:"GET"},authToken).then(function(nextResp){
+                apiJson("/trips/"+activeDiningTripId+"/dining/suggestions?destination_offset="+firstChunk,{method:"GET"},authToken).then(function(nextResp){
                   var nextSug=(nextResp&&nextResp.suggestions)||[];
                   if(nextSug.length>0){
                     var appendedMeals=normalizeDiningPlan(buildDiningRowsFromSuggestions(nextSug));
                     setMeals(function(prevMeals){
                       var mergedMeals=mergeDiningPlanRows(prevMeals,appendedMeals);
                       saveTripPlanningState({state:{meal_plan:mergedMeals,meal_votes:mealVotes}}).then(function(){
-                        refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+                        refreshTripPlanningState(authToken,activeDiningTripId).catch(function(){});
                       });
                       return mergedMeals;
                     });
@@ -9247,6 +9248,25 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               }else{
                 setMChat(function(p){return p.concat([{from:"agent",text:"Refreshed real venue options from backend with your current budget settings."}]);});
               }
+              return;
+            }
+            if(destCount>2){
+              apiJson("/trips/"+activeDiningTripId+"/dining/suggestions",{method:"GET"},authToken).then(function(fallbackResp){
+                var fallbackSug=(fallbackResp&&fallbackResp.suggestions)||[];
+                if(fallbackSug.length>0){
+                  var fallbackMeals=normalizeDiningPlan(buildDiningRowsFromSuggestions(fallbackSug));
+                  setMeals(fallbackMeals);
+                  setMD(true);
+                  saveTripPlanningState({state:{meal_plan:fallbackMeals,meal_votes:mealVotes}}).then(function(){
+                    refreshTripPlanningState(authToken,activeDiningTripId).catch(function(){});
+                  });
+                  setMChat(function(p){return p.concat([{from:"agent",text:"Loaded real venue options using full-trip fallback fetch."}]);});
+                  return;
+                }
+                setMChat(function(p){return p.concat([{from:"agent",text:"No real venue suggestions are available right now for this trip. Try again in a moment."}]);});
+              }).catch(function(){
+                setMChat(function(p){return p.concat([{from:"agent",text:"Could not refresh real venue suggestions right now. Please try again."}]);});
+              });
               return;
             }
             setMChat(function(p){return p.concat([{from:"agent",text:"No real venue suggestions are available right now for this trip. Try again in a moment."}]);});
@@ -9265,29 +9285,29 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         {!mealDone&&!mealLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>The agent builds a day-by-day breakfast/lunch/dinner plan with famous local food cues, then attaches real venue options that fit those choices and your budget.</p>{mealErr&&<p style={{fontSize:12,color:C.wrn,marginBottom:10}}>{mealErr}</p>}<button onClick={function(){
           setML(true);
           setMealErr("");
-          if(authToken&&currentTripId){
+          if(authToken&&activeDiningTripId&&isUuidLike(activeDiningTripId)){
             var orderedDests=orderDestinationsByRoutePlan(dests,routePlan);
             var destCount=orderedDests.length;
             var firstChunk=Math.min(2,Math.max(1,destCount||1));
-            var firstPath="/trips/"+currentTripId+"/dining/suggestions"+(destCount>2?("?destination_offset=0&destination_limit="+firstChunk):"");
+            var firstPath="/trips/"+activeDiningTripId+"/dining/suggestions"+(destCount>2?("?destination_offset=0&destination_limit="+firstChunk):"");
             apiJson(firstPath,{method:"GET"},authToken).then(function(r){
               var sug=(r&&r.suggestions)||[];
               if(sug.length>0){
                 var rows=normalizeDiningPlan(buildDiningRowsFromSuggestions(sug));
                 setMeals(rows);setML(false);setMD(true);
                 saveTripPlanningState({state:{meal_plan:rows,meal_votes:{}}}).then(function(){
-                  refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+                  refreshTripPlanningState(authToken,activeDiningTripId).catch(function(){});
                 });
                 if(destCount>firstChunk){
                   setMChat(function(p){return p.concat([{from:"agent",text:"Loaded first "+firstChunk+" destinations. Fetching the rest in background..."}]);});
-                  apiJson("/trips/"+currentTripId+"/dining/suggestions?destination_offset="+firstChunk,{method:"GET"},authToken).then(function(nextResp){
+                  apiJson("/trips/"+activeDiningTripId+"/dining/suggestions?destination_offset="+firstChunk,{method:"GET"},authToken).then(function(nextResp){
                     var nextSug=(nextResp&&nextResp.suggestions)||[];
                     if(nextSug.length>0){
                       var nextRows=normalizeDiningPlan(buildDiningRowsFromSuggestions(nextSug));
                       setMeals(function(prevMeals){
                         var mergedRows=mergeDiningPlanRows(prevMeals,nextRows);
                         saveTripPlanningState({state:{meal_plan:mergedRows,meal_votes:{}}}).then(function(){
-                          refreshTripPlanningState(authToken,currentTripId||tr.id).catch(function(){});
+                          refreshTripPlanningState(authToken,activeDiningTripId).catch(function(){});
                         });
                         return mergedRows;
                       });
@@ -9299,6 +9319,26 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                     setMChat(function(p){return p.concat([{from:"agent",text:"Background fetch for remaining destinations failed. You can still continue with what loaded."}]);});
                   });
                 }
+                return;
+              }
+              if(destCount>2){
+                apiJson("/trips/"+activeDiningTripId+"/dining/suggestions",{method:"GET"},authToken).then(function(fallbackResp){
+                  var fallbackSug=(fallbackResp&&fallbackResp.suggestions)||[];
+                  if(fallbackSug.length>0){
+                    var fallbackRows=normalizeDiningPlan(buildDiningRowsFromSuggestions(fallbackSug));
+                    setMeals(fallbackRows);setML(false);setMD(true);
+                    saveTripPlanningState({state:{meal_plan:fallbackRows,meal_votes:{}}}).then(function(){
+                      refreshTripPlanningState(authToken,activeDiningTripId).catch(function(){});
+                    });
+                    setMChat(function(p){return p.concat([{from:"agent",text:"Loaded meal options using full-trip fallback fetch."}]);});
+                    return;
+                  }
+                  setML(false);
+                  setMealErr("Could not load real venue suggestions yet. Please retry in a moment.");
+                }).catch(function(){
+                  setML(false);
+                  setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy.");
+                });
                 return;
               }
               setML(false);
