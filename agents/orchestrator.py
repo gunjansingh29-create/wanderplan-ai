@@ -7499,6 +7499,69 @@ _MEAL_ACTIVITY_WORDS = {
     "viewing", "walk", "workshop",
 }
 
+_SYNTHETIC_MEAL_NAME_PHRASES = (
+    "near your stay",
+    "near sightseeing stop",
+    "area guidance",
+    "trip highlights",
+    "stay area",
+    "sightseeing stop",
+    "temple-access",
+    "temple access",
+)
+
+
+def _is_synthetic_meal_candidate_name(raw_name: Any) -> bool:
+    name = str(raw_name or "").strip()
+    if not name:
+        return True
+    lowered = re.sub(r"\s+", " ", name.lower()).strip()
+    if len(lowered) > 96:
+        return True
+    if any(marker in lowered for marker in _SYNTHETIC_MEAL_NAME_PHRASES):
+        return True
+    if re.search(r"\b(?:arrive in|travel to|check in|check out)\b", lowered):
+        return True
+    if re.search(r"\b(?:approx\.?|approximately)\b", lowered):
+        return True
+    if re.search(r"\b(?:breakfast|lunch|dinner)\s+near\b", lowered):
+        return True
+    if re.search(r"\b(?:options?|option)\b", lowered) and re.search(r"\bnear\b", lowered):
+        return True
+    if " from " in lowered and " to " in lowered and " transit " in lowered:
+        return True
+    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    if len(tokens) >= 10:
+        generic_tokens = {
+            "breakfast", "lunch", "dinner", "meal", "near", "area", "stay", "stop",
+            "sightseeing", "trip", "market", "temple", "cafe", "restaurant",
+        }
+        if sum(1 for token in tokens if token in generic_tokens) >= max(6, len(tokens) - 2):
+            return True
+    return False
+
+
+def _is_grounded_food_source(raw_source: Any) -> bool:
+    source = str(raw_source or "").strip().lower()
+    if not source:
+        return False
+    grounded_markers = (
+        "google",
+        "place",
+        "openstreetmap",
+        "osm",
+        "mapbox",
+        "foursquare",
+        "tripadvisor",
+        "yelp",
+        "zomato",
+        "swiggy",
+        "manual",
+        "user",
+        "catalog",
+    )
+    return any(marker in source for marker in grounded_markers)
+
 
 def _canonical_place_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
@@ -8078,6 +8141,8 @@ def _select_meal_options(
         name = str(row.get("name") or "").strip()
         if not name:
             continue
+        if _is_synthetic_meal_candidate_name(name):
+            continue
         row_cost = float(row.get("cost") or 0)
         if max_cost > 0 and row_cost > 0 and row_cost > (max_cost * 1.35):
             continue
@@ -8153,7 +8218,7 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
         )
         poi_rows = await conn.fetch(
             """
-            SELECT id, name, category, city, country, tags, rating, cost_estimate_usd, approved
+            SELECT id, name, category, city, country, tags, rating, cost_estimate_usd, source, approved
             FROM pois
             WHERE trip_id = $1
             ORDER BY approved DESC, rating DESC NULLS LAST, created_at ASC
@@ -8225,28 +8290,16 @@ async def dining_suggestions(trip_id: str, user_id: str = Depends(get_current_us
             "tags": row["tags"] or [],
             "rating": float(row["rating"] or 0),
             "cost": float(row["cost_estimate_usd"] or 0),
+            "source": str(row["source"] or "").strip(),
             "approved": bool(row["approved"]),
         }
         if item["name"]:
             poi_candidates.append(item)
             if item["category"] in {"food", "dining"}:
-                food_candidates.append(item)
-
-    if not food_candidates:
-        for idx, seed in enumerate(POI_CATALOG.get("food", [])):
-            food_candidates.append(
-                {
-                    "id": f"seed-food-{idx+1}",
-                    "name": str(seed.get("name") or "").strip(),
-                    "category": "food",
-                    "city": str(seed.get("city") or "").strip(),
-                    "country": str(seed.get("country") or "").strip(),
-                    "tags": list(seed.get("tags") or []),
-                    "rating": float(seed.get("rating") or 4.3),
-                    "cost": float(seed.get("cost") or 22),
-                    "approved": True,
-                }
-            )
+                if _is_synthetic_meal_candidate_name(item["name"]):
+                    continue
+                if _is_grounded_food_source(item.get("source")) or item["approved"]:
+                    food_candidates.append(item)
 
     if not poi_candidates:
         for idx, seed in enumerate(POI_CATALOG.get("culture", [])[:3]):

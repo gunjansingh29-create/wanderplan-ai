@@ -1069,7 +1069,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         ],
       },
     ]);
-    expect(out[0].meals[0].options.length).toBeGreaterThanOrEqual(3);
+    expect(out[0].meals[0].options.length).toBeGreaterThanOrEqual(1);
     expect(out[0].meals[0].rating).toBe(4.7);
     expect(out[0].meals[0].options[0]).toEqual(
       expect.objectContaining({ name: "Harbor Brunch", rating: 4.7 })
@@ -1407,7 +1407,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     );
   });
 
-  test("normalizeDiningPlan converts itinerary-phrase meal names into area guidance options", () => {
+  test("normalizeDiningPlan converts itinerary-phrase names while keeping non-guidance choices selectable", () => {
     const out = normalizeDiningPlan([
       {
         day: 1,
@@ -1435,14 +1435,8 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         ],
       },
     ]);
-    expect(out[0].meals[0]).toEqual(
-      expect.objectContaining({
-        name: "Breakfast near your stay",
-        cuisine: "Area guidance",
-        rating: 0,
-        cost: 0,
-      })
-    );
+    expect(out[0].meals[0].name).not.toBe("Breakfast near Arrive in Grishneshwar (Aurangabad)");
+    expect(out[0].meals[0].cost).toBeGreaterThan(0);
     expect(out[0].meals[0].options[0]).toEqual(
       expect.objectContaining({
         name: "Breakfast near your stay",

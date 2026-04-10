@@ -2864,6 +2864,12 @@ function isAreaGuidanceMealOption(option,destination){
     isManufacturedMealName(option&&option.name,destination);
 }
 
+function hasRealMealOption(options,destination){
+  return (Array.isArray(options)?options:[]).some(function(opt){
+    return !isAreaGuidanceMealOption(opt,destination);
+  });
+}
+
 function mealTimeForType(type){
   var t=String(type||"meal").toLowerCase();
   if(t==="breakfast")return "08:00";
@@ -2926,27 +2932,30 @@ export function normalizeDiningPlan(rows){
         };
       });
       var options=optionSeed.slice();
-      guidanceVariants.forEach(function(variant,variantIndex){
-        if(options.length>=4)return;
-        var candidateName=String(variant.name||"").trim();
-        var exists=options.some(function(opt){
-          return String(opt&&opt.name||"").trim().toLowerCase()===candidateName.toLowerCase();
+      var optionsHaveReal=hasRealMealOption(options,destination);
+      if(!optionsHaveReal){
+        guidanceVariants.forEach(function(variant,variantIndex){
+          if(options.length>=4)return;
+          var candidateName=String(variant.name||"").trim();
+          var exists=options.some(function(opt){
+            return String(opt&&opt.name||"").trim().toLowerCase()===candidateName.toLowerCase();
+          });
+          if(exists)return;
+          options.push({
+            option_id:"meal-opt-"+dayIndex+"-"+mealIndex+"-fallback-"+variantIndex,
+            name:candidateName,
+            city:destination,
+            cuisine:"Area guidance",
+            cost:0,
+            rating:0,
+            note:String(variant.note||"").trim(),
+            travel_minutes:Math.max(4,8+(variantIndex*4)),
+            tags:["area-guidance",String(type||"meal").toLowerCase()],
+            anchorRole:anchorRole,
+            anchorLabel:anchorLabel
+          });
         });
-        if(exists)return;
-        options.push({
-          option_id:"meal-opt-"+dayIndex+"-"+mealIndex+"-fallback-"+variantIndex,
-          name:candidateName,
-          city:destination,
-          cuisine:"Area guidance",
-          cost:0,
-          rating:0,
-          note:String(variant.note||"").trim(),
-          travel_minutes:Math.max(4,8+(variantIndex*4)),
-          tags:["area-guidance",String(type||"meal").toLowerCase()],
-          anchorRole:anchorRole,
-          anchorLabel:anchorLabel
-        });
-      });
+      }
       var selectedOpt=(meal&&meal.selectedOption!==undefined&&meal.selectedOption!==null)?Number(meal.selectedOption):0;
       if(!(selectedOpt>=0&&selectedOpt<options.length))selectedOpt=0;
       var requestedName=String(
@@ -2954,7 +2963,12 @@ export function normalizeDiningPlan(rows){
         (meal&&meal.name) ||
         ""
       ).trim();
-      if(requestedName && isManufacturedMealName(requestedName,destination)){
+      if(optionsHaveReal && isAreaGuidanceMealOption(options[selectedOpt],destination)){
+        var firstRealIndex=options.findIndex(function(opt){
+          return !isAreaGuidanceMealOption(opt,destination);
+        });
+        if(firstRealIndex>=0)selectedOpt=firstRealIndex;
+      }else if(requestedName && isManufacturedMealName(requestedName,destination)){
         var groundedIndex=options.findIndex(function(opt){
           return isAreaGuidanceMealOption(opt,destination);
         });
@@ -3188,8 +3202,12 @@ export function buildDiningRowsFromSuggestions(suggestions){
         note:o.note||"",
         anchorRole:normalizeMealAnchorRole((o.anchorRole!==undefined)?o.anchorRole:o.anchor_role,mealType),
         anchorLabel:optionalMealAreaLabel(destination,String(o.anchorLabel||o.anchor_label||anchorLabel||o.near_poi||"").trim())||anchorLabel
-      };
+     };
     });
+    var realOnly=options.filter(function(opt){
+      return !isAreaGuidanceMealOption(opt,destination) && !isManufacturedMealName(opt&&opt.name,destination);
+    });
+    if(realOnly.length>0)options=realOnly;
     var spotlight=resolveMealSpotlight(destination,mealType,anchorLabel||String(s&&s.near_poi||"").trim());
     options=sortMealOptionsForSpotlight(options,spotlight);
     var top=options[0]||{};
