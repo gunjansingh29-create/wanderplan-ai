@@ -7514,18 +7514,70 @@ export default function WanderPlan(){
         setFErr(String(e&&e.message||"Flight search failed"));
       }
     }
+    function legSelectionKey(leg, legIndex){
+      var raw=String(
+        (leg&&(
+          leg.leg_id||
+          leg.segment_id||
+          leg.id
+        ))||
+        ""
+      ).trim();
+      if(raw)return raw;
+      return "leg-"+String(legIndex);
+    }
+    function optionSelectionKey(opt, optionIndex){
+      var raw=String(
+        (opt&&(
+          opt.flight_id||
+          opt.offer_id||
+          opt.id
+        ))||
+        ""
+      ).trim();
+      if(raw)return raw;
+      var signature=[
+        String(opt&&opt.airline||"").trim(),
+        String(opt&&opt.departure_time||"").trim(),
+        String(opt&&opt.arrival_time||"").trim(),
+        String((opt&&opt.price_usd)!==undefined?opt.price_usd:(opt&&opt.price)!==undefined?opt.price:"").trim()
+      ].join("|");
+      if(signature.replace(/\|/g,"").trim())return "opt:"+signature;
+      return "opt-index-"+String(optionIndex);
+    }
+    function selectedOptionForLeg(leg, legIndex){
+      var legKey=legSelectionKey(leg,legIndex);
+      var selectedKey=String((flightSel&&flightSel[legKey])||"").trim();
+      if(!selectedKey)return null;
+      var options=Array.isArray(leg&&leg.options)?leg.options:[];
+      for(var i=0;i<options.length;i++){
+        if(optionSelectionKey(options[i],i)===selectedKey)return options[i];
+      }
+      return null;
+    }
     function confirmFlightsThenContinue(){
       var picked=true;
+      var missingProviderId=false;
       var legSelections=[];
       var links=[];
-      (flightLegs||[]).forEach(function(leg){
-        var fid=flightSel[leg.leg_id];
-        if(!fid)picked=false;
-        legSelections.push({leg_id:leg.leg_id,flight_id:fid||""});
-        var opt=(leg.options||[]).find(function(x){return x.flight_id===fid;});
-        if(opt&&opt.booking_url)links.push({leg_id:leg.leg_id,airline:opt.airline||"Airline",route:(opt.departure_airport||"")+" -> "+(opt.arrival_airport||""),url:opt.booking_url});
+      (flightLegs||[]).forEach(function(leg,legIndex){
+        var legKey=legSelectionKey(leg,legIndex);
+        var opt=selectedOptionForLeg(leg,legIndex);
+        if(!opt)picked=false;
+        var fid=String((opt&&(
+          opt.flight_id||
+          opt.offer_id||
+          opt.id
+        ))||"").trim();
+        if(!fid)missingProviderId=true;
+        legSelections.push({leg_id:String(leg&&leg.leg_id||leg&&leg.segment_id||leg&&leg.id||legKey),flight_id:fid||""});
+        if(opt&&opt.booking_url)links.push({leg_id:String(leg&&leg.leg_id||leg&&leg.segment_id||leg&&leg.id||legKey),airline:opt.airline||"Airline",route:(opt.departure_airport||"")+" -> "+(opt.arrival_airport||""),url:opt.booking_url});
       });
       if(!picked||legSelections.length===0){setFErr("Select one option for each flight leg first.");return;}
+      if(missingProviderId){
+        setFErr("One selected flight is missing a provider ID. Please run Search Flight Options again.");
+        return;
+      }
       if(!(authToken&&currentTripId)){setFC(true);setFBL(links);adv();return;}
       setFCL(true);
       setFErr("");
@@ -8851,7 +8903,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       var resolvedFlightTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip)||"(missing)";
       var routePlanSig=flightRoutePlanSignature(routePlan);
       var displayedRoutePlanSig=flightRoutePlanSignature(displayedRoutePlan);
-      var allPicked=(flightLegs||[]).length>0&&(flightLegs||[]).every(function(leg){return !!flightSel[leg.leg_id];});
+      var allPicked=(flightLegs||[]).length>0&&(flightLegs||[]).every(function(leg,legIndex){
+        return !!selectedOptionForLeg(leg,legIndex);
+      });
       function updFlight(k,v,commit){
         setFD(function(p){
           var n=Object.assign({},p);
@@ -8957,12 +9011,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         <button onClick={searchFlights} disabled={flightLoad} style={{width:"100%",padding:"12px",borderRadius:10,border:"none",background:flightLoad?C.border:C.teal,color:flightLoad?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:flightLoad?"default":"pointer"}}>{flightLoad?"Searching flights...":"Search Flight Options"}</button>
         {flightErr&&<p style={{fontSize:12,color:C.red,marginTop:8}}>{flightErr}</p>}
         {flightDone&&flightLegs.length>0&&(<div style={{marginTop:10}}>
-          {flightLegs.map(function(leg){
-            return(<div key={leg.leg_id} style={{marginBottom:12,border:"1px solid "+C.border,borderRadius:10,padding:"10px 12px",background:C.bg}}>
+          {flightLegs.map(function(leg,legIndex){
+            var legKey=legSelectionKey(leg,legIndex);
+            return(<div key={String(leg&&leg.leg_id||leg&&leg.segment_id||leg&&leg.id||legKey)} style={{marginBottom:12,border:"1px solid "+C.border,borderRadius:10,padding:"10px 12px",background:C.bg}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:12,color:C.tx2}}>{leg.from_airport} {"->"} {leg.to_airport}</span><span style={{fontSize:11,color:C.tx3}}>{leg.depart_date}</span></div>
-              {(leg.options||[]).map(function(opt){
-                var sel=flightSel[leg.leg_id]===opt.flight_id;
-                return(<div key={opt.flight_id} onClick={function(){setFSel(function(prev){var n=Object.assign({},prev);n[leg.leg_id]=opt.flight_id;return n;});}} style={{padding:"8px 10px",borderRadius:8,border:"1px solid "+(sel?C.teal+"55":C.border),background:sel?C.teal+"10":"transparent",marginBottom:6,cursor:"pointer"}}>
+              {(leg.options||[]).map(function(opt,optIndex){
+                var optKey=optionSelectionKey(opt,optIndex);
+                var sel=String((flightSel&&flightSel[legKey])||"")===optKey;
+                return(<div key={legKey+"-"+optKey} onClick={function(){setFSel(function(prev){var n=Object.assign({},prev);n[legKey]=optKey;return n;});}} style={{padding:"8px 10px",borderRadius:8,border:"1px solid "+(sel?C.teal+"55":C.border),background:sel?C.teal+"10":"transparent",marginBottom:6,cursor:"pointer"}}>
                   <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{fontSize:13,fontWeight:600}}>{opt.airline}</span><span style={{fontSize:14,fontWeight:700,color:C.goldT}}>${Math.round(opt.price_usd||0)}</span></div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.tx3}}><span>{(opt.departure_time||"").slice(11,16)} - {(opt.arrival_time||"").slice(11,16)} | {opt.stops===0?"Nonstop":(opt.stops+" stop")}</span><span>{opt.duration_minutes||0} min</span></div>
                 </div>);
