@@ -9322,12 +9322,17 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         });
       }
       function confirmMealPlanAndContinue(){
-        if(!(authToken&&activeDiningTripId&&isUuidLike(activeDiningTripId))){
-          setCSM("Trip context missing. Please refresh and retry confirming meals.");
-          return;
-        }
         var mealSnapshot=normalizeDiningPlan(meals);
         var voteSnapshot=(mealVotes&&typeof mealVotes==="object")?Object.assign({},mealVotes):{};
+        if(!(authToken&&activeDiningTripId&&isUuidLike(activeDiningTripId))){
+          // Allow local wizard progression even when backend trip context is unavailable.
+          setMeals(mealSnapshot);
+          setMealVotes(voteSnapshot);
+          setMD(mealSnapshot.length>0);
+          setCSM("Meal plan confirmed locally.");
+          adv();
+          return;
+        }
         saveTripPlanningState({state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).then(function(){
           adv();
         }).catch(function(){
