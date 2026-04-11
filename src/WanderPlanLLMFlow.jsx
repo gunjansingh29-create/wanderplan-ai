@@ -4366,7 +4366,7 @@ export default function WanderPlan(){
     });
   }
   function syncTripPoisToBackend(statusMap, rowsOverride){
-    var tripIdForSync=resolveWizardTripId(currentTripId,newTrip);
+    var tripIdForSync=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!(authToken&&tripIdForSync&&isUuidLike(tripIdForSync)))return Promise.resolve(null);
     var rows=(Array.isArray(rowsOverride)?rowsOverride:(pois||[]));
     if(rows.length===0)return Promise.resolve(null);
@@ -4431,7 +4431,7 @@ export default function WanderPlan(){
         delete out[mealKey];
         delete out[String(dayIndex)+"-"+String(mealIndex)];
         saveTripPlanningState({state:{meal_plan:next,meal_votes:out}}).then(function(){
-          refreshTripPlanningState(authToken,currentTripId||newTrip.id).catch(function(){});
+          refreshTripPlanningState(authToken,resolveWizardTripId(currentTripId,newTrip,viewTrip)).catch(function(){});
         });
         return out;
       });
@@ -4440,7 +4440,7 @@ export default function WanderPlan(){
   }
   async function refreshCurrentTripSharedState(token,tripId){
     var tok=token||authToken;
-    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip)).trim();
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)).trim();
     if(!(tok&&tid&&isUuidLike(tid)))return;
     try{
       var tripRes=null;
@@ -4537,11 +4537,11 @@ export default function WanderPlan(){
     }catch(e){}
   }
   function getCurrentPlannerId(){
-    var tid=resolveWizardTripId(currentTripId,newTrip);
+    var tid=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     return buildCurrentVoteActor(authToken,user,tid).id;
   }
   function runPoiSearchNow(){
-    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     var pendingDestinations=(Array.isArray(wizardPoiDests)?wizardPoiDests.slice():[]).filter(Boolean);
     var targetPerDestination=pendingDestinations.length<=2?5:4;
     setPL(true);
@@ -4636,7 +4636,7 @@ export default function WanderPlan(){
   }
   async function refreshTripPlanningState(token,tripId){
     var tok=token||authToken;
-    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip)).trim();
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)).trim();
     if(!(tok&&tid&&isUuidLike(tid)))return;
     try{
       var ps=await apiJson("/trips/"+tid+"/planning-state",{method:"GET"},tok);
@@ -4756,7 +4756,7 @@ export default function WanderPlan(){
     }catch(e){}
   }
   function replacePoiOptionPoolState(activeTripId, fullPool, extraState){
-    var tid=String(activeTripId||resolveWizardTripId(currentTripId,newTrip)).trim();
+    var tid=String(activeTripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)).trim();
     if(!(authToken&&tid&&isUuidLike(tid)))return Promise.resolve(null);
     var nextPool=(fullPool&&typeof fullPool==="object")?fullPool:{};
     var extras=(extraState&&typeof extraState==="object")?extraState:{};
@@ -4769,7 +4769,7 @@ export default function WanderPlan(){
       });
   }
   function saveTripPlanningState(patch){
-    var tid=resolveWizardTripId(currentTripId,newTrip);
+    var tid=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!(authToken&&tid&&isUuidLike(tid)))return Promise.resolve(null);
     var body={merge:true,state:{}};
     if(patch&&typeof patch==="object"){
@@ -4868,7 +4868,7 @@ export default function WanderPlan(){
   }
   useEffect(function(){
     if(wizStep!==9)return;
-    var tid=resolveWizardTripId(currentTripId,newTrip);
+    var tid=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!(authToken&&tid&&isUuidLike(tid)))return;
     if(durationDraftSaveTimerRef.current)clearTimeout(durationDraftSaveTimerRef.current);
     durationDraftSaveTimerRef.current=setTimeout(function(){
@@ -4880,10 +4880,10 @@ export default function WanderPlan(){
         durationDraftSaveTimerRef.current=null;
       }
     };
-  },[wizStep,durPerDest,authToken,currentTripId,newTrip&&newTrip.id]);
+  },[wizStep,durPerDest,authToken,currentTripId,newTrip&&newTrip.id,viewTrip&&viewTrip.id]);
   useEffect(function(){
     if(wizStep!==11)return;
-    var tid=resolveWizardTripId(currentTripId,newTrip);
+    var tid=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!(authToken&&tid&&isUuidLike(tid)))return;
     if(!mealDone||!Array.isArray(meals)||meals.length===0)return;
     if(mealDraftSaveTimerRef.current)clearTimeout(mealDraftSaveTimerRef.current);
@@ -4901,7 +4901,7 @@ export default function WanderPlan(){
         mealDraftSaveTimerRef.current=null;
       }
     };
-  },[wizStep,mealDone,meals,mealVotes,authToken,currentTripId,newTrip&&newTrip.id]);
+  },[wizStep,mealDone,meals,mealVotes,authToken,currentTripId,newTrip&&newTrip.id,viewTrip&&viewTrip.id]);
   function refreshCompanionNow(tid,silent){
     var tripId=String(tid||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
     if(!(loaded&&authToken&&tripId&&isUuidLike(tripId)))return Promise.resolve(null);
@@ -4943,7 +4943,7 @@ export default function WanderPlan(){
     };
   }
   function persistProfileNow(nextUser,tripId){
-    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip)).trim();
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)).trim();
     if(!authToken)return Promise.resolve(null);
     var payload=profilePayloadFor(nextUser);
     setProfileDebug(function(prev){return Object.assign({},prev||{},{lastPut:{tripId:tid||"",payload:payload,user:Object.assign({},nextUser||{})}});});
@@ -5051,7 +5051,7 @@ export default function WanderPlan(){
     return function(){alive=false;clearInterval(t);};
   },[loaded,authToken,sc,viewTrip&&viewTrip.id,currentTripId]);
   useEffect(function(){
-    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!loaded||!authToken||sc!=="wizard"||!activeTripId||!isUuidLike(activeTripId))return;
     refreshCurrentTripSharedState();
     refreshTripPlanningState();
@@ -5061,9 +5061,9 @@ export default function WanderPlan(){
       refreshTripPlanningState();
     },syncMs);
     return function(){clearInterval(t);};
-  },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,user.email,wizStep]);
+  },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,viewTrip&&viewTrip.id,user.email,wizStep]);
   useEffect(function(){
-    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!loaded||!authToken||!activeTripId||!isUuidLike(activeTripId))return;
     if(!shouldAutoGeneratePois(sc,wizStep,mergedPoiRowsGlobal,poiDone,poiLoad,poiContextStaleGlobal,wizardPoiDests))return;
     var autoKey=activeTripId+"|"+poiCurrentSignatureGlobal;
@@ -5077,6 +5077,7 @@ export default function WanderPlan(){
     wizStep,
     currentTripId,
     newTrip&&newTrip.id,
+    viewTrip&&viewTrip.id,
     mergedPoiRowsGlobal.length,
     poiDone,
     poiLoad,
@@ -5085,7 +5086,7 @@ export default function WanderPlan(){
     JSON.stringify((wizardPoiDests||[]).map(function(d){return {name:d&&d.name||"",country:d&&d.country||""};}))
   ]);
   useEffect(function(){
-    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!loaded||!authToken||sc!=="wizard"||wizStep!==13||!activeTripId||!isUuidLike(activeTripId))return;
     function run(){
       fetchAvailabilityOverlap(activeTripId,authToken).then(function(res){
@@ -5104,7 +5105,7 @@ export default function WanderPlan(){
     run();
     var t=setInterval(run,1500);
     return function(){clearInterval(t);};
-  },[loaded,authToken,sc,wizStep,currentTripId,newTrip&&newTrip.id,flightDates.depart,flightDates.ret]);
+  },[loaded,authToken,sc,wizStep,currentTripId,newTrip&&newTrip.id,viewTrip&&viewTrip.id,flightDates.depart,flightDates.ret]);
   useEffect(function(){
     if(!loaded||sc!=="wizard"||wizStep!==14)return;
     var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")
@@ -5225,7 +5226,7 @@ export default function WanderPlan(){
     setStayPick(function(prev){return Object.assign({},prev||{},next);});
   },[stays,stayFinalChoices]);
   useEffect(function(){
-    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!loaded||!authToken||sc!=="wizard"||!activeTripId||!isUuidLike(activeTripId))return;
     if(wizStep<5)return;
     if(!Array.isArray(pois)||pois.length===0)return;
@@ -5236,9 +5237,9 @@ export default function WanderPlan(){
     replacePoiOptionPoolState(activeTripId, fullPool).then(function(){
       refreshTripPlanningState(authToken,activeTripId).catch(function(){});
     });
-  },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,wizStep,pois,poiOptionPool]);
+  },[loaded,authToken,sc,currentTripId,newTrip&&newTrip.id,viewTrip&&viewTrip.id,wizStep,pois,poiOptionPool]);
   useEffect(function(){
-    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!loaded||!authToken||sc!=="wizard"||!activeTripId||!isUuidLike(activeTripId))return;
     if(wizStep<7)return;
     if(!routePlan||!Array.isArray(routePlan.destinations)||routePlan.destinations.length===0)return;
@@ -5266,6 +5267,7 @@ export default function WanderPlan(){
     sc,
     currentTripId,
     newTrip&&newTrip.id,
+    viewTrip&&viewTrip.id,
     wizStep,
     poiCurrentSignatureGlobal,
     routePlanSignature,
@@ -5293,7 +5295,7 @@ export default function WanderPlan(){
     refreshCrewFromBackend();
   },[loaded,authToken,sc,wizStep,currentTripId]);
   useEffect(function(){
-    var activeTripId=resolveWizardTripId(currentTripId,newTrip);
+    var activeTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip);
     if(!loaded||!authToken||sc!=="wizard"||wizStep!==1||!activeTripId)return;
     var members=(newTrip&&Array.isArray(newTrip.members))?newTrip.members:[];
     var pendingMembers=members.filter(function(m){return isTripInvitePending(m);});
@@ -5317,7 +5319,7 @@ export default function WanderPlan(){
     Promise.resolve(inviteSelectedMembersToTrip(activeTripId,sendNow)).finally(function(){
       tripInviteInFlightRef.current=false;
     });
-  },[loaded,authToken,sc,wizStep,currentTripId,newTrip]);
+  },[loaded,authToken,sc,wizStep,currentTripId,newTrip,viewTrip&&viewTrip.id]);
   useEffect(function(){
     if(!loaded||!authToken||sc!=="trip_detail"||!viewTrip)return;
     var tr=viewTrip||{};
@@ -5575,7 +5577,7 @@ export default function WanderPlan(){
   function applyTripDestinationValuesLocal(nextValues,tripIdOverride){
     var normalizedNames=tripDestinationNamesFromValues(nextValues,bucket);
     var normalizedValues=normalizedNames.slice();
-    var tid=String(tripIdOverride||resolveWizardTripId(currentTripId,newTrip)).trim();
+    var tid=String(tripIdOverride||resolveWizardTripId(currentTripId,newTrip,viewTrip)).trim();
     setNT(function(prev){
       return Object.assign({},prev||{},{
         dests:normalizedValues.slice(),
@@ -5606,7 +5608,7 @@ export default function WanderPlan(){
   }
 
   function persistTripDestinations(nextValues,tripIdOverride){
-    var tid=String(tripIdOverride||resolveWizardTripId(currentTripId,newTrip)).trim();
+    var tid=String(tripIdOverride||resolveWizardTripId(currentTripId,newTrip,viewTrip)).trim();
     var destNames=tripDestinationNamesFromValues(nextValues,bucket);
     if(!(authToken&&tid&&isUuidLike(tid)))return Promise.resolve(destNames);
     return apiJson("/trips/"+tid+"/destinations",{method:"PUT",body:{destinations:destNames,votes:{}}},authToken).then(function(res){
@@ -8669,8 +8671,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         }
         setAErr("");
         setALoad(true);
-        submitAvailabilityRange(resolveWizardTripId(currentTripId,newTrip),range,authToken).then(function(){
-          return fetchAvailabilityOverlap(resolveWizardTripId(currentTripId,newTrip),authToken);
+        submitAvailabilityRange(resolveWizardTripId(currentTripId,newTrip,viewTrip),range,authToken).then(function(){
+          return fetchAvailabilityOverlap(resolveWizardTripId(currentTripId,newTrip,viewTrip),authToken);
         }).then(function(res){
           if(res)setAData(res);
           setALoad(false);
@@ -8688,8 +8690,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         }
         setAErr("");
         setALoad(true);
-        lockAvailabilityRange(resolveWizardTripId(currentTripId,newTrip),lockRange,authToken).then(function(){
-          return fetchAvailabilityOverlap(resolveWizardTripId(currentTripId,newTrip),authToken);
+        lockAvailabilityRange(resolveWizardTripId(currentTripId,newTrip,viewTrip),lockRange,authToken).then(function(){
+          return fetchAvailabilityOverlap(resolveWizardTripId(currentTripId,newTrip,viewTrip),authToken);
         }).then(function(res){
           setFD(function(prev){return Object.assign({},prev||{},{depart:lockRange.start,ret:lockRange.end});});
           if(res)setAData(res);
@@ -8712,7 +8714,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Availability Debug</p>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
             {[
-              {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"(missing)"},
+              {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip,viewTrip)||"(missing)"},
               {l:"Required trip days",v:String(requiredTripDays)},
               {l:"Flight date range",v:(String(knownFlightDates.depart||"").slice(0,10)||"--")+" to "+(String(knownFlightDates.ret||"").slice(0,10)||"--")},
               {l:"Locked window",v:JSON.stringify(lockedWindow||null)},
@@ -8783,7 +8785,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
       var routePlan=normalizedFlightRoutePlan();
       var displayedRoutePlan=displayedRoundTripRoutePlan(routePlan);
-      var resolvedFlightTripId=resolveWizardTripId(currentTripId,newTrip)||"(missing)";
+      var resolvedFlightTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip)||"(missing)";
       var routePlanSig=flightRoutePlanSignature(routePlan);
       var displayedRoutePlanSig=flightRoutePlanSignature(displayedRoutePlan);
       var allPicked=(flightLegs||[]).length>0&&(flightLegs||[]).every(function(leg){return !!flightSel[leg.leg_id];});
@@ -9137,7 +9139,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Stay Debug</p>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
               {[
-                {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"(missing)"},
+                {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip,viewTrip)||"(missing)"},
                 {l:"Required nights",v:String(totalN)},
                 {l:"Stay count",v:String(stays.length)},
                 {l:"Locked choices",v:JSON.stringify(stayFinalChoices||{})},
@@ -9277,7 +9279,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
     {wizStep===11&&(function(){
       var grpSize=(jc||0)+1;var dietStr=(user.dietary||[]).join(", ")||"none";
       var totalDays=Math.max(1,Number(sharedDurationDays)||inclusiveIsoDays((availabilityData&&availabilityData.locked_window||{}).start,(availabilityData&&availabilityData.locked_window||{}).end)||10);
-      var activeDiningTripId=resolveWizardTripId(currentTripId,newTrip,tr);
+      var activeDiningTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip||tr);
       var DINING_CALL_TIMEOUT_MS=12000;
       var voteMembers=[{
         id:currentPlannerId,
@@ -9959,7 +9961,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             <p style={{fontSize:12,fontWeight:700,color:C.goldT,marginBottom:8}}>Dining Debug</p>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
               {[
-                {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"(missing)"},
+                {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip,viewTrip)||"(missing)"},
                 {l:"Meal groups",v:String(meals.length)},
                 {l:"Vote member count",v:String(voteMembers.length)},
                 {l:"Majority needed",v:String(majorityNeeded)},
@@ -10128,7 +10130,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           <p style={{fontSize:11,color:C.tx3,marginBottom:10}}>Transit rows are heuristic placeholders right now. They are marked as approximate until live routing is integrated.</p>
           <div style={{display:"grid",gridTemplateColumns:isPhone?"1fr":"repeat(3,minmax(0,1fr))",gap:10,marginBottom:12}}>
             {[
-              {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip)||"--"},
+              {l:"Resolved trip id",v:resolveWizardTripId(currentTripId,newTrip,viewTrip)||"--"},
               {l:"Locked / start date",v:String(itineraryStartDate||"Day labels until dates are locked")},
               {l:"Total trip days",v:String(totalDays)},
               {l:"Approved POIs",v:String(accPois.length)},
@@ -10326,3 +10328,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 }
 
 export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+
