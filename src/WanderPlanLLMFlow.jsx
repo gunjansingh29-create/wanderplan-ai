@@ -9283,6 +9283,164 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       function fetchDiningApi(path){
         return withTimeoutPromise(apiJson(path,{method:"GET"},authToken),DINING_CALL_TIMEOUT_MS);
       }
+      function fetchJsonWithTimeout(url, timeoutMs){
+        return withTimeoutPromise(fetch(url,{method:"GET",headers:{Accept:"application/json"}}).then(function(res){
+          if(!res.ok)throw new Error("HTTP "+res.status);
+          return res.json();
+        }),timeoutMs||15000);
+      }
+      function osmQueryUrls(queryText, limit){
+        var q=encodeURIComponent(String(queryText||"").trim());
+        var lim=Math.max(5,Math.min(25,Number(limit)||12));
+        var target="https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit="+lim+"&q="+q;
+        return [
+          target,
+          "https://api.allorigins.win/raw?url="+encodeURIComponent(target)
+        ];
+      }
+      async function fetchFirstSuccessfulJson(urls, timeoutMs){
+        var list=Array.isArray(urls)?urls:[];
+        var lastErr=null;
+        for(var i=0;i<list.length;i++){
+          var url=String(list[i]||"").trim();
+          if(!url)continue;
+          try{
+            return await fetchJsonWithTimeout(url,timeoutMs);
+          }catch(err){
+            lastErr=err;
+          }
+        }
+        throw (lastErr||new Error("all_sources_failed"));
+      }
+      function normalizeOpenVenueRows(rawRows, destinationName){
+        var rows=Array.isArray(rawRows)?rawRows:[];
+        var seen={};
+        var out=[];
+        rows.forEach(function(row){
+          if(!(row&&typeof row==="object"))return;
+          var name=String(row.name||"").trim();
+          if(!name)return;
+          if(/^restaurant$/i.test(name))return;
+          var display=String(row.display_name||"").trim();
+          var key=(name+"|"+display).toLowerCase();
+          if(seen[key])return;
+          seen[key]=1;
+          var parts=display.split(",").map(function(p){return String(p||"").trim();}).filter(Boolean);
+          out.push({
+            name:name,
+            city:String(destinationName||"").trim(),
+            cuisine:String(row.type||"Local").trim()||"Local",
+            rating:4.2,
+            cost:0,
+            near_poi:(parts.length>1?parts.slice(0,2).join(", "):display),
+            note:"OpenStreetMap fallback venue match.",
+            travel_minutes:15
+          });
+        });
+        return out;
+      }
+      function pickWrapped(arr, startIndex, count){
+        var src=Array.isArray(arr)?arr:[];
+        if(src.length===0)return [];
+        var out=[];
+        for(var i=0;i<count;i++){
+          out.push(src[(startIndex+i)%src.length]);
+        }
+        return out;
+      }
+      function buildRealFallbackSuggestionsForDestination(destinationName, dayNum, venues){
+        var base=Array.isArray(venues)?venues:[];
+        if(base.length===0)return [];
+        var breakfastOptions=pickWrapped(base,0,Math.min(4,base.length));
+        var lunchOptions=pickWrapped(base,1,Math.min(4,base.length));
+        var dinnerOptions=pickWrapped(base,2,Math.min(4,base.length));
+        function buildMeal(mealType, mealTime, options){
+          var first=options[0]||{};
+          return {
+            day:dayNum,
+            destination:destinationName,
+            meal:mealType,
+            time:mealTime,
+            name:first.name||("Restaurant in "+destinationName),
+            cuisine:first.cuisine||"Local",
+            cost:0,
+            rating:4.2,
+            note:first.note||"OpenStreetMap fallback venue match.",
+            options:(options||[]).map(function(opt,idx){
+              return Object.assign({
+                option_id:canonicalTripDestinationName(destinationName)+"-"+mealType.toLowerCase()+"-"+String(idx+1)
+              },opt);
+            })
+          };
+        }
+        return [
+          buildMeal("Breakfast","08:00",breakfastOptions),
+          buildMeal("Lunch","13:00",lunchOptions),
+          buildMeal("Dinner","19:00",dinnerOptions)
+        ];
+      }
+      async function fetchOpenVenueRowsForDestination(destinationName){
+        var destName=String(destinationName||"").trim();
+        if(!destName)return [];
+        var queryCandidates=[
+          "restaurants in "+destName,
+          "food in "+destName,
+          destName+" eateries"
+        ];
+        for(var i=0;i<queryCandidates.length;i++){
+          try{
+            var raw=await fetchFirstSuccessfulJson(osmQueryUrls(queryCandidates[i],14),18000);
+            var venues=normalizeOpenVenueRows(raw,destName);
+            if(Array.isArray(venues)&&venues.length>0)return venues;
+          }catch(err){}
+        }
+        return [];
+      }
+      async function fetchOpenDataMealSuggestionsForDestinations(orderedDests, destLimit, dayOffset){
+        var list=(Array.isArray(orderedDests)?orderedDests:[]).slice(0,Math.max(1,Number(destLimit)||2));
+        var offset=Math.max(0,Number(dayOffset)||0);
+        var allRows=[];
+        var jobs=list.map(function(dest,idx){
+          var destName=String(dest&&dest.name||dest||"").trim();
+          if(!destName)return Promise.resolve([]);
+          return fetchOpenVenueRowsForDestination(destName).then(function(venues){
+            return buildRealFallbackSuggestionsForDestination(destName,offset+idx+1,venues);
+          }).catch(function(){return [];});
+        });
+        var settled=await Promise.all(jobs);
+        settled.forEach(function(rows){
+          if(Array.isArray(rows)&&rows.length>0)allRows=allRows.concat(rows);
+        });
+        return allRows;
+      }
+      function loadOpenDataMealFallback(orderedDests,nextVotes,label){
+        var list=Array.isArray(orderedDests)?orderedDests:[];
+        var votes=(nextVotes&&typeof nextVotes==="object")?Object.assign({},nextVotes):{};
+        var totalDest=list.length;
+        if(totalDest===0)return Promise.reject(new Error("no_destinations"));
+        var firstChunk=Math.min(2,Math.max(1,totalDest||1));
+        return fetchOpenDataMealSuggestionsForDestinations(list,firstChunk,0).then(function(seedRows){
+          if(!Array.isArray(seedRows)||seedRows.length===0)throw new Error("seed_empty");
+          var plan=normalizeDiningPlan(buildDiningRowsFromSuggestions(seedRows));
+          return persistMealsSnapshot(plan,votes).then(function(){
+            setMealErr("");
+            setMChat(function(p){
+              return p.concat([{from:"agent",text:(label?label+" ":"")+"Loaded real venue names from open map data for the first destinations. Fetching more in background..."}]);
+            });
+            if(totalDest>firstChunk){
+              fetchOpenDataMealSuggestionsForDestinations(list.slice(firstChunk),Math.max(1,totalDest-firstChunk),firstChunk).then(function(moreRows){
+                if(!Array.isArray(moreRows)||moreRows.length===0)return;
+                setMeals(function(prevMeals){
+                  var mergedRows=mergeDiningPlanRows(prevMeals,normalizeDiningPlan(buildDiningRowsFromSuggestions(moreRows)));
+                  persistMealsSnapshot(mergedRows,votes).catch(function(){return null;});
+                  return mergedRows;
+                });
+              }).catch(function(){});
+            }
+            return plan;
+          });
+        });
+      }
       function readDiningSuggestions(resp){
         return Array.isArray(resp&&resp.suggestions)?resp.suggestions:[];
       }
@@ -9393,6 +9551,16 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             });
             return localRows;
           });
+        });
+      }
+      function tryAutoOpenDataFallback(orderedDests,nextVotes,finalErr){
+        return loadOpenDataMealFallback(orderedDests,nextVotes,"Auto real-data fallback.").then(function(){
+          setML(false);
+          return true;
+        }).catch(function(){
+          setML(false);
+          if(finalErr)setMealErr(finalErr);
+          return false;
         });
       }
 
@@ -9530,6 +9698,17 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
               setMealErr("Guidance Mode also failed. Please retry in a moment.");
             });
           }} style={{width:"100%",padding:"12px",marginBottom:8,borderRadius:10,border:"1px solid "+C.border,background:C.surface,color:C.tx2,fontSize:13,fontWeight:700,cursor:"pointer"}}>Use Guidance Mode (Non-Real Venues)</button>}
+          {mealErr&&<button onClick={function(){
+            var orderedDests=orderDestinationsByRoutePlan(dests,routePlan);
+            setML(true);
+            setMealErr("");
+            loadOpenDataMealFallback(orderedDests,{},"Manual real-data fallback.").then(function(){
+              setML(false);
+            }).catch(function(){
+              setML(false);
+              setMealErr("Open-data real venue fallback is unavailable right now. Please retry.");
+            });
+          }} style={{width:"100%",padding:"12px",marginBottom:8,borderRadius:10,border:"1px solid "+C.teal+"40",background:C.teal+"12",color:C.tealL,fontSize:13,fontWeight:700,cursor:"pointer"}}>Load Real Venue Fallback (Open Data)</button>}
           <button onClick={function(){
           setML(true);
           setMealErr("");
@@ -9591,11 +9770,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                       }).catch(function(){});
                       return;
                     }
-                    setML(false);
-                    setMealErr("Could not load real venue suggestions yet. Please retry in a moment. Guidance Mode is optional if you still want a meal draft.");
+                    tryAutoOpenDataFallback(orderedDests,{},"Could not load real venue suggestions yet. Please retry in a moment. Guidance Mode is optional if you still want a meal draft.").then(function(){});
                   }).catch(function(){
-                    setML(false);
-                    setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.");
+                    tryAutoOpenDataFallback(orderedDests,{},"Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.").then(function(){});
                   });
                 }).catch(function(){
                   fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
@@ -9614,17 +9791,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                       }).catch(function(){});
                       return;
                     }
-                    setML(false);
-                    setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.");
+                    tryAutoOpenDataFallback(orderedDests,{},"Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.").then(function(){});
                   }).catch(function(){
-                    setML(false);
-                    setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.");
+                    tryAutoOpenDataFallback(orderedDests,{},"Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.").then(function(){});
                   });
                 });
                 return;
               }
-              setML(false);
-              setMealErr("Could not load real venue suggestions yet. Please retry in a moment.");
+              tryAutoOpenDataFallback(orderedDests,{},"Could not load real venue suggestions yet. Please retry in a moment.").then(function(){});
             }).catch(function(){
               fetchDayBasedDiningSuggestions(1,2).then(function(daySug){
                 if(daySug.length>0){
@@ -9642,11 +9816,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
                   }).catch(function(){});
                   return;
                 }
-                setML(false);
-                setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.");
+                tryAutoOpenDataFallback(orderedDests,{},"Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.").then(function(){});
               }).catch(function(){
-                setML(false);
-                setMealErr("Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.");
+                tryAutoOpenDataFallback(orderedDests,{},"Dining suggestions endpoint is unavailable right now. Retry once backend connectivity is healthy. Guidance Mode is optional if you still want a meal draft.").then(function(){});
               });
             });
           }else{
