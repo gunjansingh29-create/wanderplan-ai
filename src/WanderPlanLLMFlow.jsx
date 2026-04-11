@@ -9322,6 +9322,11 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         });
       }
       function confirmMealPlanAndContinue(){
+        function proceedAfterMealConfirm(){
+          setCSM("");
+          // Do not block travelers here; move forward and let background sync catch up.
+          advanceWizardStep();
+        }
         var mealSnapshot=normalizeDiningPlan(meals);
         var voteSnapshot=(mealVotes&&typeof mealVotes==="object")?Object.assign({},mealVotes):{};
         if(!(authToken&&activeDiningTripId&&isUuidLike(activeDiningTripId))){
@@ -9330,13 +9335,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           setMealVotes(voteSnapshot);
           setMD(mealSnapshot.length>0);
           setCSM("Meal plan confirmed locally.");
-          adv();
+          proceedAfterMealConfirm();
           return;
         }
         saveTripPlanningState({state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).then(function(){
-          adv();
+          proceedAfterMealConfirm();
         }).catch(function(){
-          setCSM("Could not save meal plan. Please retry.");
+          setCSM("Could not save meal plan right now. Continuing locally.");
+          proceedAfterMealConfirm();
         });
       }
 
