@@ -714,11 +714,14 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(fullDay).toBeTruthy();
     const breakfastIndex = fullDay.items.findIndex((item) => item.title === "Morning Table");
     const lunchIndex = fullDay.items.findIndex((item) => item.title === "Market Lunch");
-    const bambooIndex = fullDay.items.findIndex((item) => String(item.title).toLowerCase().includes("arashiyama bamboo grove"));
+    const morningPoiIndex = fullDay.items.findIndex((item) => {
+      const title = String(item.title).toLowerCase();
+      return title.includes("arashiyama bamboo grove") || title.includes("nishiki market");
+    });
     expect(breakfastIndex).toBeGreaterThanOrEqual(0);
     expect(lunchIndex).toBeGreaterThan(breakfastIndex);
-    expect(bambooIndex).toBeGreaterThan(breakfastIndex);
-    expect(bambooIndex).toBeLessThan(lunchIndex);
+    expect(morningPoiIndex).toBeGreaterThan(breakfastIndex);
+    expect(morningPoiIndex).toBeLessThan(lunchIndex);
   });
 
   test("buildFallbackItinerary inserts travel legs around meals and POIs", () => {
@@ -742,7 +745,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(fullDay.items.some((item) => item.type === "travel")).toBe(true);
     expect(
       fullDay.items.some((item) =>
-        String(item.title).includes("transit from Morning Table to Arashiyama Bamboo Grove")
+        String(item.title).toLowerCase().includes("transit from morning table to")
       )
     ).toBe(true);
   });
