@@ -7549,6 +7549,68 @@ export default function WanderPlan(){
         setFErr(String(e&&e.message||"Could not save selected flights"));
       });
     }
+    function routePlanNearbyPoisForItinerary(){
+      var rows=[];
+      (Array.isArray(routePlan&&routePlan.destinations)?routePlan.destinations:[]).forEach(function(stop){
+        var destName=String(stop&&stop.destination||"").trim();
+        if(!destName)return;
+        var nearbySites=Array.isArray(stop&&stop.nearbySites)?stop.nearbySites.filter(Boolean):[];
+        nearbySites.slice(0,4).forEach(function(site,idx){
+          var siteName=String(site||"").trim();
+          if(!siteName)return;
+          rows.push({
+            poi_id:"",
+            name:siteName,
+            destination:destName,
+            country:String(stop&&stop.country||"").trim(),
+            category:"Culture",
+            duration:"90m",
+            cost:0,
+            rating:4.1-(idx*0.05),
+            matchReason:"Route-plan nearby site included to keep activity coverage grounded.",
+            tags:["Nearby site","Route plan"],
+            locationHint:destName+" area",
+            bestTime:"morning",
+            openingWindow:"",
+            source:"route-plan-nearby",
+            failureReason:""
+          });
+        });
+      });
+      return rows;
+    }
+    function resolveItineraryPoiRows(baseRows,minPerDestination){
+      var budgetTier=resolveTripBudgetTier(sharedBudgetTier,user.budget);
+      var rows=Array.isArray(baseRows)?baseRows.filter(Boolean):[];
+      var merged=mergePoiListsByCanonical(rows,poiOptionPool);
+      if(merged.length===0){
+        merged=mergePoiListsByCanonical(pois,poiOptionPool);
+      }
+      if(merged.length===0){
+        merged=routePlanNearbyPoisForItinerary();
+      }
+      if(merged.length===0){
+        var generatedFallback=[];
+        (Array.isArray(dests)?dests:[]).forEach(function(dest){
+          generatedFallback=generatedFallback.concat(
+            buildDestinationFallbackPois(dest,user.interests||{},budgetTier,user.dietary,wizardPoiGroupPrefs,routePlan,"itinerary_no_poi_state")
+          );
+        });
+        merged=generatedFallback;
+      }
+      merged=groundPoiRowsWithRoutePlan(merged,routePlan,user.interests||{},budgetTier,user.dietary,wizardPoiGroupPrefs);
+      var missing=destinationsNeedingPoiCoverage(merged,dests,Math.max(1,Number(minPerDestination)||1));
+      if(missing.length>0){
+        var fillRows=[];
+        missing.forEach(function(dest){
+          fillRows=fillRows.concat(
+            buildDestinationFallbackPois(dest,user.interests||{},budgetTier,user.dietary,wizardPoiGroupPrefs,routePlan,"itinerary_destination_gap")
+          );
+        });
+        merged=mergePoiListsByCanonical(merged.concat(fillRows),{});
+      }
+      return merged;
+    }
     function buildItineraryWithBackend(accPois,pStays,appMeals,totalDays,grpSize,forceFresh){
       var force=!!forceFresh;
       var itineraryStartDate=(availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start)||flightDates.depart||"";
@@ -7557,7 +7619,8 @@ export default function WanderPlan(){
         durPerDest,
         totalDays
       );
-      var fallbackRows=buildFallbackItinerary(dests,accPois,pStays,appMeals,totalDays,itineraryStartDate,itineraryDurations);
+      var itineraryPois=resolveItineraryPoiRows(accPois,1);
+      var fallbackRows=buildFallbackItinerary(dests,itineraryPois,pStays,appMeals,totalDays,itineraryStartDate,itineraryDurations);
       function persistItineraryRows(rows){
         var payload=buildItinerarySavePayload(rows);
         if(!(authToken&&currentTripId))return Promise.resolve(payload);
@@ -7568,7 +7631,7 @@ export default function WanderPlan(){
         var rows=(Array.isArray(res)&&res.length>0)
           ? res
           : fallbackRows;
-        rows=chooseBestItineraryRows(rows,fallbackRows,accPois);
+        rows=chooseBestItineraryRows(rows,fallbackRows,itineraryPois);
         rows=materializeItineraryDates(rows,itineraryStartDate);
         persistItineraryRows(rows).then(function(){
           setItinErr("");
@@ -7609,19 +7672,19 @@ export default function WanderPlan(){
                 items:mapped
               };
             });
-            rows=chooseBestItineraryRows(rows,fallbackRows,accPois);
+            rows=chooseBestItineraryRows(rows,fallbackRows,itineraryPois);
             rows=materializeItineraryDates(rows,itineraryStartDate);
             setItin(rows);
             setIL(false);
             setID(true);
             return;
           }
-          return askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
+          return askItinerary(dests,itineraryPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
         }).catch(function(){
-          askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
+          askItinerary(dests,itineraryPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
         });
       }else{
-        askItinerary(dests,accPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
+        askItinerary(dests,itineraryPois,pStays,appMeals,user.budget,totalDays,grpSize,itineraryStartDate).then(finalizeItineraryResult);
       }
     }
     function saveItineraryThenAdvance(){
@@ -10100,8 +10163,10 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
     }())}
 
     {wizStep===12&&(function(){
-      var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
-      if(accPois.length===0)accPois=(Array.isArray(pois)?pois:[]).slice(0,Math.min(12,(Array.isArray(pois)?pois.length:0)));
+      var accPois=resolveItineraryPoiRows(
+        pois.filter(function(p,i){return poiStatus[i]==="yes";}),
+        1
+      );
       var grpSize=(jc||0)+1;
       var lockedDays=inclusiveIsoDays((availabilityData&&availabilityData.locked_window||{}).start,(availabilityData&&availabilityData.locked_window||{}).end);
       var totalDays=Math.max(3,Number(sharedDurationDays)||Number(lockedDays)||Number(tr&&tr.days)||0);
@@ -10215,7 +10280,10 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
     }())}
 
     {wizStep===15&&(function(){
-      var accPois=pois.filter(function(p,i){return poiStatus[i]==="yes";});
+      var accPois=resolveItineraryPoiRows(
+        pois.filter(function(p,i){return poiStatus[i]==="yes";}),
+        1
+      );
       var grpSize=(jc||0)+1;
       var pStays=resolveSelectedStaysForDestinations(dests,stays,stayPick,stayFinalChoices);
       var finalVoteMembers=[{
