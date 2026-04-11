@@ -9950,8 +9950,16 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             <div style={{display:"flex",gap:6,padding:"8px 10px",borderTop:mealChat.length>0?"1px solid "+C.border:"none"}}><input value={mealAsk} onChange={function(e){setMA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendMealChat();}} placeholder="'vegan ramen in Kyoto' or 'cheaper dinners'" disabled={mealAskLoad} style={{flex:1,padding:"8px 11px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:12,color:"#fff",opacity:mealAskLoad?.5:1}}/><button onClick={sendMealChat} disabled={mealAskLoad} style={{padding:"7px 12px",borderRadius:8,border:"none",background:mealAskLoad?C.border:C.teal,color:mealAskLoad?C.tx3:"#fff",fontSize:11,fontWeight:600,cursor:mealAskLoad?"default":"pointer"}}>Ask</button></div>
           </div>
 
-          {allDecided&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{soloTripMode?meals.reduce(function(total,day){return total+((day.meals||[]).length||0);},0):approvedMeals.length} meals {soloTripMode?"ready":"approved"}. Est. food cost for sample: ${totalMealCost}</p></div><button onClick={confirmMealPlanAndContinue} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Confirm Meal Plan</button></div>)}
-          {!allDecided&&mealDone&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>{soloTripMode?"Finish reviewing the meal plan to continue.":"Accept or reject each meal to continue."}</p>}
+          <div style={{marginTop:12}}>
+            <div style={{padding:"10px 14px",borderRadius:10,background:allDecided?C.grnBg:(C.gold+"18"),border:allDecided?"1px solid transparent":"1px solid "+C.gold+"35"}}>
+              <p style={{fontSize:12,color:allDecided?C.grn:C.goldT}}>
+                {soloTripMode?meals.reduce(function(total,day){return total+((day.meals||[]).length||0);},0):approvedMeals.length} meals {soloTripMode?"ready":"approved"}.
+                {" "}Est. food cost for sample: ${totalMealCost}
+              </p>
+              {!allDecided&&mealDone&&<p style={{fontSize:11,color:C.tx2,marginTop:6}}>{soloTripMode?"You can continue after review.":"Some meal votes are still pending, but you can continue and revisit this step later."}</p>}
+            </div>
+            <button onClick={confirmMealPlanAndContinue} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{allDecided?"Confirm Meal Plan":"Confirm Meal Plan & Continue"}</button>
+          </div>
         </div>)}
         {mealDone&&meals.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"12px 0"}}>No meal plan generated. Describe what you want:</p><div style={{display:"flex",gap:6}}><input value={mealAsk} onChange={function(e){setMA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendMealChat();}} placeholder="e.g. 'plan meals for Kyoto, mostly local food'" style={{flex:1,padding:"9px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/><button onClick={sendMealChat} style={{padding:"8px 14px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>Ask</button></div></div>)}
       </div>);
