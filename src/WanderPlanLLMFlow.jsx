@@ -7547,7 +7547,8 @@ export default function WanderPlan(){
         setFErr(String(e&&e.message||"Could not save selected flights"));
       });
     }
-    function buildItineraryWithBackend(accPois,pStays,appMeals,totalDays,grpSize){
+    function buildItineraryWithBackend(accPois,pStays,appMeals,totalDays,grpSize,forceFresh){
+      var force=!!forceFresh;
       var itineraryStartDate=(availabilityData&&availabilityData.locked_window&&availabilityData.locked_window.start)||flightDates.depart||"";
       var itineraryDurations=fillMissingDurationPerDestination(
         dests,
@@ -7581,6 +7582,10 @@ export default function WanderPlan(){
       }
       setIL(true);
       setItinErr("");
+      if(force){
+        finalizeItineraryResult(fallbackRows);
+        return;
+      }
       if(authToken&&currentTripId){
         apiJson("/trips/"+currentTripId+"/itinerary",{method:"GET"},authToken).then(function(r){
           var days=(r&&r.itinerary&&r.itinerary.days)||[];
@@ -10160,10 +10165,11 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:14}}>
             <div style={{display:"flex",gap:8,fontSize:12,color:C.tx3}}><span style={{color:C.coral}}>{accPois.length} activities</span><span style={{color:C.teal}}>{pStays.length} stays</span><span style={{color:C.grn}}>{appMeals.length} meals</span><span>{dests.length} destinations</span></div>
           </div>
-          <button onClick={function(){buildItineraryWithBackend(accPois,pStays,appMeals,totalDays,grpSize);}} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>Build Itinerary</button>
+          <button onClick={function(){buildItineraryWithBackend(accPois,pStays,appMeals,totalDays,grpSize,true);}} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>Build Itinerary</button>
         </div>)}
         {itinLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2}}>Assembling {totalDays}-day itinerary...</p></div>)}
         {itinDone&&itin.length>0&&(<div>
+          <button onClick={function(){buildItineraryWithBackend(accPois,pStays,appMeals,totalDays,grpSize,true);}} style={{width:"100%",marginBottom:12,padding:"10px 12px",borderRadius:10,border:"1px solid "+C.teal+"35",background:C.teal+"10",color:C.tealL,fontSize:12,fontWeight:700,cursor:"pointer"}}>Rebuild Itinerary From Current Selections</button>
           {itin.map(function(day,di){var dayCost=(day.items||[]).reduce(function(s,it){return s+(it.cost||0);},0);
             return(<div key={di} style={{marginBottom:18}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
