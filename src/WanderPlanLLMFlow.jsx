@@ -7556,14 +7556,23 @@ export default function WanderPlan(){
       return null;
     }
     function confirmFlightsThenContinue(){
-      var picked=true;
       var missingProviderId=false;
+      var missingOptionLegs=[];
       var legSelections=[];
       var links=[];
+      var autopickStatePatch={};
       (flightLegs||[]).forEach(function(leg,legIndex){
         var legKey=legSelectionKey(leg,legIndex);
+        var options=Array.isArray(leg&&leg.options)?leg.options:[];
         var opt=selectedOptionForLeg(leg,legIndex);
-        if(!opt)picked=false;
+        if(!opt&&options.length>0){
+          opt=options[0];
+          autopickStatePatch[legKey]=optionSelectionKey(opt,0);
+        }
+        if(!opt){
+          missingOptionLegs.push(String(leg&&leg.from_airport||"?")+" -> "+String(leg&&leg.to_airport||"?"));
+          return;
+        }
         var fid=String((opt&&(
           opt.flight_id||
           opt.offer_id||
@@ -7573,7 +7582,16 @@ export default function WanderPlan(){
         legSelections.push({leg_id:String(leg&&leg.leg_id||leg&&leg.segment_id||leg&&leg.id||legKey),flight_id:fid||""});
         if(opt&&opt.booking_url)links.push({leg_id:String(leg&&leg.leg_id||leg&&leg.segment_id||leg&&leg.id||legKey),airline:opt.airline||"Airline",route:(opt.departure_airport||"")+" -> "+(opt.arrival_airport||""),url:opt.booking_url});
       });
-      if(!picked||legSelections.length===0){setFErr("Select one option for each flight leg first.");return;}
+      if(Object.keys(autopickStatePatch).length>0){
+        setFSel(function(prev){
+          return Object.assign({},prev||{},autopickStatePatch);
+        });
+      }
+      if(missingOptionLegs.length>0){
+        setFErr("No selectable options were returned for: "+missingOptionLegs.join(", ")+". Run Search Flight Options again.");
+        return;
+      }
+      if(legSelections.length===0){setFErr("No flight options are selectable yet. Run Search Flight Options again.");return;}
       if(missingProviderId){
         setFErr("One selected flight is missing a provider ID. Please run Search Flight Options again.");
         return;
@@ -8906,6 +8924,9 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       var allPicked=(flightLegs||[]).length>0&&(flightLegs||[]).every(function(leg,legIndex){
         return !!selectedOptionForLeg(leg,legIndex);
       });
+      var missingPickCount=(flightLegs||[]).reduce(function(total,leg,legIndex){
+        return total+(!selectedOptionForLeg(leg,legIndex)?1:0);
+      },0);
       function updFlight(k,v,commit){
         setFD(function(p){
           var n=Object.assign({},p);
@@ -9031,9 +9052,10 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           </div>)}
           <div style={{display:"flex",gap:10,marginTop:14}}>
             <button onClick={revise} style={{flex:1,padding:"12px",borderRadius:12,border:"2px solid "+C.red,background:"transparent",color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Revise</button>
-            <button onClick={confirmFlightsThenContinue} disabled={!allPicked||flightConfirmLoad} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:(!allPicked||flightConfirmLoad)?C.border:C.teal,color:(!allPicked||flightConfirmLoad)?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:(!allPicked||flightConfirmLoad)?"default":"pointer",minHeight:46}}>{flightConfirmLoad?"Confirming...":"Confirm Flights"}</button>
+            <button onClick={confirmFlightsThenContinue} disabled={flightLegs.length===0||flightConfirmLoad} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:(flightLegs.length===0||flightConfirmLoad)?C.border:C.teal,color:(flightLegs.length===0||flightConfirmLoad)?C.tx3:"#fff",fontSize:14,fontWeight:600,cursor:(flightLegs.length===0||flightConfirmLoad)?"default":"pointer",minHeight:46}}>{flightConfirmLoad?"Confirming...":"Confirm Flights"}</button>
           </div>
           {allPicked&&!flightConfirmLoad&&<p style={{fontSize:11,color:C.tx3,marginTop:8}}>Confirm will save selected legs and open airline booking pages.</p>}
+          {!allPicked&&missingPickCount>0&&!flightConfirmLoad&&<p style={{fontSize:11,color:C.tx3,marginTop:8}}>Missing selections: {missingPickCount}. Confirm will auto-pick the first option for unselected legs.</p>}
         </div>)}
       </div>);
     }())}
