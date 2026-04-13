@@ -2232,11 +2232,12 @@ function withAsyncTimeout(task, timeoutMs, fallbackValue){
   ]);
 }
 
-var POI_LLM_TIMEOUT_MS = 35000;
+var POI_LLM_TIMEOUT_MS = 12000;
 
 function classifyPoiFailureReason(reason, errorText){
   var base=String(reason||"").trim().toLowerCase();
   var msg=String(errorText||"").trim().toLowerCase();
+  if(msg.indexOf("529")>=0||msg.indexOf("overloaded")>=0||msg.indexOf("overload")>=0)return "overloaded";
   if(base==="provider_error" && (msg.indexOf("timeout")>=0 || msg.indexOf("504")>=0))return "timed_out";
   return base||"provider_error";
 }
@@ -2269,7 +2270,7 @@ async function buildPoiCoverageForDestinations(destinations, interests, budgetTi
   var fallbackDestinations=[];
   var destinationErrors={};
   onStatus=(typeof onStatus==="function")?onStatus:null;
-  var maxAttemptsPerDestination=2;
+  var maxTimeoutAttempts=2;
   var batchIndex=0;
   while(pending.length>0){
     var current=pending.shift();
@@ -2307,9 +2308,11 @@ async function buildPoiCoverageForDestinations(destinations, interests, budgetTi
     if(errorText)destinationErrors[destName]=errorText;
     if(reason==="timed_out"&&timedOutDestinations.indexOf(destName)<0)timedOutDestinations.push(destName);
     else if(reason==="provider_error"&&failedDestinations.indexOf(destName)<0)failedDestinations.push(destName);
+    else if(reason==="overloaded"&&failedDestinations.indexOf(destName)<0)failedDestinations.push(destName);
     else if((reason==="parse_failed"||reason==="empty_response")&&parseFailedDestinations.indexOf(destName)<0)parseFailedDestinations.push(destName);
     else if(emptyDestinations.indexOf(destName)<0)emptyDestinations.push(destName);
-    if((attemptCounts[destName]||0)<maxAttemptsPerDestination){
+    // Retry only true timeouts once; provider overload/parse issues should fail fast to fallback.
+    if(reason==="timed_out" && (attemptCounts[destName]||0)<maxTimeoutAttempts){
       pending.push(current);
       continue;
     }
