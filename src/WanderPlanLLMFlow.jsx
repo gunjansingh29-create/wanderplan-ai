@@ -3833,6 +3833,8 @@ export default function WanderPlan(){
   var poiAutoGenerateRef=useRef({});
   var durationDraftSaveTimerRef=useRef(null);
   var mealDraftSaveTimerRef=useRef(null);
+  var pendingWizardStepPersistRef=useRef(null);
+  var wizardStepPersistRetryRef=useRef(null);
   // Wizard interaction states
   var[destMemberVotes,setDMV]=useState({});
   var[tripJoined,setTJ]=useState({});
@@ -4649,7 +4651,17 @@ export default function WanderPlan(){
       var st=(ps&&ps.state&&typeof ps.state==="object")?ps.state:{};
       if(typeof ps.current_step==="number"&&sc==="wizard"){
         var remoteStep=normalizeWizardStepIndex(ps.current_step,st.wizard_order_version);
-        if(remoteStep!==wizStep)setWS(remoteStep);
+        var pendingStep=pendingWizardStepPersistRef.current;
+        var pendingForTrip=!!(pendingStep&&pendingStep.tripId===tid&&pendingStep.step!==undefined&&pendingStep.step!==null);
+        if(pendingForTrip&&remoteStep!==Number(pendingStep.step||0)){
+          // Keep local step while a user-initiated step save is still syncing.
+        }else{
+          if(remoteStep!==wizStep)updateLocalWizardStepState(remoteStep,tid);
+          if(pendingForTrip&&remoteStep===Number(pendingStep.step||0)){
+            pendingWizardStepPersistRef.current=null;
+            clearWizardStepPersistRetry();
+          }
+        }
       }
       if(st.duration_days_locked!==undefined){
         setSDD(Math.max(0,Number(st.duration_days_locked)||0));
@@ -4869,6 +4881,70 @@ export default function WanderPlan(){
       return r;
     }).catch(function(){return null;});
   }
+  function persistPlanningStateStrict(patch){
+    return saveTripPlanningState(patch).then(function(res){
+      if(res)return res;
+      throw new Error("planning_state_save_failed");
+    });
+  }
+  function clearWizardStepPersistRetry(){
+    if(wizardStepPersistRetryRef.current){
+      clearTimeout(wizardStepPersistRetryRef.current);
+      wizardStepPersistRetryRef.current=null;
+    }
+  }
+  function updateLocalWizardStepState(stepValue,tripId){
+    var stepNum=Math.max(0,Number(stepValue)||0);
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
+    setWS(stepNum);
+    setNT(function(prev){
+      if(!(prev&&typeof prev==="object"))return prev;
+      var prevId=String(prev.id||"").trim();
+      if(tid&&prevId&&prevId!==tid)return prev;
+      if(Number(prev.step||0)===stepNum)return prev;
+      return Object.assign({},prev,{step:stepNum});
+    });
+    if(tid){
+      setTrips(function(prev){
+        return (prev||[]).map(function(item){
+          if(!item||String(item.id||"").trim()!==tid)return item;
+          if(Number(item.step||0)===stepNum)return item;
+          return Object.assign({},item,{step:stepNum});
+        });
+      });
+    }
+  }
+  function persistWizardStepWithRetry(stepValue,tripId,attempt){
+    var stepNum=Math.max(0,Number(stepValue)||0);
+    var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
+    if(!(authToken&&tid&&isUuidLike(tid))){
+      pendingWizardStepPersistRef.current=null;
+      clearWizardStepPersistRetry();
+      return;
+    }
+    var tryNum=Math.max(1,Number(attempt)||1);
+    pendingWizardStepPersistRef.current={tripId:tid,step:stepNum,attempt:tryNum};
+    persistPlanningStateStrict({current_step:stepNum,state:{wizard_order_version:WIZARD_ORDER_VERSION}}).then(function(){
+      var pending=pendingWizardStepPersistRef.current;
+      if(pending&&pending.tripId===tid&&pending.step===stepNum){
+        pendingWizardStepPersistRef.current=null;
+      }
+      clearWizardStepPersistRetry();
+    }).catch(function(){
+      var pending=pendingWizardStepPersistRef.current;
+      if(!(pending&&pending.tripId===tid&&pending.step===stepNum))return;
+      if(tryNum>=4){
+        pendingWizardStepPersistRef.current=null;
+        clearWizardStepPersistRetry();
+        setCSM("Could not sync step progress. Please retry this step once connection is stable.");
+        return;
+      }
+      clearWizardStepPersistRetry();
+      wizardStepPersistRetryRef.current=setTimeout(function(){
+        persistWizardStepWithRetry(stepNum,tid,tryNum+1);
+      },Math.min(4000,700*tryNum));
+    });
+  }
   useEffect(function(){
     if(wizStep!==9)return;
     var tid=resolveWizardTripId(currentTripId,newTrip,viewTrip);
@@ -4961,8 +5037,9 @@ export default function WanderPlan(){
   }
   function setWizardStepShared(nextStep){
     var n=Math.min(Math.max(0,Number(nextStep)||0),Math.max(WIZ.length-1,0));
-    setWS(n);
-    saveTripPlanningState({current_step:n,state:{wizard_order_version:WIZARD_ORDER_VERSION}});
+    var tid=resolveWizardTripId(currentTripId,newTrip,viewTrip);
+    updateLocalWizardStepState(n,tid);
+    persistWizardStepWithRetry(n,tid,1);
   }
   function consensusStageKeyForStep(stepNum){
     var map={
@@ -5030,6 +5107,11 @@ export default function WanderPlan(){
     if(sc!=="wizard")return;
     setCSM("");
   },[wizStep,sc,currentTripId]);
+  useEffect(function(){
+    return function(){
+      clearWizardStepPersistRetry();
+    };
+  },[]);
   useEffect(function(){
     if(!loaded||!authToken||(sc!=="crew"&&sc!=="new_trip"&&sc!=="dash"&&sc!=="wizard"))return;
     refreshCrewFromBackend();
@@ -6201,7 +6283,7 @@ export default function WanderPlan(){
             {tripShareMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:8}}>{tripShareMsg}</p>}
           </div>
           <div style={{display:"flex",gap:10}}>
-            {tr.status==="planning"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Continue Planning</button>}
+            {tr.status==="planning"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(Math.max(0,Number(tr.step||0)||0));go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:C.teal,color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Continue Planning</button>}
             {tr.status==="active"&&isUuidLike(tr.id)&&<button onClick={function(){setCTID(tr.id||"");setVT(tr);setCompanionErr("");setCompanionData(null);go("companion");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.grn+","+C.teal+")",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><span style={{width:8,height:8,borderRadius:999,background:"#fff",animation:"pulse 1.5s infinite"}}/>Open Live Companion</button>}
             {tr.status==="invited"&&(<>
               <button onClick={function(){
@@ -6226,7 +6308,7 @@ export default function WanderPlan(){
                 }).catch(function(e){setCM("Trip invite could not be rejected: "+String(e&&e.message||"error"));});
               }} style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Reject</button>
             </>)}
-            {tr.status==="saved"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(0);go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Start Planning</button>}
+            {tr.status==="saved"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(Math.max(0,Number(tr.step||0)||0));go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Start Planning</button>}
             {tr.status==="completed"&&<button style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:"transparent",color:C.tx2,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>View Itinerary</button>}
             <button onClick={function(){setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
           </div>
@@ -7257,10 +7339,6 @@ export default function WanderPlan(){
       var n=wizStep+1;
       if(n<WIZ.length){
         setWizardStepShared(n);
-        setTrips(function(p){
-          if(!p.length)return p;
-          return p.slice(0,-1).concat([Object.assign({},p[p.length-1],{step:n})]);
-        });
       }else{
         go("dash");
       }
@@ -7323,7 +7401,7 @@ export default function WanderPlan(){
       }
       var chosenTier=String(sharedBudgetTier||user.budget||"moderate").trim().toLowerCase()||"moderate";
       setBSL(true);
-      saveTripPlanningState({state:{shared_budget_tier:chosenTier}}).catch(function(){return null;}).then(function(){
+      persistPlanningStateStrict({state:{shared_budget_tier:chosenTier}}).then(function(){
         return apiJson("/trips/"+budgetTripId+"/budget",{method:"POST",body:{daily_budget:budgetDailyValue(chosenTier),currency:"USD"}},authToken);
       }).then(function(){
         setBSL(false);adv();
@@ -7603,23 +7681,24 @@ export default function WanderPlan(){
       setFCL(true);
       setFErr("");
       apiJson("/trips/"+currentTripId+"/flights/select",{method:"POST",body:{leg_selections:legSelections}},authToken).then(function(){
-        setFCL(false);
         setFC(true);
         setFBL(links);
         logWizAction("record_selection",{key:"flights.selected",value:legSelections});
-        saveTripPlanningState({state:{flight_dates:{
+        return persistPlanningStateStrict({state:{flight_dates:{
           origin:flightDates.origin||"",
           final_airport:flightDates.final_airport||"",
           depart:String(flightDates.depart||"").slice(0,10),
           ret:String(flightDates.ret||"").slice(0,10)
         },flight_route_plan:normalizedFlightRoutePlan(),flights_confirmed:true,flight_booking_links:links}});
+      }).then(function(){
+        setFCL(false);
         links.forEach(function(link){
           try{window.open(link.url,"_blank","noopener,noreferrer");}catch(e){}
         });
         adv();
       }).catch(function(e){
         setFCL(false);
-        setFErr(String(e&&e.message||"Could not save selected flights"));
+        setFErr(String(e&&e.message||"Could not persist confirmed flights. Please retry."));
       });
     }
     function routePlanNearbyPoisForItinerary(){
@@ -8313,8 +8392,14 @@ export default function WanderPlan(){
         }
         var syncStatus=Object.assign({},poiStatus||{});
         acceptedIdx.forEach(function(i){syncStatus[i]="yes";});
-        saveTripPlanningState({state:{poi_status:syncStatus,poi_votes:normalizePoiStateMap(poiVotes,poiRows,poiOptionPool),poi_member_choices:normalizePoiStateMap(poiMemberChoices,poiRows,poiOptionPool)}}).catch(function(){return null;}).finally(function(){
-          syncTripPoisToBackend(syncStatus,poiRows).finally(function(){adv();});
+        persistPlanningStateStrict({state:{poi_status:syncStatus,poi_votes:normalizePoiStateMap(poiVotes,poiRows,poiOptionPool),poi_member_choices:normalizePoiStateMap(poiMemberChoices,poiRows,poiOptionPool)}}).then(function(){
+          syncTripPoisToBackend(syncStatus,poiRows).then(function(){
+            adv();
+          }).catch(function(){
+            setCSM("Could not sync activity decisions to the trip. Please retry.");
+          });
+        }).catch(function(){
+          setCSM("Could not persist activity decisions. Please retry.");
         });
       }
       var poiGroupPrefs=wizardPoiGroupPrefs;
@@ -8527,8 +8612,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         });
         setPS(nextStatus);
         logWizAction("record_selection",{key:"pois.voting",value:ranked.map(function(r){return {name:r.poi.name,up:r.up,down:r.down,approved:r.up>=r.down};})});
-        saveTripPlanningState({state:{poi_status:nextStatus,poi_votes:normalizePoiStateMap(poiVotes,poiRows,poiOptionPool),poi_member_choices:normalizePoiStateMap(poiMemberChoices,poiRows,poiOptionPool)}}).catch(function(){return null;}).finally(function(){
-          syncTripPoisToBackend(nextStatus,poiRows).finally(function(){adv();});
+        persistPlanningStateStrict({state:{poi_status:nextStatus,poi_votes:normalizePoiStateMap(poiVotes,poiRows,poiOptionPool),poi_member_choices:normalizePoiStateMap(poiMemberChoices,poiRows,poiOptionPool)}}).then(function(){
+          syncTripPoisToBackend(nextStatus,poiRows).then(function(){
+            adv();
+          }).catch(function(){
+            setCSM("Could not sync POI votes to the trip. Please retry.");
+          });
+        }).catch(function(){
+          setCSM("Could not persist POI votes. Please retry.");
         });
       }
       if(soloTripMode){
@@ -9199,6 +9290,33 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           return next;
         });
       }
+      function confirmStaysAndContinue(){
+        var activeStayTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip||tr);
+        var resolvedChoiceMap=Object.assign({},stayFinalChoices||{});
+        Object.keys(nextStayPick||{}).forEach(function(destName){
+          var selectedLocal=nextStayPick[destName];
+          var selectedEntry=(destGroups[destName]||[]).find(function(entry){
+            return entry.localIndex===selectedLocal;
+          })||null;
+          if(selectedEntry){
+            resolvedChoiceMap[destName]=canonicalStayVoteKey(selectedEntry.stay,selectedEntry.idx);
+          }
+        });
+        setStayPick(nextStayPick);
+        setSFC(resolvedChoiceMap);
+        if(!(authToken&&activeStayTripId&&isUuidLike(activeStayTripId))){
+          adv();
+          return;
+        }
+        persistPlanningStateStrict({state:{
+          stay_votes:(stayVotes&&typeof stayVotes==="object")?Object.assign({},stayVotes):{},
+          stay_final_choices:resolvedChoiceMap
+        }}).then(function(){
+          adv();
+        }).catch(function(){
+          setCSM("Could not persist stay selections. Please retry.");
+        });
+      }
       async function runStayLLM(){
         setSL(true);
         setSD(false);
@@ -9413,7 +9531,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             {stayChat.length>0&&(<div style={{maxHeight:160,overflowY:"auto",padding:"8px 12px"}}>{stayChat.map(function(msg,i){var isU=msg.from==="user";return(<div key={i} style={{display:"flex",justifyContent:isU?"flex-end":"flex-start",marginBottom:5}}><div style={{maxWidth:"85%",padding:"7px 11px",borderRadius:isU?"10px 10px 3px 10px":"10px 10px 10px 3px",background:isU?C.teal+"20":C.surface,border:"1px solid "+(isU?C.teal+"25":C.border),fontSize:13,lineHeight:1.5,color:isU?"#fff":C.tx2}}>{msg.text}</div></div>);})}{stayAskLoad&&<div style={{display:"flex",gap:4,padding:"4px 0"}}><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:5,height:5,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div>}</div>)}
             <div style={{display:"flex",gap:6,padding:"8px 10px",borderTop:stayChat.length>0?"1px solid "+C.border:"none"}}><input value={stayAsk} onChange={function(e){setSA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendStayChat();}} placeholder="'cheaper in Kyoto' or 'need a pool'" disabled={stayAskLoad} style={{flex:1,padding:"8px 11px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:12,color:"#fff",opacity:stayAskLoad?.5:1}}/><button onClick={sendStayChat} disabled={stayAskLoad} style={{padding:"7px 12px",borderRadius:8,border:"none",background:stayAskLoad?C.border:C.teal,color:stayAskLoad?C.tx3:"#fff",fontSize:11,fontWeight:600,cursor:stayAskLoad?"default":"pointer"}}>Ask</button></div>
           </div>
-          {allResolved&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{pickedStays.length} {soloTripMode?"selected":"resolved"} stays. Total: ${totalCost}</p></div><button onClick={function(){setStayPick(nextStayPick);adv();}} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{"Confirm Stays ($"+totalCost+")"}</button></div>)}
+          {allResolved&&(<div style={{marginTop:12}}><div style={{padding:"10px 14px",borderRadius:10,background:C.grnBg}}><p style={{fontSize:12,color:C.grn}}>{pickedStays.length} {soloTripMode?"selected":"resolved"} stays. Total: ${totalCost}</p></div><button onClick={confirmStaysAndContinue} style={{width:"100%",marginTop:16,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>{"Confirm Stays ($"+totalCost+")"}</button></div>)}
           {!allResolved&&destList.length>0&&<p style={{fontSize:12,color:C.wrn,marginTop:8}}>{soloTripMode?"Select one stay per destination to continue.":(organizerMode?"If votes split, lock one stay per destination to continue.":"Vote for one stay per destination. Organizer will lock any mismatches.")}</p>}
         </div>)}
         {stayDone&&stays.length===0&&(<div><p style={{fontSize:14,color:C.tx3,padding:"12px 0"}}>No results. Describe what you need:</p><div style={{display:"flex",gap:6}}><input value={stayAsk} onChange={function(e){setSA(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")sendStayChat();}} placeholder="e.g. 'Airbnbs in Santorini under $150'" style={{flex:1,padding:"9px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/><button onClick={sendStayChat} style={{padding:"8px 14px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>Ask</button></div></div>)}
@@ -9468,7 +9586,6 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       function confirmMealPlanAndContinue(){
         function proceedAfterMealConfirm(){
           setCSM("");
-          // Do not block travelers here; move forward and let background sync catch up.
           advanceWizardStep();
         }
         var mealSnapshot=normalizeDiningPlan(meals);
@@ -9482,11 +9599,10 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           proceedAfterMealConfirm();
           return;
         }
-        saveTripPlanningState({state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).then(function(){
+        persistPlanningStateStrict({state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).then(function(){
           proceedAfterMealConfirm();
         }).catch(function(){
-          setCSM("Could not save meal plan right now. Continuing locally.");
-          proceedAfterMealConfirm();
+          setCSM("Could not save meal plan right now. Please retry.");
         });
       }
 
