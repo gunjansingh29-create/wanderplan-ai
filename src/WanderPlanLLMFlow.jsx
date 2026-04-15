@@ -4784,7 +4784,7 @@ export default function WanderPlan(){
       });
   }
   function saveTripPlanningState(patch){
-    var tid=resolveWizardTripId(currentTripId,newTrip,viewTrip);
+    var tid=String((patch&&patch.trip_id)||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
     if(!(authToken&&tid&&isUuidLike(tid)))return Promise.resolve(null);
     var body={merge:true,state:{}};
     if(patch&&typeof patch==="object"){
@@ -4881,11 +4881,22 @@ export default function WanderPlan(){
       return r;
     }).catch(function(){return null;});
   }
-  function persistPlanningStateStrict(patch){
-    return saveTripPlanningState(patch).then(function(res){
-      if(res)return res;
-      throw new Error("planning_state_save_failed");
-    });
+  function persistPlanningStateStrict(patch,retries){
+    var maxAttempts=Math.max(1,Number(retries)||2);
+    function run(remaining){
+      return saveTripPlanningState(patch).then(function(res){
+        if(res)return res;
+        throw new Error("planning_state_save_failed");
+      }).catch(function(err){
+        if(remaining<=1)throw err;
+        return new Promise(function(resolve){
+          setTimeout(resolve,Math.min(600,180*(maxAttempts-remaining+1)));
+        }).then(function(){
+          return run(remaining-1);
+        });
+      });
+    }
+    return run(maxAttempts);
   }
   function clearWizardStepPersistRetry(){
     if(wizardStepPersistRetryRef.current){
@@ -4924,7 +4935,7 @@ export default function WanderPlan(){
     }
     var tryNum=Math.max(1,Number(attempt)||1);
     pendingWizardStepPersistRef.current={tripId:tid,step:stepNum,attempt:tryNum};
-    persistPlanningStateStrict({current_step:stepNum,state:{wizard_order_version:WIZARD_ORDER_VERSION}}).then(function(){
+    persistPlanningStateStrict({current_step:stepNum,state:{wizard_order_version:WIZARD_ORDER_VERSION}},1).then(function(){
       var pending=pendingWizardStepPersistRef.current;
       if(pending&&pending.tripId===tid&&pending.step===stepNum){
         pendingWizardStepPersistRef.current=null;
@@ -9308,7 +9319,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           adv();
           return;
         }
-        persistPlanningStateStrict({state:{
+        persistPlanningStateStrict({trip_id:activeStayTripId,state:{
           stay_votes:(stayVotes&&typeof stayVotes==="object")?Object.assign({},stayVotes):{},
           stay_final_choices:resolvedChoiceMap
         }}).then(function(){
@@ -9599,7 +9610,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           proceedAfterMealConfirm();
           return;
         }
-        persistPlanningStateStrict({state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).then(function(){
+        persistPlanningStateStrict({trip_id:activeDiningTripId,state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).then(function(){
           proceedAfterMealConfirm();
         }).catch(function(){
           setCSM("Could not save meal plan right now. Please retry.");
