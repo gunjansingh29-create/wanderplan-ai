@@ -1750,7 +1750,8 @@ function normalizeBucketLLMResult(parsed){
 function bucketQueryNeedsSpecificChildren(userMsg){
   var q=String(userMsg||"").trim().toLowerCase();
   if(!q)return false;
-  if(/\b(?:somewhere|anywhere|ideas?|suggestions?)\b/.test(q)&&bucketQueryAnchorName(userMsg)){
+  var anchor=bucketQueryAnchorName(userMsg);
+  if(/\b(?:somewhere|anywhere|ideas?|suggestions?)\b/.test(q)&&anchor){
     return true;
   }
   return /\b(cities|city|towns|town|places|destinations|spots|areas|regions|islands)\b/.test(q) ||
@@ -1912,6 +1913,7 @@ function upsertBucketItemList(list,newItem){
     exists=true;
     var merged=Object.assign({},item,incoming);
     if(itemId)merged.id=itemId;
+    else if(incomingId)merged.id=incomingId;
     return merged;
   });
   if(!exists)out.push(incoming);
