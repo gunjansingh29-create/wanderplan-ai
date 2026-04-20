@@ -196,6 +196,22 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(rows.every((row) => row.bestMonths.includes(2))).toBe(true);
   });
 
+  test("buildBucketFallbackDestinations keeps real destinations and drops activity echoes when mixed", () => {
+    const rows = buildBucketFallbackDestinations("skiing and mountain views", [
+      { name: "Chamonix", country: "France" },
+      { name: "skiing" },
+    ]);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        name: "Chamonix",
+        country: "France",
+        tags: ["Nature", "Adventure"],
+        bestMonths: [12, 1, 2, 3],
+      }),
+    ]);
+  });
+
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
     const base = buildPoiRequestSignature(
       [{ name: "Kyoto", country: "Japan" }],

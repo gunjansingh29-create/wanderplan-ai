@@ -1798,11 +1798,11 @@ function bucketClarifyMessage(userMsg){
 }
 
 function bucketFallbackThemeForQuery(userMsg){
-  var q=canonicalTripDestinationName(userMsg);
-  if(!q)return null;
-  var hasSki=/(^|\s)ski(?:ing)?(\s|$)|\bsnow(?:board(?:ing)?)?\b|\bslopes?\b/.test(q);
-  var hasMountain=/\bmountain(?:s)?\b|\balps?\b|\brock(?:y|ies)\b/.test(q);
-  if(hasSki||hasMountain){
+  var canonicalQuery=canonicalTripDestinationName(userMsg);
+  if(!canonicalQuery)return null;
+  var hasSkiKeywords=/(^|\s)ski(?:ing)?(\s|$)|\bsnow(?:board(?:ing)?)?\b|\bslopes?\b/.test(canonicalQuery);
+  var hasMountainKeywords=/\bmountain(?:s)?\b|\balps?\b|\brock(?:y|ies)\b/.test(canonicalQuery);
+  if(hasSkiKeywords||hasMountainKeywords){
     return {
       key:"winter_mountains",
       echoPatterns:[
@@ -1838,12 +1838,11 @@ function buildBucketFallbackDestinations(userMsg, rows){
 
   if(theme&&mapped.length){
     mapped=mapped.filter(function(it){
-      var nm=canonicalTripDestinationName(it.name);
-      if(!nm)return false;
-      for(var i=0;i<theme.echoPatterns.length;i++){
-        if(theme.echoPatterns[i].test(nm))return false;
-      }
-      return true;
+      var canonicalName=canonicalTripDestinationName(it.name);
+      if(!canonicalName)return false;
+      return !theme.echoPatterns.some(function(pattern){
+        return pattern.test(canonicalName);
+      });
     });
   }
 
@@ -1874,9 +1873,9 @@ function buildBucketFallbackDestinations(userMsg, rows){
 
 async function fallbackExtractDestinations(userMsg){
   try{
-    var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
-    var arr=(r&&Array.isArray(r.destinations))?r.destinations:[];
-    return buildBucketFallbackDestinations(userMsg,arr);
+    var response=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
+    var destinations=(response&&Array.isArray(response.destinations))?response.destinations:[];
+    return buildBucketFallbackDestinations(userMsg,destinations);
   }catch(e){
     return buildBucketFallbackDestinations(userMsg,[]);
   }
