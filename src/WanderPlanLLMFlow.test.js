@@ -25,6 +25,7 @@ import {
   buildTripWhatsAppText,
   buildWhatsAppShareUrl,
   bucketClarifyMessage,
+  bucketPreferenceSeedDestinations,
   bucketQueryAnchorName,
   bucketQueryNeedsSpecificChildren,
   canEditVoteForMember,
@@ -43,6 +44,7 @@ import {
   inclusiveIsoDays,
   itineraryRowsScore,
   isCurrentVoteVoter,
+  isLikelyBucketDestinationName,
   makeVoteUserId,
   materializeItineraryDates,
   mergeAvailabilityDraft,
@@ -172,6 +174,20 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("isLikelyBucketDestinationName rejects generic non-destination phrases", () => {
+    expect(isLikelyBucketDestinationName("street markets")).toBe(false);
+    expect(isLikelyBucketDestinationName("food and culture")).toBe(false);
+    expect(isLikelyBucketDestinationName("Bangkok")).toBe(true);
+  });
+
+  test("bucketPreferenceSeedDestinations returns food-city suggestions for food-market preferences", () => {
+    const seeds = bucketPreferenceSeedDestinations("I love food and street markets", "moderate");
+    expect(seeds.map((item) => item.name)).toEqual(
+      expect.arrayContaining(["Bangkok", "Marrakech", "Istanbul"])
+    );
+    expect(seeds.every((item) => item.tags.includes("Food"))).toBe(true);
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {

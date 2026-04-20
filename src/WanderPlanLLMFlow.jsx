@@ -1712,6 +1712,7 @@ function normalizeBucketLLMResult(parsed){
     if(!row||typeof row!=="object")return null;
     var name=String(row.name||row.destination||row.city||"").trim();
     if(!name)return null;
+    if(!isLikelyBucketDestinationName(name))return null;
     return {
       name:name,
       country:String(row.country||"").trim(),
@@ -1797,6 +1798,41 @@ function bucketClarifyMessage(userMsg){
   return "Could you name specific cities, islands, or regions you want to explore?";
 }
 
+var BUCKET_GENERIC_DESTINATION_TERMS={
+  street:1,streets:1,market:1,markets:1,food:1,foods:1,cuisine:1,culinary:1,culture:1,cultural:1,shopping:1,nightlife:1,adventure:1,nature:1,history:1,wellness:1,photography:1,wine:1,hiking:1,beach:1,beaches:1,destination:1,destinations:1,place:1,places:1,city:1,cities:1,town:1,towns:1,region:1,regions:1,island:1,islands:1
+};
+
+function isLikelyBucketDestinationName(name){
+  var normalized=String(name||"").trim().toLowerCase().replace(/[^a-z\s'-]/g," ").replace(/\s+/g," ").trim();
+  if(!normalized)return false;
+  var words=normalized.split(" ").filter(Boolean);
+  if(!words.length)return false;
+  var meaningful=words.filter(function(w){
+    return !(w==="and"||w==="the"||w==="of"||w==="for"||w==="in"||w==="to"||w==="a"||w==="an");
+  });
+  if(!meaningful.length)return false;
+  var genericCount=0;
+  for(var i=0;i<meaningful.length;i++){
+    if(BUCKET_GENERIC_DESTINATION_TERMS[meaningful[i]])genericCount++;
+  }
+  if(genericCount===meaningful.length)return false;
+  return true;
+}
+
+function bucketPreferenceSeedDestinations(userMsg, budgetTier){
+  var q=String(userMsg||"").toLowerCase();
+  if(!/\b(food|street\s*markets?|markets?|cuisine|culinary|eat|eating|dishes|local food)\b/.test(q)){
+    return [];
+  }
+  var tier=resolveBudgetTier(budgetTier);
+  var baseCost=tier==="budget"?90:(tier==="premium"?190:(tier==="luxury"?280:140));
+  return [
+    {name:"Bangkok",country:"Thailand",bestMonths:[11,12,1,2],costPerDay:baseCost,tags:["Food","Culture"],bestTimeDesc:"Cooler dry-season months are ideal for markets and street food.",costNote:"Street food is affordable; average cost varies by area."},
+    {name:"Marrakech",country:"Morocco",bestMonths:[3,4,5,10,11],costPerDay:Math.max(80,Math.round(baseCost*0.9)),tags:["Food","Culture"],bestTimeDesc:"Spring and autumn are comfortable for medina walks and markets.",costNote:"Local dining is good value, with premium riads increasing spend."},
+    {name:"Istanbul",country:"Turkey",bestMonths:[4,5,9,10],costPerDay:Math.max(95,Math.round(baseCost*1.05)),tags:["Food","Culture"],bestTimeDesc:"Shoulder seasons are ideal for bazaars and food districts.",costNote:"Great range from budget eateries to high-end restaurants."}
+  ];
+}
+
 async function fallbackExtractDestinations(userMsg){
   try{
     var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
@@ -1807,6 +1843,7 @@ async function fallbackExtractDestinations(userMsg){
       var it=arr[i]||{};
       var nm=String(it.name||it.destination||it.city||"").trim();
       if(!nm)continue;
+      if(!isLikelyBucketDestinationName(nm))continue;
       out.push({
         name:nm,
         country:String(it.country||"").trim(),
@@ -1850,11 +1887,17 @@ async function askLLM(userMsg, budget, history) {
         return {type:"clarify",message:bucketClarifyMessage(userMsg)};
       }
     }
+    if(normalized&&normalized.type==="clarify"){
+      var clarifySeeds=bucketPreferenceSeedDestinations(userMsg,budget);
+      if(clarifySeeds.length)return {type:"destinations",items:clarifySeeds};
+    }
     if(normalized)return normalized;
   } catch (e) {}
   var fb=await fallbackExtractDestinations(userMsg);
   var refinedFallback=refineBucketItemsForQuery(userMsg, fb);
   if(refinedFallback.length)return {type:"destinations",items:refinedFallback};
+  var preferenceSeeds=bucketPreferenceSeedDestinations(userMsg,budget);
+  if(preferenceSeeds.length)return {type:"destinations",items:preferenceSeeds};
   return {type: "clarify", message: bucketClarifyMessage(userMsg)};
 }
 
@@ -10614,5 +10657,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketPreferenceSeedDestinations, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isLikelyBucketDestinationName, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
