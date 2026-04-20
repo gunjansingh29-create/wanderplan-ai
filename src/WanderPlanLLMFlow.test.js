@@ -2251,10 +2251,85 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     const scopedBucket = JSON.parse(
       window.localStorage.getItem("wp-b:uid:crew-user") || "[]"
     );
+    const legacyCrew = JSON.parse(window.localStorage.getItem("wp-c") || "[]");
     expect(scopedUser.name).toBe("Crew Member");
     expect(scopedUser.email).toBe("crew@test.com");
     expect(scopedBucket).toHaveLength(1);
     expect(scopedBucket[0].name).toBe("Kyoto");
+    expect(Array.isArray(legacyCrew)).toBe(true);
+  });
+
+  test("pending crew invites appear in My Crew and are persisted to wp-c", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({
+          accessToken: "test-token:crew-user",
+          name: "Crew Member",
+        });
+      }
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Crew Member",
+            travel_styles: ["friends"],
+            interests: { food: true },
+            budget_tier: "budget",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({ peers: [] });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({
+          invites: [
+            {
+              invitee_email: "test@example.com",
+              status: "pending",
+              invite_token: "invite-token-1",
+              accepted_at: null,
+            },
+          ],
+        });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({ trips: [] });
+      }
+      return jsonResponse({});
+    });
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "crew@test.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Crew"));
+
+    await waitFor(() =>
+      expect(screen.queryByText("0 joined, 1 pending")).not.toBeNull()
+    );
+    expect(screen.queryByText("test@example.com")).not.toBeNull();
+
+    await waitFor(() => {
+      const cachedCrew = JSON.parse(window.localStorage.getItem("wp-c") || "[]");
+      expect(cachedCrew).toHaveLength(1);
+      expect(cachedCrew[0].email).toBe("test@example.com");
+      expect(cachedCrew[0].status).toBe("pending");
+    });
   });
 });
 
