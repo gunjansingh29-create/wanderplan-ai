@@ -70,6 +70,7 @@ import {
   readVoteForVoter,
   receiptItemsTotal,
   refineBucketItemsForQuery,
+  resolveBucketKeywordDestinations,
   resolveAvailabilityDraftWindow,
   resolveBudgetTier,
   resolveTripBudgetTier,
@@ -172,6 +173,23 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("resolveBucketKeywordDestinations maps generic beach keyword to specific destinations", () => {
+    const items = resolveBucketKeywordDestinations("beach", "moderate");
+    expect(items.map((item) => item.name)).toEqual(["Maldives", "Bali", "Phuket"]);
+    items.forEach((item) => {
+      expect(item.country).toBeTruthy();
+      expect(Array.isArray(item.tags) && item.tags.length > 0).toBe(true);
+      expect(Array.isArray(item.bestMonths) && item.bestMonths.length > 0).toBe(true);
+      expect(item.costPerDay).toBeGreaterThan(0);
+      expect(item.bestTimeDesc).toBeTruthy();
+      expect(item.costNote).toBeTruthy();
+    });
+  });
+
+  test("resolveBucketKeywordDestinations ignores non-keyword destination inputs", () => {
+    expect(resolveBucketKeywordDestinations("Kyoto", "moderate")).toEqual([]);
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
