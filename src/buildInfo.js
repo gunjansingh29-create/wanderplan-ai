@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "unknown",
-  "branch": "unknown",
-  "builtAt": "2026-03-19T20:24:59.264Z"
+  "sha": "11a30da",
+  "branch": "copilot/add-day-by-day-itinerary",
+  "builtAt": "2026-04-20T00:45:31.937Z"
 };
