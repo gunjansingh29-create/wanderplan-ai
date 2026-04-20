@@ -1797,29 +1797,88 @@ function bucketClarifyMessage(userMsg){
   return "Could you name specific cities, islands, or regions you want to explore?";
 }
 
+function bucketFallbackThemeForQuery(userMsg){
+  var q=canonicalTripDestinationName(userMsg);
+  if(!q)return null;
+  var hasSki=/(^|\s)ski(?:ing)?(\s|$)|\bsnow(?:board(?:ing)?)?\b|\bslopes?\b/.test(q);
+  var hasMountain=/\bmountain(?:s)?\b|\balps?\b|\brock(?:y|ies)\b/.test(q);
+  if(hasSki||hasMountain){
+    return {
+      key:"winter_mountains",
+      echoPatterns:[
+        /^ski(?:ing)?$/,
+        /^mountain views?$/,
+        /^snow(?:board(?:ing)?)?$/,
+        /^ski slopes?$/
+      ],
+      defaultBestMonths:[12,1,2,3],
+      defaultTags:["Nature","Adventure"],
+      defaultBestTimeDesc:"December to March is ideal for snow sports and clear alpine views.",
+      defaultCostNote:"Winter high season can raise prices near ski resorts.",
+      suggestions:[
+        {name:"Chamonix",country:"France"},
+        {name:"Aspen",country:"United States"},
+        {name:"Zermatt",country:"Switzerland"}
+      ]
+    };
+  }
+  return null;
+}
+
+function buildBucketFallbackDestinations(userMsg, rows){
+  var theme=bucketFallbackThemeForQuery(userMsg);
+  var baseRows=Array.isArray(rows)?rows:[];
+  var mapped=baseRows.map(function(it){
+    var row=(it&&typeof it==="object")?it:{name:it};
+    return {
+      name:String(row.name||row.destination||row.city||"").trim(),
+      country:String(row.country||"").trim()
+    };
+  }).filter(function(it){return !!it.name;});
+
+  if(theme&&mapped.length){
+    mapped=mapped.filter(function(it){
+      var nm=canonicalTripDestinationName(it.name);
+      if(!nm)return false;
+      for(var i=0;i<theme.echoPatterns.length;i++){
+        if(theme.echoPatterns[i].test(nm))return false;
+      }
+      return true;
+    });
+  }
+
+  if(theme&&mapped.length===0){
+    mapped=theme.suggestions.slice();
+  }
+
+  if(mapped.length===0)return [];
+
+  var seen={};
+  return mapped.filter(function(it){
+    var key=(canonicalTripDestinationName(it.name)+"|"+canonicalTripDestinationName(it.country));
+    if(!key||seen[key])return false;
+    seen[key]=1;
+    return true;
+  }).map(function(it){
+    return {
+      name:it.name,
+      country:it.country,
+      bestMonths:theme?theme.defaultBestMonths.slice():[4,5,9,10],
+      costPerDay:theme?220:150,
+      tags:theme?theme.defaultTags.slice():["Culture","Food"],
+      bestTimeDesc:theme?theme.defaultBestTimeDesc:"Shoulder seasons are usually best for weather and crowds.",
+      costNote:theme?theme.defaultCostNote:"Estimated default until preferences refine this."
+    };
+  });
+}
+
 async function fallbackExtractDestinations(userMsg){
   try{
     var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
     var arr=(r&&Array.isArray(r.destinations))?r.destinations:[];
-    if(!arr.length)return [];
-    var out=[];
-    for(var i=0;i<arr.length;i++){
-      var it=arr[i]||{};
-      var nm=String(it.name||it.destination||it.city||"").trim();
-      if(!nm)continue;
-      out.push({
-        name:nm,
-        country:String(it.country||"").trim(),
-        bestMonths:[4,5,9,10],
-        costPerDay:150,
-        tags:["Culture","Food"],
-        bestTimeDesc:"Shoulder seasons are usually best for weather and crowds.",
-        costNote:"Estimated default until preferences refine this."
-      });
-    }
-    return out;
+    return buildBucketFallbackDestinations(userMsg,arr);
   }catch(e){
-    return [];
+    return buildBucketFallbackDestinations(userMsg,[]);
   }
 }
 
@@ -10614,5 +10673,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketFallbackThemeForQuery, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildBucketFallbackDestinations, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };

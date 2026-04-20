@@ -24,7 +24,9 @@ import {
   buildTripShareSummary,
   buildTripWhatsAppText,
   buildWhatsAppShareUrl,
+  buildBucketFallbackDestinations,
   bucketClarifyMessage,
+  bucketFallbackThemeForQuery,
   bucketQueryAnchorName,
   bucketQueryNeedsSpecificChildren,
   canEditVoteForMember,
@@ -172,6 +174,26 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("bucketFallbackThemeForQuery identifies skiing and mountain-view intent", () => {
+    expect(bucketFallbackThemeForQuery("skiing and mountain views")).toEqual(
+      expect.objectContaining({ key: "winter_mountains" })
+    );
+    expect(bucketFallbackThemeForQuery("tokyo and kyoto")).toBeNull();
+  });
+
+  test("buildBucketFallbackDestinations maps ski activity echoes to real winter destinations", () => {
+    const rows = buildBucketFallbackDestinations("skiing and mountain views", [
+      { name: "skiing" },
+      { name: "mountain views" },
+    ]);
+
+    expect(rows.map((row) => row.name)).toEqual(["Chamonix", "Aspen", "Zermatt"]);
+    expect(rows.map((row) => row.country)).toEqual(["France", "United States", "Switzerland"]);
+    expect(rows.every((row) => row.tags.includes("Nature"))).toBe(true);
+    expect(rows.every((row) => row.bestMonths.includes(12))).toBe(true);
+    expect(rows.every((row) => row.bestMonths.includes(2))).toBe(true);
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
