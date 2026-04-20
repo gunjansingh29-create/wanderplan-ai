@@ -132,24 +132,24 @@ function canonicalTripDestinationName(value){
 }
 
 function dedupeBucketSuggestionsForExisting(proposedItems, bucketItems){
-  var existingByName={};
+  var existingByName = {};
   (Array.isArray(bucketItems)?bucketItems:[]).forEach(function(item){
-    var key=canonicalTripDestinationName(item&&item.name);
-    if(key)existingByName[key]=String(item&&item.name||"").trim()||String(item&&item.destination||"").trim()||"Destination";
+    var key = canonicalTripDestinationName(item&&item.name);
+    if(key)existingByName[key] = String(item&&item.name||"").trim()||String(item&&item.destination||"").trim()||"Destination";
   });
-  var seen=Object.assign({},existingByName);
-  var duplicateMap={};
-  var toAdd=[];
+  var seen = Object.assign({},existingByName);
+  var duplicateMap = {};
+  var toAdd = [];
   (Array.isArray(proposedItems)?proposedItems:[]).forEach(function(it){
-    var nm=String(it&&it.name||"").trim();
+    var nm = String(it&&it.name||"").trim();
     if(!nm)return;
-    var key=canonicalTripDestinationName(nm);
+    var key = canonicalTripDestinationName(nm);
     if(!key)return;
     if(seen[key]){
-      if(!duplicateMap[key])duplicateMap[key]=seen[key];
+      if(!duplicateMap[key])duplicateMap[key] = seen[key];
       return;
     }
-    seen[key]=nm;
+    seen[key] = nm;
     toAdd.push(it);
   });
   return {
