@@ -12,6 +12,7 @@ describe("wanderplan dashboard crew invite duplicate guards", () => {
     expect(duplicateCrewInviteMessageForStatus("Invited")).toBe(
       "This person is already invited."
     );
+    expect(duplicateCrewInviteMessageForStatus(" joined ")).toBe("Already a member.");
     expect(duplicateCrewInviteMessageForStatus("")).toBe(
       "This person is already invited."
     );
