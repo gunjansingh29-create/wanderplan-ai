@@ -123,6 +123,39 @@ function tripDestinationNamesFromValues(values,bucket){
   }).filter(Boolean);
 }
 
+function buildWizardFitnessGuidance(destinations){
+  var list=Array.isArray(destinations)?destinations:[];
+  var terms=list.map(function(dest){
+    var name=String(dest&&dest.name||"").toLowerCase();
+    var country=String(dest&&dest.country||"").toLowerCase();
+    return (name+" "+country).trim();
+  }).join(" ");
+  var hasCentralAsia=/(samarkand|tashkent|almaty|bukhara|uzbekistan|kazakhstan|silk route)/.test(terms);
+  var hasHeat=/(samarkand|tashkent|bukhara|uzbekistan)/.test(terms);
+  var hasAltitude=/(almaty|kazakhstan|georgia|tbilisi|caucasus)/.test(terms);
+  var hasSantorini=/(santorini|caldera)/.test(terms);
+  if(hasSantorini){
+    return {
+      level:"Moderate - suitable for all members",
+      detail:"Caldera hiking includes stairs and uneven terrain — pace climbs and wear supportive footwear."
+    };
+  }
+  if(hasCentralAsia){
+    var parts=[];
+    if(hasAltitude)parts.push("Some segments can include higher-elevation day trips, so pace activity and hydrate.");
+    if(hasHeat)parts.push("Uzbekistan summer afternoons can be very hot, so schedule strenuous walking for mornings or evenings.");
+    if(parts.length===0)parts.push("Expect walking-heavy days across historic districts and bazaars.");
+    return {
+      level:"Moderate - walking-focused with climate and altitude considerations",
+      detail:parts.join(" ")
+    };
+  }
+  return {
+    level:"Moderate - suitable for all members",
+    detail:"Expect walking-heavy days (8k–12k steps), so build light cardio endurance before travel."
+  };
+}
+
 function canonicalTripDestinationName(value){
   return normalizeTripDestinationValue(value)
     .replace(/\s*\([^)]*\)\s*/g," ")
@@ -8211,7 +8244,14 @@ export default function WanderPlan(){
 
     {wizStep===4&&(<div>
       {ab("Health Agent","CDC/WHO scan for your destinations:")}
-      {[{l:"Vaccinations",v:"No special vaccinations required",s:"low",t:"Standard up-to-date recommended"},{l:"Travel Insurance",v:"Recommended for adventure activities",s:"med",t:"Medical evacuation coverage suggested"},{l:"Fitness Level",v:"Moderate - suitable for all members",s:"low",t:"Caldera hiking requires basic fitness"}].map(function(h,i){return(<div key={i} style={{display:"flex",gap:12,padding:"10px 0",borderBottom:i<2?"1px solid "+C.border:"none"}}><div style={{width:8,height:8,borderRadius:999,background:h.s==="low"?C.grn:h.s==="med"?C.wrn:C.red,marginTop:6,flexShrink:0}}/><div><p style={{fontSize:14,fontWeight:600}}>{h.l}</p><p style={{fontSize:13,color:C.tx2}}>{h.v}</p><p style={{fontSize:12,color:C.tx3}}>{h.t}</p></div></div>);})}
+      {[
+        {l:"Vaccinations",v:"No special vaccinations required",s:"low",t:"Standard up-to-date recommended"},
+        {l:"Travel Insurance",v:"Recommended for adventure activities",s:"med",t:"Medical evacuation coverage suggested"},
+        (function(){
+          var guidance=buildWizardFitnessGuidance(rawDests);
+          return {l:"Fitness Level",v:guidance.level,s:"low",t:guidance.detail};
+        }())
+      ].map(function(h,i){return(<div key={i} style={{display:"flex",gap:12,padding:"10px 0",borderBottom:i<2?"1px solid "+C.border:"none"}}><div style={{width:8,height:8,borderRadius:999,background:h.s==="low"?C.grn:h.s==="med"?C.wrn:C.red,marginTop:6,flexShrink:0}}/><div><p style={{fontSize:14,fontWeight:600}}>{h.l}</p><p style={{fontSize:13,color:C.tx2}}>{h.v}</p><p style={{fontSize:12,color:C.tx3}}>{h.t}</p></div></div>);})}
       {goBtn("Acknowledge & Continue")}
     </div>)}
 
@@ -10614,5 +10654,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, buildWizardFitnessGuidance, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
