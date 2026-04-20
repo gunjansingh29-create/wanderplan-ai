@@ -41,6 +41,9 @@ import {
   fillMissingDurationPerDestination,
   formatMoney,
   inclusiveIsoDays,
+  INVALID_BUCKET_DESTINATION_MESSAGE,
+  isLikelyBucketDestinationName,
+  isLikelyGibberishBucketInput,
   itineraryRowsScore,
   isCurrentVoteVoter,
   makeVoteUserId,
@@ -172,6 +175,19 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("isLikelyBucketDestinationName rejects gibberish-like destination labels", () => {
+    expect(isLikelyBucketDestinationName("asdfjkl xyz 123")).toBe(false);
+    expect(isLikelyBucketDestinationName("Kyoto")).toBe(true);
+  });
+
+  test("isLikelyGibberishBucketInput flags gibberish query and keeps expected error message stable", () => {
+    expect(isLikelyGibberishBucketInput("asdfjkl xyz 123")).toBe(true);
+    expect(isLikelyGibberishBucketInput("Kyoto, Japan")).toBe(false);
+    expect(INVALID_BUCKET_DESTINATION_MESSAGE).toBe(
+      "I couldn't find that destination. Please try a real city, country, or landmark."
+    );
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
