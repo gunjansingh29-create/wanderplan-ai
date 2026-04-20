@@ -1853,7 +1853,8 @@ function refineBucketItemsForQuery(userMsg, items){
       }
     }
     if(duplicateIdx>=0){
-      if(!String(out[duplicateIdx]&&out[duplicateIdx].country||"").trim()&&country){
+      var existingCountry=String(out[duplicateIdx]&&out[duplicateIdx].country||"").trim();
+      if(!existingCountry&&country){
         out[duplicateIdx]=Object.assign({},out[duplicateIdx],normalized);
       }
       return;
