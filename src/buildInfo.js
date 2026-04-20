@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "unknown",
-  "branch": "unknown",
-  "builtAt": "2026-03-19T20:24:59.264Z"
+  "sha": "70a039c",
+  "branch": "copilot/b-08-fix-zero-amount-expense-error",
+  "builtAt": "2026-04-20T00:24:29.600Z"
 };
