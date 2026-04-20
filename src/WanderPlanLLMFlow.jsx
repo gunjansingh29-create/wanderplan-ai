@@ -5943,7 +5943,8 @@ export default function WanderPlan(){
         var members=Array.isArray(prev&&prev.members)?prev.members:[];
         var nextMembers=members.filter(function(item){
           var itemEmail=String(item&&item.email||"").trim().toLowerCase();
-          return itemEmail!==email&&item.id!==m.id;
+          if(itemEmail)return itemEmail!==email;
+          return item.id!==m.id;
         });
         if(nextMembers.length===members.length)return prev;
         return Object.assign({},prev,{members:nextMembers});

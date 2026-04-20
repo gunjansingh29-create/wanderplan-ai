@@ -3281,7 +3281,7 @@ async def crew_remove_member(email: str, user_id: str = Depends(get_current_user
     def _row_count(command_tag: str) -> int:
         try:
             return int(str(command_tag or "").split()[-1])
-        except Exception:
+        except (ValueError, IndexError, AttributeError, TypeError):
             return 0
 
     async with db_pool.acquire() as conn:
@@ -3315,7 +3315,7 @@ async def crew_remove_member(email: str, user_id: str = Depends(get_current_user
         invites_updated = await conn.execute(
             """
             UPDATE crew_invites
-            SET status = 'declined', accepted_by_user_id = NULL, accepted_at = NOW()
+            SET status = 'declined', accepted_by_user_id = NULL, accepted_at = NULL
             WHERE inviter_user_id = $1
               AND LOWER(invitee_email) = $2
               AND status IN ('pending', 'accepted')
