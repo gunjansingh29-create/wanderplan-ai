@@ -2256,6 +2256,57 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedBucket).toHaveLength(1);
     expect(scopedBucket[0].name).toBe("Kyoto");
   });
+
+  test("profile tab exposes sign out button that returns to auth screen and clears session token", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Alice Active",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:active-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:active-user",
+      JSON.stringify({
+        name: "Alice Active",
+        email: "alice@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Profile"));
+    await waitFor(() => expect(screen.queryByText("Sign Out")).not.toBeNull());
+
+    fireEvent.click(screen.getByText("Sign Out"));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Sign In" })).not.toBeNull());
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem("wp-auth") || "\"stale\"")).toBe("")
+    );
+    expect(screen.queryByText("Trips")).toBeNull();
+  });
 });
 
 describe("WanderPlanLLMFlow companion entry", () => {

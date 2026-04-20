@@ -5655,6 +5655,30 @@ export default function WanderPlan(){
     setSigninLoad(false);
   }
 
+  function signOutUser(){
+    setAT("");
+    setPH(false);
+    setUser(emptyUserState());
+    setCrew([]);
+    setBucket([]);
+    setTrips([]);
+    setNT({name:"",dests:[],members:[],step:0});
+    setVT(null);
+    setCTID("");
+    setWSID("");
+    setTF("all");
+    setAuthMode("signin");
+    setSigninPass("");
+    setResetPass("");
+    setAE("");
+    setAI("");
+    setCM("");
+    setTIM("");
+    setTSM("");
+    setHist([]);
+    setSc("signup");
+  }
+
   function updateBucketItemLocal(newItem){
     setBucket(function(p){
       var key=(newItem.id||newItem.name||"").toString();
@@ -6994,7 +7018,10 @@ export default function WanderPlan(){
 
   {sc==="profile"&&(<div style={{maxWidth:520}}>
     <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:24}}>My Profile</h1></Fade>
-    <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10}}>
+      <button onClick={signOutUser} style={{padding:"7px 12px",borderRadius:8,border:"1px solid "+C.border,background:C.surface,color:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+        Sign Out
+      </button>
       <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
         {showVoteDebug?"Hide Debug":"Show Debug"}
       </button>
@@ -10615,4 +10642,3 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 }
 
 export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-
