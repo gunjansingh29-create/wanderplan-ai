@@ -819,6 +819,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(normalizeWizardStepIndex(11, 0)).toBe(10);
     expect(normalizeWizardStepIndex(13, 0)).toBe(12);
     expect(normalizeWizardStepIndex(11, 2)).toBe(12);
+    expect(normalizeWizardStepIndex(15, 2)).toBe(15);
   });
 
   test("route planner helpers normalize, order, and map durations from route output", () => {
@@ -2940,6 +2941,89 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
       expect(putBodies.length).toBeGreaterThan(0);
       expect(putBodies[putBodies.length - 1].destinations).toEqual(["Osaka"]);
     });
+  });
+
+  test("caps completed wizard progress display at the final step", async () => {
+    const tripId = "77777777-7777-4777-8777-777777777777";
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Organizer",
+            travel_styles: ["friends"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: tripId,
+              name: "Japan Sprint",
+              status: "planning",
+              my_status: "owner",
+              my_role: "owner",
+              duration_days: 6,
+              members: [],
+              destinations: [{ name: "Kyoto" }],
+            },
+          ],
+        });
+      }
+      if (path === `/trips/${tripId}/planning-state` && method === "GET") {
+        return jsonResponse({
+          current_step: 15,
+          state: { wizard_order_version: 2 },
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      if (path === `/trips/${tripId}` && method === "GET") {
+        return jsonResponse({
+          trip: {
+            id: tripId,
+            name: "Japan Sprint",
+            status: "planning",
+            duration_days: 6,
+            members: [],
+          },
+        });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "GET") {
+        return jsonResponse({ destinations: [{ name: "Kyoto", votes: 0 }] });
+      }
+      if (path === `/trips/${tripId}/pois` && method === "GET") return jsonResponse({ pois: [] });
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:organizer-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:organizer-user",
+      JSON.stringify({
+        name: "Organizer",
+        email: "organizer@test.com",
+        styles: ["friends"],
+        interests: { culture: true },
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Japan Sprint")).not.toBeNull());
+    fireEvent.click(screen.getByText("Japan Sprint"));
+
+    await waitFor(() => expect(screen.queryByText(/Step 16 of 16/)).not.toBeNull());
+    expect(screen.queryByText(/Step 17 of 16/)).toBeNull();
   });
 
   test("persists the step 6 route plan before continuing", async () => {
