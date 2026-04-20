@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "unknown",
-  "branch": "unknown",
-  "builtAt": "2026-03-19T20:24:59.264Z"
+  "sha": "01f5efa",
+  "branch": "copilot/bl-05-fix-skiing-and-mountain-views-cards",
+  "builtAt": "2026-04-20T00:23:49.989Z"
 };
