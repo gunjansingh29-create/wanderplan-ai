@@ -1437,7 +1437,7 @@ async function callLLM(sysPrompt, userMsg, maxTok) {
 }
 
 var ROUTE_LLM_TIMEOUT_MS = 70000;
-var ROUTE_PLAN_BUILD_MAX_WAIT_MS = 2500;
+var ROUTE_PLAN_BUILD_MAX_WAIT_MS = 5000;
 
 function buildRoutePlanSignature(destinations, interests, budgetTier, dietary, styles, groupPrefs){
   var rows=(Array.isArray(destinations)?destinations:[]).map(function(dest){

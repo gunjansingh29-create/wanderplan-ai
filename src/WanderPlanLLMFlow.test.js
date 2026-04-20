@@ -3153,7 +3153,16 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
         });
       }
       if (path === "/llm/messages" && method === "POST") {
-        return new Promise(() => {});
+        return new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                ok: true,
+                text: () => Promise.resolve(JSON.stringify({ content: [{ type: "text", text: "{}" }] })),
+              }),
+            7000
+          );
+        });
       }
       return jsonResponse({});
     });
@@ -3185,7 +3194,7 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
 
     await waitFor(
       () => expect(screen.queryByText("Use Route Plan & Continue")).not.toBeNull(),
-      { timeout: 12000 }
+      { timeout: 9000 }
     );
 
     await waitFor(
@@ -3197,9 +3206,9 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
           "Osaka",
         ]);
       },
-      { timeout: 12000 }
+      { timeout: 9000 }
     );
-  });
+  }, 15000);
 
 });
 
