@@ -1798,9 +1798,18 @@ function bucketClarifyMessage(userMsg){
   return "Could you name specific cities, islands, or regions you want to explore?";
 }
 
-var BUCKET_GENERIC_DESTINATION_TERMS={
-  street:1,streets:1,market:1,markets:1,food:1,foods:1,cuisine:1,culinary:1,culture:1,cultural:1,shopping:1,nightlife:1,adventure:1,nature:1,history:1,wellness:1,photography:1,wine:1,hiking:1,beach:1,beaches:1,destination:1,destinations:1,place:1,places:1,city:1,cities:1,town:1,towns:1,region:1,regions:1,island:1,islands:1
-};
+var BUCKET_GENERIC_DESTINATION_TERMS=new Set([
+  "street","streets","market","markets","food","foods","cuisine","culinary","culture","cultural","shopping","nightlife",
+  "adventure","nature","history","wellness","photography","wine","hiking","beach","beaches","destination","destinations",
+  "place","places","city","cities","town","towns","region","regions","island","islands"
+]);
+
+var BUCKET_FOOD_PREFERENCE_RE=/\b(food|street\s*markets?|markets?|cuisine|culinary|eat|eating|dishes|local food)\b/;
+var BUCKET_FOOD_PREFERENCE_SEEDS=[
+  {name:"Bangkok",country:"Thailand",bestMonths:[11,12,1,2],costFactor:1,tags:["Food","Culture"],bestTimeDesc:"Cooler dry-season months are ideal for markets and street food.",costNote:"Street food is affordable; average cost varies by area."},
+  {name:"Marrakech",country:"Morocco",bestMonths:[3,4,5,10,11],costFactor:0.9,minCost:80,tags:["Food","Culture"],bestTimeDesc:"Spring and autumn are comfortable for medina walks and markets.",costNote:"Local dining is good value, with premium riads increasing spend."},
+  {name:"Istanbul",country:"Turkey",bestMonths:[4,5,9,10],costFactor:1.05,minCost:95,tags:["Food","Culture"],bestTimeDesc:"Shoulder seasons are ideal for bazaars and food districts.",costNote:"Great range from budget eateries to high-end restaurants."}
+];
 
 function isLikelyBucketDestinationName(name){
   var normalized=String(name||"").trim().toLowerCase().replace(/[^a-z\s'-]/g," ").replace(/\s+/g," ").trim();
@@ -1813,7 +1822,7 @@ function isLikelyBucketDestinationName(name){
   if(!meaningful.length)return false;
   var genericCount=0;
   for(var i=0;i<meaningful.length;i++){
-    if(BUCKET_GENERIC_DESTINATION_TERMS[meaningful[i]])genericCount++;
+    if(BUCKET_GENERIC_DESTINATION_TERMS.has(meaningful[i]))genericCount++;
   }
   if(genericCount===meaningful.length)return false;
   return true;
@@ -1821,16 +1830,23 @@ function isLikelyBucketDestinationName(name){
 
 function bucketPreferenceSeedDestinations(userMsg, budgetTier){
   var q=String(userMsg||"").toLowerCase();
-  if(!/\b(food|street\s*markets?|markets?|cuisine|culinary|eat|eating|dishes|local food)\b/.test(q)){
+  if(!BUCKET_FOOD_PREFERENCE_RE.test(q)){
     return [];
   }
   var tier=resolveBudgetTier(budgetTier);
   var baseCost=tier==="budget"?90:(tier==="premium"?190:(tier==="luxury"?280:140));
-  return [
-    {name:"Bangkok",country:"Thailand",bestMonths:[11,12,1,2],costPerDay:baseCost,tags:["Food","Culture"],bestTimeDesc:"Cooler dry-season months are ideal for markets and street food.",costNote:"Street food is affordable; average cost varies by area."},
-    {name:"Marrakech",country:"Morocco",bestMonths:[3,4,5,10,11],costPerDay:Math.max(80,Math.round(baseCost*0.9)),tags:["Food","Culture"],bestTimeDesc:"Spring and autumn are comfortable for medina walks and markets.",costNote:"Local dining is good value, with premium riads increasing spend."},
-    {name:"Istanbul",country:"Turkey",bestMonths:[4,5,9,10],costPerDay:Math.max(95,Math.round(baseCost*1.05)),tags:["Food","Culture"],bestTimeDesc:"Shoulder seasons are ideal for bazaars and food districts.",costNote:"Great range from budget eateries to high-end restaurants."}
-  ];
+  return BUCKET_FOOD_PREFERENCE_SEEDS.map(function(seed){
+    var estimated=Math.round(baseCost*Number(seed.costFactor||1));
+    return {
+      name:seed.name,
+      country:seed.country,
+      bestMonths:Array.isArray(seed.bestMonths)?seed.bestMonths.slice():[],
+      costPerDay:Math.max(Number(seed.minCost||0),estimated),
+      tags:Array.isArray(seed.tags)?seed.tags.slice():[],
+      bestTimeDesc:String(seed.bestTimeDesc||""),
+      costNote:String(seed.costNote||"")
+    };
+  });
 }
 
 async function fallbackExtractDestinations(userMsg){
