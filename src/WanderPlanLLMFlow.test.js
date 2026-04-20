@@ -27,6 +27,7 @@ import {
   bucketClarifyMessage,
   bucketQueryAnchorName,
   bucketQueryNeedsSpecificChildren,
+  bucketRegionalFallbackItems,
   canEditVoteForMember,
   canonicalDestinationVoteKeyFromStoredKey,
   canonicalMealVoteKey,
@@ -93,6 +94,7 @@ import {
   trimPoiErrorDetail,
   trimRouteErrorDetail,
   tripDestinationNamesFromValues,
+  upsertBucketItemList,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
@@ -152,6 +154,10 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(bucketQueryNeedsSpecificChildren("Kyoto")).toBe(false);
   });
 
+  test("bucketQueryNeedsSpecificChildren treats vague regional asks as requiring specific places", () => {
+    expect(bucketQueryNeedsSpecificChildren("somewhere in South America")).toBe(true);
+  });
+
   test("bucketQueryAnchorName extracts trailing scope from request", () => {
     expect(bucketQueryAnchorName("popular tourist cities in Japan")).toBe("japan");
     expect(bucketQueryAnchorName("best places for food in Mexico")).toBe("mexico");
@@ -168,6 +174,35 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       { name: "Kyoto", country: "Japan" },
       { name: "Osaka", country: "Japan" },
     ]);
+  });
+
+  test("refineBucketItemsForQuery removes continent-level echo for vague regional ask", () => {
+    expect(
+      refineBucketItemsForQuery("somewhere in South America", [
+        { name: "South America", country: "" },
+        { name: "Buenos Aires", country: "Argentina" },
+      ])
+    ).toEqual([{ name: "Buenos Aires", country: "Argentina" }]);
+  });
+
+  test("bucketRegionalFallbackItems seeds specific city suggestions for South America", () => {
+    expect(bucketRegionalFallbackItems("somewhere in South America")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Buenos Aires", country: "Argentina" }),
+        expect.objectContaining({ name: "Cartagena", country: "Colombia" }),
+        expect.objectContaining({ name: "Cusco", country: "Peru" }),
+      ])
+    );
+  });
+
+  test("upsertBucketItemList deduplicates destination entries by name and country", () => {
+    const result = upsertBucketItemList(
+      [{ id: "tmp-1", name: "Buenos Aires", country: "Argentina", tags: ["Culture"] }],
+      { id: "tmp-2", name: "Buenos Aires", country: "Argentina", tags: ["Food"] }
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("tmp-1");
+    expect(result[0].tags).toEqual(["Food"]);
   });
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
