@@ -80,8 +80,37 @@ function mergeProfileIntoUser(baseUser,profile,emailHint,nameHint){
 
 function normalizePersonalBucketItems(items){
   return (Array.isArray(items)?items:[]).map(function(it){
-    return Object.assign({id:it.id},it);
-  });
+    if(!it||typeof it!=="object")return null;
+    var name=normalizeTripDestinationValue(it.name||it.destination||it.city||"");
+    if(!isValidBucketDestinationName(name))return null;
+    return Object.assign({id:it.id},it,{name:name});
+  }).filter(Boolean);
+}
+
+function isValidBucketDestinationName(value){
+  var normalized=canonicalTripDestinationName(value);
+  if(!normalized)return false;
+  var blocked={
+    "skiing":1,
+    "beach":1,
+    "beaches":1,
+    "northern lights":1,
+    "street market":1,
+    "street markets":1,
+    "mountain view":1,
+    "mountain views":1,
+    "south america":1,
+    "north america":1,
+    "central america":1,
+    "latin america":1,
+    "middle east":1,
+    "europe":1,
+    "asia":1,
+    "africa":1,
+    "oceania":1,
+    "antarctica":1
+  };
+  return !blocked[normalized];
 }
 
 function normalizeTripDestinationValue(value){
@@ -1710,7 +1739,8 @@ function extractLlmTextContent(data){
 function normalizeBucketLLMResult(parsed){
   function toItem(row){
     if(!row||typeof row!=="object")return null;
-    var name=String(row.name||row.destination||row.city||"").trim();
+    var name=normalizeTripDestinationValue(row.name||row.destination||row.city||"");
+    if(!isValidBucketDestinationName(name))return null;
     if(!name)return null;
     return {
       name:name,
@@ -1773,7 +1803,7 @@ function refineBucketItemsForQuery(userMsg, items){
   var seen={};
   list.forEach(function(it){
     var name=String(it&&it.name||"").trim();
-    if(!name)return;
+    if(!name||!isValidBucketDestinationName(name))return;
     var country=String(it&&it.country||"").trim();
     var nameKey=canonicalTripDestinationName(name);
     var countryKey=canonicalTripDestinationName(country);
@@ -5656,6 +5686,7 @@ export default function WanderPlan(){
   }
 
   function updateBucketItemLocal(newItem){
+    if(!isValidBucketDestinationName(newItem&&newItem.name||newItem&&newItem.destination))return;
     setBucket(function(p){
       var key=(newItem.id||newItem.name||"").toString();
       var exists=false;
@@ -10615,4 +10646,3 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 }
 
 export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-

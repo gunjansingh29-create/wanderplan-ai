@@ -147,6 +147,17 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
   });
 
+  test("normalizePersonalBucketItems drops non-destination bucket entries", () => {
+    expect(
+      normalizePersonalBucketItems([
+        { id: "bucket-1", name: "Kyoto", country: "Japan" },
+        { id: "bucket-2", name: "skiing" },
+        { id: "bucket-3", name: "northern lights" },
+        { id: "bucket-4", name: "South America" },
+      ])
+    ).toEqual([{ id: "bucket-1", name: "Kyoto", country: "Japan" }]);
+  });
+
   test("bucketQueryNeedsSpecificChildren detects city-list style requests", () => {
     expect(bucketQueryNeedsSpecificChildren("popular tourist cities in Japan")).toBe(true);
     expect(bucketQueryNeedsSpecificChildren("Kyoto")).toBe(false);
@@ -168,6 +179,16 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       { name: "Kyoto", country: "Japan" },
       { name: "Osaka", country: "Japan" },
     ]);
+  });
+
+  test("refineBucketItemsForQuery removes known non-destination phrases", () => {
+    expect(
+      refineBucketItemsForQuery("bucket ideas", [
+        { name: "Kyoto", country: "Japan" },
+        { name: "street markets", country: "" },
+        { name: "mountain views", country: "" },
+      ])
+    ).toEqual([{ name: "Kyoto", country: "Japan" }]);
   });
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
