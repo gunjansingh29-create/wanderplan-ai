@@ -1804,7 +1804,7 @@ var BUCKET_GENERIC_DESTINATION_TERMS=new Set([
   "place","places","city","cities","town","towns","region","regions","island","islands"
 ]);
 
-var BUCKET_FOOD_PREFERENCE_RE=/\b(food|street\s*markets?|markets?|cuisine|culinary|eat|eating|dishes|local food)\b/;
+var BUCKET_FOOD_PREFERENCE_REGEX=/\b(food|street\s*markets?|markets?|cuisine|culinary|eat|eating|dishes|local food)\b/;
 var BUCKET_FOOD_PREFERENCE_SEEDS=[
   {name:"Bangkok",country:"Thailand",bestMonths:[11,12,1,2],costFactor:1,tags:["Food","Culture"],bestTimeDesc:"Cooler dry-season months are ideal for markets and street food.",costNote:"Street food is affordable; average cost varies by area."},
   {name:"Marrakech",country:"Morocco",bestMonths:[3,4,5,10,11],costFactor:0.9,minCost:80,tags:["Food","Culture"],bestTimeDesc:"Spring and autumn are comfortable for medina walks and markets.",costNote:"Local dining is good value, with premium riads increasing spend."},
@@ -1830,7 +1830,7 @@ function isLikelyBucketDestinationName(name){
 
 function bucketPreferenceSeedDestinations(userMsg, budgetTier){
   var q=String(userMsg||"").toLowerCase();
-  if(!BUCKET_FOOD_PREFERENCE_RE.test(q)){
+  if(!BUCKET_FOOD_PREFERENCE_REGEX.test(q)){
     return [];
   }
   var tier=resolveBudgetTier(budgetTier);
