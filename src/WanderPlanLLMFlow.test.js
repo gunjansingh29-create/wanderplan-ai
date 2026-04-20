@@ -33,6 +33,7 @@ import {
   canonicalPoiVoteKeyFromStoredKey,
   canonicalStayVoteKey,
   companionCheckinMeta,
+  dedupeBucketSuggestionsForExisting,
   dedupeVoteVoters,
   destinationsNeedingPoiCoverage,
   emptyUserState,
@@ -172,6 +173,24 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("dedupeBucketSuggestionsForExisting blocks same city even when country differs", () => {
+    const result = dedupeBucketSuggestionsForExisting(
+      [{ name: "Vladivostok", country: "Russia" }],
+      [{ id: "bucket-vlad", name: "Vladivostok", country: "" }]
+    );
+    expect(result.toAdd).toEqual([]);
+    expect(result.duplicateNames).toEqual(["Vladivostok"]);
+  });
+
+  test("dedupeBucketSuggestionsForExisting strips parenthetical qualifiers for duplicate checks", () => {
+    const result = dedupeBucketSuggestionsForExisting(
+      [{ name: "Kyoto", country: "Japan" }],
+      [{ id: "bucket-kyoto", name: "Kyoto (Japan)", country: "Japan" }]
+    );
+    expect(result.toAdd).toEqual([]);
+    expect(result.duplicateNames).toEqual(["Kyoto (Japan)"]);
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
