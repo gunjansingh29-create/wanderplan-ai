@@ -3312,13 +3312,11 @@ async def crew_remove_member(email: str, user_id: str = Depends(get_current_user
                 )
                 links_removed = _row_count(removed_a) + _row_count(removed_b)
 
-        invites_updated = await conn.execute(
+        invites_removed = await conn.execute(
             """
-            UPDATE crew_invites
-            SET status = 'declined', accepted_by_user_id = NULL, accepted_at = NULL
+            DELETE FROM crew_invites
             WHERE inviter_user_id = $1
               AND LOWER(invitee_email) = $2
-              AND status IN ('pending', 'accepted')
             """,
             user_id,
             normalized_email,
@@ -3328,7 +3326,7 @@ async def crew_remove_member(email: str, user_id: str = Depends(get_current_user
         "ok": True,
         "email": normalized_email,
         "links_removed": links_removed,
-        "invites_updated": _row_count(invites_updated),
+        "invites_removed": _row_count(invites_removed),
     }
 
 

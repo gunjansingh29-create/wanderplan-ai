@@ -5933,7 +5933,8 @@ export default function WanderPlan(){
     setCRE(email);
     setCM("Removing "+email+"...");
     try{
-      await apiJson("/crew/member?email="+encodeURIComponent(email),{method:"DELETE"},authToken);
+      var removeQuery=new URLSearchParams({email:email}).toString();
+      await apiJson("/crew/member?"+removeQuery,{method:"DELETE"},authToken);
       setCrew(function(prev){
         return (Array.isArray(prev)?prev:[]).filter(function(item){
           return String(item&&item.email||"").trim().toLowerCase()!==email;
