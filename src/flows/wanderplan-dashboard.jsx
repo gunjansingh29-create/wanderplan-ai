@@ -154,6 +154,20 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+export function duplicateCrewInviteMessageForStatus(status) {
+  return String(status || "").trim().toLowerCase() === "joined"
+    ? "Already a member."
+    : "This person is already invited.";
+}
+
+export function findCrewMemberByEmail(members = [], email = "") {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return null;
+  return (
+    members.find((member) => normalizeEmail(member?.email) === normalizedEmail) || null
+  );
+}
+
 function defaultNameFromEmail(email) {
   const localPart = normalizeEmail(email).split("@")[0] || "";
   if (!localPart) return "Traveler";
@@ -293,6 +307,16 @@ async function connectCrewMembers(ownerEmail, invitedEmail, ownerName = "Travele
   const links = readJsonStorage(LOCAL_CREW_LINKS_KEY);
   const ownerLinks = new Set(Array.isArray(links[owner]) ? links[owner].map(normalizeEmail) : []);
   const inviteeLinks = new Set(Array.isArray(links[invitee]) ? links[invitee].map(normalizeEmail) : []);
+  const isAlreadyLinked = ownerLinks.has(invitee) || inviteeLinks.has(owner);
+  if (isAlreadyLinked) {
+    const authUsers = readJsonStorage(LOCAL_AUTH_USERS_KEY);
+    const profilesByEmail = readJsonStorage(LOCAL_PROFILE_BY_EMAIL_KEY);
+    const hasAccount = Boolean(authUsers[invitee]) || Boolean(profilesByEmail[invitee]);
+    return {
+      ok: false,
+      error: duplicateCrewInviteMessageForStatus(hasAccount ? "joined" : "invited"),
+    };
+  }
   ownerLinks.add(invitee);
   inviteeLinks.add(owner);
   links[owner] = [...ownerLinks];
@@ -1213,6 +1237,15 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
 
   const submitInvite = async () => {
     setCopyFeedback("");
+    const existingMember = findCrewMemberByEmail(members, inviteEmail);
+    if (existingMember) {
+      setManualInviteLink("");
+      setInviteFeedback({
+        type: "error",
+        message: duplicateCrewInviteMessageForStatus(existingMember?.status),
+      });
+      return;
+    }
     const result = await onInviteMember(inviteEmail);
     if (result?.ok) {
       const link = result?.inviteLink || "";
@@ -1446,4 +1479,3 @@ function PromptsPage() {
     </div>
   );
 }
-
