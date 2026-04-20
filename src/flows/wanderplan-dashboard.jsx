@@ -314,7 +314,7 @@ async function connectCrewMembers(ownerEmail, invitedEmail, ownerName = "Travele
     const hasAccount = Boolean(authUsers[invitee]) || Boolean(profilesByEmail[invitee]);
     return {
       ok: false,
-      error: duplicateCrewInviteMessageForStatus(hasAccount ? "joined" : "invited"),
+      error: duplicateCrewInviteMessageForStatus(hasAccount ? "Joined" : "Invited"),
     };
   }
   ownerLinks.add(invitee);
