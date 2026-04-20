@@ -3074,6 +3074,170 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     });
   });
 
+  test("shows a validation message when approving activities with zero selections", async () => {
+    const planningStatePutBodies = [];
+    let poisPutCount = 0;
+    const tripId = "44444444-4444-4444-8444-444444444444";
+    const poiOptionPool = {
+      "kyoto-fushimi": {
+        name: "Fushimi Inari Walk",
+        destination: "Kyoto",
+        category: "Culture",
+        duration: "2h",
+        cost: 0,
+        rating: 4.8,
+      },
+      "kyoto-market": {
+        name: "Nishiki Market Tasting",
+        destination: "Kyoto",
+        category: "Food",
+        duration: "2h",
+        cost: 25,
+        rating: 4.6,
+      },
+      "kyoto-temple": {
+        name: "Kiyomizu-dera Visit",
+        destination: "Kyoto",
+        category: "Culture",
+        duration: "2h",
+        cost: 10,
+        rating: 4.7,
+      },
+      "kyoto-garden": {
+        name: "Arashiyama Garden Stroll",
+        destination: "Kyoto",
+        category: "Nature",
+        duration: "2h",
+        cost: 0,
+        rating: 4.5,
+      },
+    };
+
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const parsedUrl = new URL(String(url), "https://example.test");
+      const path = parsedUrl.pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Organizer",
+            travel_styles: ["friends"],
+            interests: { culture: true, food: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [{ id: "bucket-kyoto", destination: "Kyoto", name: "Kyoto", country: "Japan" }],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: tripId,
+              name: "Kyoto Planner",
+              status: "planning",
+              my_status: "owner",
+              my_role: "owner",
+              duration_days: 5,
+              members: [],
+              destinations: [{ name: "Kyoto" }],
+            },
+          ],
+        });
+      }
+      if (path === `/trips/${tripId}` && method === "GET") {
+        return jsonResponse({
+          trip: {
+            id: tripId,
+            name: "Kyoto Planner",
+            status: "planning",
+            duration_days: 5,
+            members: [],
+          },
+        });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "GET") {
+        return jsonResponse({ destinations: [{ name: "Kyoto", votes: 0 }] });
+      }
+      if (path === `/trips/${tripId}/pois` && method === "GET") {
+        return jsonResponse({ pois: Object.values(poiOptionPool) });
+      }
+      if (path === `/trips/${tripId}/pois` && method === "PUT") {
+        poisPutCount += 1;
+        return jsonResponse({ pois: [] });
+      }
+      if (path === `/trips/${tripId}/planning-state` && method === "GET") {
+        return jsonResponse({
+          current_step: 5,
+          state: {
+            wizard_order_version: 2,
+            poi_option_pool: poiOptionPool,
+          },
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      if (path === `/trips/${tripId}/planning-state` && method === "PUT") {
+        const body = JSON.parse((options && options.body) || "{}");
+        planningStatePutBodies.push(body);
+        return jsonResponse({
+          current_step: body.current_step,
+          state: body.state || {},
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:organizer-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:organizer-user",
+      JSON.stringify({
+        name: "Organizer",
+        email: "organizer@test.com",
+        styles: ["friends"],
+        interests: { culture: true, food: true },
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Kyoto Planner")).not.toBeNull());
+    fireEvent.click(screen.getByText("Kyoto Planner"));
+    await waitFor(() => expect(screen.queryByText("Continue Planning")).not.toBeNull());
+    fireEvent.click(screen.getByText("Continue Planning"));
+
+    await waitFor(() =>
+      expect(screen.queryAllByRole("button", { name: "Reject" }).length).toBeGreaterThan(0)
+    );
+    screen.queryAllByRole("button", { name: "Reject" }).forEach((button) => {
+      fireEvent.click(button);
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Approve" })).not.toBeNull()
+    );
+
+    const planningPutCountBeforeApprove = planningStatePutBodies.length;
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Please select at least one activity before approving.")
+      ).not.toBeNull()
+    );
+    expect(screen.queryByText("Could not persist activity decisions. Please retry.")).toBeNull();
+    expect(planningStatePutBodies.length).toBe(planningPutCountBeforeApprove);
+    expect(poisPutCount).toBe(0);
+  });
+
 });
 
 describe("WanderPlanLLMFlow Step 3 interest consensus", () => {
