@@ -2820,6 +2820,9 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     );
     fireEvent.click(screen.getByText("Confirm 1 Destination"));
 
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText("friend@email.com")).not.toBeNull()
+    );
     await waitFor(() => expect(screen.queryByText("Continue Solo")).not.toBeNull());
     fireEvent.click(screen.getByText("Continue Solo"));
 
@@ -2831,6 +2834,95 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
       ).not.toBeNull()
     );
     expect(screen.queryByText(/Majority needed:/)).toBeNull();
+  });
+
+  test("supports inviting crew by email directly in step 2 invite crew", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Solo Traveler",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/crew/invite-email" && method === "POST") return jsonResponse({ email_sent: true });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/wizard/sessions" && method === "POST") {
+        return jsonResponse({
+          session: {
+            id: "session-1",
+            trip_id: "11111111-1111-4111-8111-111111111111",
+          },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:solo-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:solo-user",
+      JSON.stringify({
+        name: "Solo Traveler",
+        email: "solo@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Plan a new trip"));
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText("e.g. Summer 2025")).not.toBeNull()
+    );
+    fireEvent.change(screen.getByPlaceholderText("e.g. Summer 2025"), {
+      target: { value: "Solo Escape" },
+    });
+    fireEvent.change(
+      screen.getByPlaceholderText("Add a destination directly (e.g. Kyoto)"),
+      { target: { value: "Kyoto" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(screen.queryByText("Kyoto")).not.toBeNull());
+    fireEvent.click(screen.getByText("Start Planning"));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Confirm 1 Destination")).not.toBeNull()
+    );
+    fireEvent.click(screen.getByText("Confirm 1 Destination"));
+
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText("friend@email.com")).not.toBeNull()
+    );
+    fireEvent.change(screen.getByPlaceholderText("friend@email.com"), {
+      target: { value: "crew@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Invite by Email" }));
+
+    await waitFor(() => {
+      const inviteCall = global.fetch.mock.calls.find((call) => {
+        const callUrl = new URL(String(call[0]), "https://example.test");
+        const callMethod = String((call[1] && call[1].method) || "GET").toUpperCase();
+        return callUrl.pathname === "/crew/invite-email" && callMethod === "POST";
+      });
+      expect(inviteCall).not.toBeNull();
+      expect(JSON.parse(String(inviteCall[1].body))).toEqual(
+        expect.objectContaining({ invitee_email: "crew@example.com" })
+      );
+    });
   });
 
   test("persists step 1 destination removals for saved trips", async () => {
