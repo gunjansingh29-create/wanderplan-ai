@@ -2831,6 +2831,12 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
       ).not.toBeNull()
     );
     expect(screen.queryByText(/Majority needed:/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /continue with 1 destination/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Interest Profiler")).not.toBeNull()
+    );
   });
 
   test("persists step 1 destination removals for saved trips", async () => {
