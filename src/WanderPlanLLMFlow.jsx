@@ -1747,6 +1747,56 @@ function normalizeBucketLLMResult(parsed){
   return fallbackOne?{type:"destinations",items:[fallbackOne]}:null;
 }
 
+function bucketConceptDestinationsForQuery(userMsg){
+  var q=String(userMsg||"").trim().toLowerCase();
+  if(!q)return [];
+  if(/\b(northern lights|aurora borealis|aurora)\b/.test(q)){
+    return [
+      {
+        name:"Reykjavik",
+        country:"Iceland",
+        bestMonths:[10,11,12,1,2,3],
+        costPerDay:260,
+        tags:["Nature","Photography","Adventure"],
+        bestTimeDesc:"October to March brings long nights and strong aurora visibility.",
+        costNote:"Expect winter-season pricing, with shoulder discounts in Oct-Nov and Mar."
+      },
+      {
+        name:"Tromso",
+        country:"Norway",
+        bestMonths:[10,11,12,1,2,3],
+        costPerDay:280,
+        tags:["Nature","Photography","Adventure"],
+        bestTimeDesc:"Late September to March offers peak Northern Lights viewing windows.",
+        costNote:"Norway is premium in winter; plan ahead for tours and stays."
+      },
+      {
+        name:"Fairbanks",
+        country:"United States",
+        bestMonths:[9,10,11,12,1,2,3],
+        costPerDay:220,
+        tags:["Nature","Photography","Adventure"],
+        bestTimeDesc:"September through March has clear, dark skies and frequent aurora activity.",
+        costNote:"Shoulder winter months can be cheaper than peak holiday weeks."
+      }
+    ];
+  }
+  return [];
+}
+
+function maybeResolveBucketConceptDestinations(userMsg, items){
+  var conceptItems=bucketConceptDestinationsForQuery(userMsg);
+  var list=Array.isArray(items)?items:[];
+  if(!conceptItems.length)return list;
+  if(!list.length)return conceptItems;
+  var hasConcrete=list.some(function(it){
+    var name=String(it&&it.name||"").trim();
+    if(!name)return false;
+    return !/\b(northern lights|aurora borealis|aurora)\b/i.test(name);
+  });
+  return hasConcrete?list:conceptItems;
+}
+
 function bucketQueryNeedsSpecificChildren(userMsg){
   var q=String(userMsg||"").trim().toLowerCase();
   if(!q)return false;
@@ -1799,6 +1849,8 @@ function bucketClarifyMessage(userMsg){
 
 async function fallbackExtractDestinations(userMsg){
   try{
+    var conceptResolved=bucketConceptDestinationsForQuery(userMsg);
+    if(conceptResolved.length)return conceptResolved;
     var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
     var arr=(r&&Array.isArray(r.destinations))?r.destinations:[];
     if(!arr.length)return [];
@@ -1836,7 +1888,8 @@ async function askLLM(userMsg, budget, history) {
     var normalized=normalizeBucketLLMResult(parsed);
     if(normalized&&normalized.type==="destinations"){
       var refined=refineBucketItemsForQuery(userMsg, normalized.items);
-      if(refined.length)return {type:"destinations",items:refined};
+      var conceptRefined=maybeResolveBucketConceptDestinations(userMsg, refined);
+      if(conceptRefined.length)return {type:"destinations",items:conceptRefined};
       if(bucketQueryNeedsSpecificChildren(userMsg)){
         var retrySys=sys+"\nAdditional rule: if the user asks for cities/places in a country or larger area, NEVER return just that parent country/area. Return 4-8 specific city, island, or region-level destinations inside it.";
         var retryData=await llmReq({model:"claude-sonnet-4-20250514",max_tokens:700,messages:msgs,system:retrySys});
@@ -1845,7 +1898,8 @@ async function askLLM(userMsg, budget, history) {
         var retryNormalized=normalizeBucketLLMResult(retryParsed);
         if(retryNormalized&&retryNormalized.type==="destinations"){
           var retryRefined=refineBucketItemsForQuery(userMsg, retryNormalized.items);
-          if(retryRefined.length)return {type:"destinations",items:retryRefined};
+          var retryConceptRefined=maybeResolveBucketConceptDestinations(userMsg, retryRefined);
+          if(retryConceptRefined.length)return {type:"destinations",items:retryConceptRefined};
         }
         return {type:"clarify",message:bucketClarifyMessage(userMsg)};
       }
@@ -1854,7 +1908,8 @@ async function askLLM(userMsg, budget, history) {
   } catch (e) {}
   var fb=await fallbackExtractDestinations(userMsg);
   var refinedFallback=refineBucketItemsForQuery(userMsg, fb);
-  if(refinedFallback.length)return {type:"destinations",items:refinedFallback};
+  var conceptFallback=maybeResolveBucketConceptDestinations(userMsg, refinedFallback);
+  if(conceptFallback.length)return {type:"destinations",items:conceptFallback};
   return {type: "clarify", message: bucketClarifyMessage(userMsg)};
 }
 
@@ -10614,5 +10669,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketConceptDestinationsForQuery, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, maybeResolveBucketConceptDestinations, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };

@@ -25,6 +25,7 @@ import {
   buildTripWhatsAppText,
   buildWhatsAppShareUrl,
   bucketClarifyMessage,
+  bucketConceptDestinationsForQuery,
   bucketQueryAnchorName,
   bucketQueryNeedsSpecificChildren,
   canEditVoteForMember,
@@ -45,6 +46,7 @@ import {
   isCurrentVoteVoter,
   makeVoteUserId,
   materializeItineraryDates,
+  maybeResolveBucketConceptDestinations,
   mergeAvailabilityDraft,
   mergeProfileIntoUser,
   mergeSharedFlightDates,
@@ -172,6 +174,22 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("bucketConceptDestinationsForQuery maps northern lights intent to real aurora destinations", () => {
+    const items = bucketConceptDestinationsForQuery("northern lights");
+    expect(items.map((it) => it.name)).toEqual(["Reykjavik", "Tromso", "Fairbanks"]);
+    expect(items.map((it) => it.country)).toEqual(["Iceland", "Norway", "United States"]);
+    expect(items.every((it) => (it.bestMonths || []).some((m) => m === 12 || m === 1 || m === 2))).toBe(true);
+    expect(items.every((it) => (it.tags || []).includes("Nature") && (it.tags || []).includes("Photography"))).toBe(true);
+  });
+
+  test("maybeResolveBucketConceptDestinations replaces literal aurora placeholder rows", () => {
+    expect(
+      maybeResolveBucketConceptDestinations("northern lights", [{ name: "northern lights", country: "" }]).map(
+        (it) => it.name
+      )
+    ).toEqual(["Reykjavik", "Tromso", "Fairbanks"]);
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
