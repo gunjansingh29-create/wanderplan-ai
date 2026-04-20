@@ -1709,18 +1709,7 @@ function extractLlmTextContent(data){
 
 function normalizeBucketLLMResult(parsed){
   function toItem(row){
-    if(!row||typeof row!=="object")return null;
-    var name=String(row.name||row.destination||row.city||"").trim();
-    if(!name)return null;
-    return {
-      name:name,
-      country:String(row.country||"").trim(),
-      bestMonths:Array.isArray(row.bestMonths)?row.bestMonths:[],
-      costPerDay:Number(row.costPerDay||0)||0,
-      tags:Array.isArray(row.tags)?row.tags:[],
-      bestTimeDesc:String(row.bestTimeDesc||"").trim(),
-      costNote:String(row.costNote||"").trim()
-    };
+    return normalizeBucketDestinationItem(row);
   }
 
   if(!parsed)return null;
@@ -1764,26 +1753,112 @@ function bucketQueryAnchorName(userMsg){
   return canonicalTripDestinationName(last);
 }
 
+var BUCKET_DESTINATION_OVERRIDES={
+  kyoto:{
+    name:"Kyoto",
+    country:"Japan",
+    bestMonths:[3,4,5,10,11],
+    costPerDay:120,
+    tags:["Culture","Food","History"],
+    bestTimeDesc:"Late Mar-May for cherry blossoms or Oct-Nov for autumn foliage.",
+    costNote:"Typical spend is about $120-$190/day depending on season and stay type."
+  }
+};
+
+function splitBucketDestinationNameCountry(rawName, rawCountry){
+  var name=String(rawName||"").trim();
+  var country=String(rawCountry||"").trim();
+  if(name&&!country){
+    var commaParts=name.split(",").map(function(part){return String(part||"").trim();}).filter(Boolean);
+    if(commaParts.length>=2){
+      name=commaParts[0];
+      country=commaParts.slice(1).join(", ");
+    }else{
+      var paren=name.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+      if(paren){
+        name=String(paren[1]||"").trim();
+        country=String(paren[2]||"").trim();
+      }
+    }
+  }
+  return {name:name,country:country};
+}
+
+function bucketDestinationOverrideForName(name){
+  var key=canonicalTripDestinationName(name);
+  if(!key)return null;
+  return BUCKET_DESTINATION_OVERRIDES[key]||null;
+}
+
+function normalizeBucketDestinationItem(row){
+  if(!row||typeof row!=="object")return null;
+  var parsed=splitBucketDestinationNameCountry(row.name||row.destination||row.city||"",row.country||"");
+  var name=String(parsed.name||"").trim();
+  if(!name)return null;
+  var override=bucketDestinationOverrideForName(name);
+  var bestMonths=Array.isArray(row.bestMonths)?row.bestMonths:[];
+  var tags=Array.isArray(row.tags)?row.tags:[];
+  var bestTimeDesc=String(row.bestTimeDesc||"").trim();
+  var costNote=String(row.costNote||"").trim();
+  var costPerDay=Number(row.costPerDay||0)||0;
+  var out={
+    name:String((override&&override.name)||name).trim(),
+    country:String(parsed.country||((override&&override.country)||"")).trim()
+  };
+  var resolvedBestMonths=bestMonths.length?bestMonths:((override&&Array.isArray(override.bestMonths))?override.bestMonths:[]);
+  var resolvedCostPerDay=costPerDay>0?costPerDay:Number((override&&override.costPerDay)||0)||0;
+  var resolvedTags=tags.length?tags:((override&&Array.isArray(override.tags))?override.tags:[]);
+  var resolvedBestTimeDesc=bestTimeDesc||String((override&&override.bestTimeDesc)||"").trim();
+  var resolvedCostNote=costNote||String((override&&override.costNote)||"").trim();
+  if(resolvedBestMonths.length)out.bestMonths=resolvedBestMonths;
+  if(resolvedCostPerDay>0)out.costPerDay=resolvedCostPerDay;
+  if(resolvedTags.length)out.tags=resolvedTags;
+  if(resolvedBestTimeDesc)out.bestTimeDesc=resolvedBestTimeDesc;
+  if(resolvedCostNote)out.costNote=resolvedCostNote;
+  return out;
+}
+
+function isSameBucketDestination(a,b){
+  var aName=canonicalTripDestinationName(a&&a.name||"");
+  var bName=canonicalTripDestinationName(b&&b.name||"");
+  if(!aName||!bName||aName!==bName)return false;
+  var aCountry=canonicalTripDestinationName(a&&a.country||"");
+  var bCountry=canonicalTripDestinationName(b&&b.country||"");
+  if(!aCountry||!bCountry)return true;
+  return aCountry===bCountry;
+}
+
 function refineBucketItemsForQuery(userMsg, items){
   var list=Array.isArray(items)?items:[];
   if(!list.length)return [];
   var needsSpecific=bucketQueryNeedsSpecificChildren(userMsg);
   var anchor=bucketQueryAnchorName(userMsg);
   var out=[];
-  var seen={};
   list.forEach(function(it){
-    var name=String(it&&it.name||"").trim();
+    var normalized=normalizeBucketDestinationItem(it);
+    if(!normalized)return;
+    var name=String(normalized.name||"").trim();
     if(!name)return;
-    var country=String(it&&it.country||"").trim();
+    var country=String(normalized.country||"").trim();
     var nameKey=canonicalTripDestinationName(name);
     var countryKey=canonicalTripDestinationName(country);
     if(needsSpecific&&anchor&&nameKey===anchor&&(!countryKey||countryKey===anchor)){
       return;
     }
-    var dedupeKey=nameKey+"|"+countryKey;
-    if(seen[dedupeKey])return;
-    seen[dedupeKey]=1;
-    out.push(it);
+    var duplicateIdx=-1;
+    for(var i=0;i<out.length;i++){
+      if(isSameBucketDestination(out[i], normalized)){
+        duplicateIdx=i;
+        break;
+      }
+    }
+    if(duplicateIdx>=0){
+      if(!String(out[duplicateIdx]&&out[duplicateIdx].country||"").trim()&&country){
+        out[duplicateIdx]=Object.assign({},out[duplicateIdx],normalized);
+      }
+      return;
+    }
+    out.push(normalized);
   });
   return out;
 }
@@ -1807,7 +1882,7 @@ async function fallbackExtractDestinations(userMsg){
       var it=arr[i]||{};
       var nm=String(it.name||it.destination||it.city||"").trim();
       if(!nm)continue;
-      out.push({
+      var normalized=normalizeBucketDestinationItem({
         name:nm,
         country:String(it.country||"").trim(),
         bestMonths:[4,5,9,10],
@@ -1816,6 +1891,8 @@ async function fallbackExtractDestinations(userMsg){
         bestTimeDesc:"Shoulder seasons are usually best for weather and crowds.",
         costNote:"Estimated default until preferences refine this."
       });
+      if(!normalized)continue;
+      out.push(normalized);
     }
     return out;
   }catch(e){
@@ -6012,43 +6089,28 @@ export default function WanderPlan(){
       setBLL(false);
       if(res&&res.type==="destinations"&&Array.isArray(res.items)&&res.items.length){
         var proposed=[];
-        var proposedSeen={};
         for(var k=0;k<res.items.length;k++){
-          var it0=res.items[k]||{};
-          var n0=String(it0.name||"").trim();
-          if(!n0)continue;
-          var c0=String(it0.country||"").trim();
-          var pKey=n0.toLowerCase()+"|"+c0.toLowerCase();
-          if(proposedSeen[pKey])continue;
-          proposedSeen[pKey]=true;
-          proposed.push({
-            name:n0,
-            country:c0,
-            bestMonths:Array.isArray(it0.bestMonths)?it0.bestMonths:[],
-            costPerDay:Number(it0.costPerDay||0)||0,
-            tags:Array.isArray(it0.tags)?it0.tags:[],
-            bestTimeDesc:String(it0.bestTimeDesc||""),
-            costNote:String(it0.costNote||"")
+          var normalized=normalizeBucketDestinationItem(res.items[k]||{});
+          if(!normalized)continue;
+          var existsInProposed=proposed.some(function(existingDest){
+            return isSameBucketDestination(existingDest, normalized);
           });
+          if(existsInProposed)continue;
+          proposed.push(normalized);
         }
-        var existing={};
-        bucket.forEach(function(b){
-          var key=(String(b.name||"").trim().toLowerCase()+"|"+String(b.country||"").trim().toLowerCase());
-          if(key!=="|")existing[key]=true;
-        });
         var toAdd=[];
         for(var i=0;i<proposed.length;i++){
           var it=proposed[i]||{};
           var nm=String(it.name||"").trim();
           if(!nm)continue;
-          var ct=String(it.country||"").trim();
-          var key=(nm.toLowerCase()+"|"+ct.toLowerCase());
-          if(existing[key])continue;
-          existing[key]=true;
+          var existsInBucket=bucket.some(function(existingDest){
+            return isSameBucketDestination(existingDest, it);
+          });
+          if(existsInBucket)continue;
           toAdd.push({
             id:"d"+Date.now()+"-"+i,
             name:nm,
-            country:ct,
+            country:String(it.country||"").trim(),
             bestMonths:Array.isArray(it.bestMonths)?it.bestMonths:[],
             costPerDay:Number(it.costPerDay||0)||0,
             tags:Array.isArray(it.tags)?it.tags:[],
@@ -10614,5 +10676,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, isSameBucketDestination, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeBucketDestinationItem, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
