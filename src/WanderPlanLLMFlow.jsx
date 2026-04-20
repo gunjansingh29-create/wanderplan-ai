@@ -1755,8 +1755,7 @@ function isLikelyBucketDestinationName(name){
   if(/[<>[\]{}_=\\/]/.test(raw))return false;
   var letters=raw.replace(/[^A-Za-z]/g,"");
   if(letters.length<2)return false;
-  if(/[bcdfghjklmnpqrstvwxyz]{6,}/i.test(letters))return false;
-  if(/(?:^|[^a-z])(asdf|qwer|zxcv|hjkl)(?:[^a-z]|$)/i.test(raw.toLowerCase()))return false;
+  if(/(asdf|qwer|zxcv|hjkl)/i.test(raw.toLowerCase()))return false;
   var words=raw.split(/\s+/).map(function(part){return part.replace(/[^A-Za-z]/g,"");}).filter(Boolean);
   for(var i=0;i<words.length;i++){
     var w=String(words[i]||"").toLowerCase();
@@ -1882,9 +1881,6 @@ async function askLLM(userMsg, budget, history) {
   var fb=await fallbackExtractDestinations(userMsg);
   var refinedFallback=refineBucketItemsForQuery(userMsg, fb);
   if(refinedFallback.length)return {type:"destinations",items:refinedFallback};
-  if(isLikelyGibberishBucketInput(userMsg)){
-    return {type:"clarify",message:INVALID_BUCKET_DESTINATION_MESSAGE};
-  }
   return {type: "clarify", message: bucketClarifyMessage(userMsg)};
 }
 
