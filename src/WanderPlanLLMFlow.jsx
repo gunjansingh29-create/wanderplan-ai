@@ -1853,7 +1853,10 @@ function buildBucketSuggestionAdditions(proposedItems, existingBucket){
     var existingInfo=existingByName[nameKey]||null;
     var hasExistingName=!!existingInfo;
     var hasCountrylessExisting=!!(existingInfo&&existingInfo.countries&&existingInfo.countries[""]);
-    var isDuplicate=!!existingExact[exactKey]||((!countryKey&&hasExistingName)||(!!countryKey&&hasCountrylessExisting));
+    var hasExactMatch=!!existingExact[exactKey];
+    var isCountrylessMatchOfExisting=!countryKey&&hasExistingName;
+    var hasCountryButMatchesCountrylessEntry=!!countryKey&&hasCountrylessExisting;
+    var isDuplicate=hasExactMatch||isCountrylessMatchOfExisting||hasCountryButMatchesCountrylessEntry;
     if(isDuplicate)return;
     toAdd.push(item);
     existingExact[exactKey]=true;
