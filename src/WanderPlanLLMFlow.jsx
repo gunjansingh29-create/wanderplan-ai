@@ -1816,8 +1816,8 @@ function bucketRegionalFallbackItems(userMsg){
   if(!Array.isArray(seeded)||seeded.length===0)return [];
   return seeded.map(function(it){
     return {
-      name:String(it&&it.name||"").trim(),
-      country:String(it&&it.country||"").trim(),
+      name:String(it.name||"").trim(),
+      country:String(it.country||"").trim(),
       bestMonths:[4,5,9,10],
       costPerDay:150,
       tags:["Culture","Food"],
@@ -1910,7 +1910,7 @@ function upsertBucketItemList(list,newItem){
     var sameDestination=!!incomingDestKey&&destinationTripKey(item)===incomingDestKey;
     if(!sameId&&!sameDestination)return item;
     exists=true;
-    var merged=Object.assign({},item||{},incoming);
+    var merged=Object.assign({},item,incoming);
     if(itemId)merged.id=itemId;
     return merged;
   });
