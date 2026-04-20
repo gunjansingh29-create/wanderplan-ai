@@ -87,30 +87,31 @@ function normalizePersonalBucketItems(items){
   }).filter(Boolean);
 }
 
+var BLOCKED_BUCKET_DESTINATION_NAMES={
+  "skiing":1,
+  "beach":1,
+  "beaches":1,
+  "northern lights":1,
+  "street market":1,
+  "street markets":1,
+  "mountain view":1,
+  "mountain views":1,
+  "south america":1,
+  "north america":1,
+  "central america":1,
+  "latin america":1,
+  "middle east":1,
+  "europe":1,
+  "asia":1,
+  "africa":1,
+  "oceania":1,
+  "antarctica":1
+};
+
 function isValidBucketDestinationName(value){
   var normalized=canonicalTripDestinationName(value);
   if(!normalized)return false;
-  var blocked={
-    "skiing":1,
-    "beach":1,
-    "beaches":1,
-    "northern lights":1,
-    "street market":1,
-    "street markets":1,
-    "mountain view":1,
-    "mountain views":1,
-    "south america":1,
-    "north america":1,
-    "central america":1,
-    "latin america":1,
-    "middle east":1,
-    "europe":1,
-    "asia":1,
-    "africa":1,
-    "oceania":1,
-    "antarctica":1
-  };
-  return !blocked[normalized];
+  return !BLOCKED_BUCKET_DESTINATION_NAMES[normalized];
 }
 
 function normalizeTripDestinationValue(value){
@@ -1741,7 +1742,6 @@ function normalizeBucketLLMResult(parsed){
     if(!row||typeof row!=="object")return null;
     var name=normalizeTripDestinationValue(row.name||row.destination||row.city||"");
     if(!isValidBucketDestinationName(name))return null;
-    if(!name)return null;
     return {
       name:name,
       country:String(row.country||"").trim(),
@@ -5686,7 +5686,8 @@ export default function WanderPlan(){
   }
 
   function updateBucketItemLocal(newItem){
-    if(!isValidBucketDestinationName(newItem&&newItem.name||newItem&&newItem.destination))return;
+    var newItemName=newItem?.name||newItem?.destination;
+    if(!isValidBucketDestinationName(newItemName))return;
     setBucket(function(p){
       var key=(newItem.id||newItem.name||"").toString();
       var exists=false;
