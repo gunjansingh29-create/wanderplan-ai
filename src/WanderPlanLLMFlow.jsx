@@ -1749,17 +1749,18 @@ function normalizeBucketLLMResult(parsed){
 }
 
 function isLikelyBucketDestinationName(name){
+  var MIN_WORD_LENGTH_FOR_VOWEL_CHECK=5;
   var raw=String(name||"").trim();
   if(!raw)return false;
   if(!/[A-Za-z]/.test(raw))return false;
   if(/[<>[\]{}_=\\/]/.test(raw))return false;
   var letters=raw.replace(/[^A-Za-z]/g,"");
   if(letters.length<2)return false;
-  if(/(asdf|qwer|zxcv|hjkl)/i.test(raw.toLowerCase()))return false;
+  if(/(asdf|qwer|zxcv|hjkl)/i.test(raw))return false;
   var words=raw.split(/\s+/).map(function(part){return part.replace(/[^A-Za-z]/g,"");}).filter(Boolean);
   for(var i=0;i<words.length;i++){
     var w=String(words[i]||"").toLowerCase();
-    if(w.length>=5&&!/[aeiou]/.test(w))return false;
+    if(w.length>=MIN_WORD_LENGTH_FOR_VOWEL_CHECK&&!/[aeiou]/.test(w))return false;
   }
   return true;
 }
