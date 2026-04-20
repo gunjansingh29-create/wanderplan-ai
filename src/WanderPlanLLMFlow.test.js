@@ -7,6 +7,7 @@ import {
   addTripDestinationValue,
   buildTransitItem,
   buildCurrentVoteActor,
+  buildBucketSuggestionAdditions,
   buildDestinationFallbackPois,
   buildDurationPlanSignature,
   buildFallbackItinerary,
@@ -168,6 +169,42 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       { name: "Kyoto", country: "Japan" },
       { name: "Osaka", country: "Japan" },
     ]);
+  });
+
+  test("buildBucketSuggestionAdditions treats missing-country repeats as duplicates of existing cards", () => {
+    const prepared = buildBucketSuggestionAdditions(
+      [
+        {
+          name: "Tokyo",
+          country: "",
+          bestMonths: [3, 4, 5],
+          costPerDay: 150,
+          tags: ["Culture", "Food"],
+          bestTimeDesc: "Spring is ideal",
+          costNote: "Moderate to high",
+        },
+      ],
+      [
+        {
+          id: "bucket-tokyo",
+          name: "Tokyo",
+          country: "Japan",
+          bestMonths: [3, 4, 5, 10, 11],
+          costPerDay: 170,
+          tags: ["Culture", "Food", "History"],
+          bestTimeDesc: "Spring and autumn are best",
+          costNote: "Existing complete details",
+        },
+      ]
+    );
+
+    expect(prepared.proposed).toEqual([
+      expect.objectContaining({
+        name: "Tokyo",
+        country: "Japan",
+      }),
+    ]);
+    expect(prepared.toAdd).toEqual([]);
   });
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
