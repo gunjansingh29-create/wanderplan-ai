@@ -2584,6 +2584,17 @@ describe("WanderPlanLLMFlow companion entry", () => {
     expect(screen.queryByText("Save Manual Expense")).not.toBeNull();
     expect(screen.queryAllByText("Pending").length).toBeGreaterThan(0);
 
+    fireEvent.change(screen.getByPlaceholderText("Merchant or expense name"), {
+      target: { value: "Test Zero" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Amount"), {
+      target: { value: "0" },
+    });
+    fireEvent.click(screen.getByText("Save Manual Expense"));
+    await waitFor(() =>
+      expect(screen.queryByText("Amount must be greater than zero.")).not.toBeNull()
+    );
+
     fireEvent.click(screen.getAllByRole("button", { name: "Done" })[0]);
 
     await waitFor(() =>
