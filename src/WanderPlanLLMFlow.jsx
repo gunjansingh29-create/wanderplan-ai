@@ -3993,7 +3993,6 @@ export default function WanderPlan(){
     if(savedCreds&&savedCreds.remember){
       setRememberCreds(true);
       setUser(function(p){return Object.assign({},p,{email:savedCreds.email||p.email});});
-      if(savedCreds.password)setSigninPass(savedCreds.password);
     }
     var tok=await ld("wp-auth","");if(tok)setAT(tok);
     var accountEmail=String(savedCreds&&savedCreds.email||"").trim().toLowerCase();

@@ -2146,6 +2146,49 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     window.localStorage.clear();
   });
 
+  test("sign in with empty fields is blocked even when remembered credentials exist", async () => {
+    window.localStorage.setItem(
+      "wp-login-creds",
+      JSON.stringify({
+        remember: true,
+        email: "cached@test.com",
+        password: "secret123",
+      })
+    );
+
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({ accessToken: "test-token:cached-user", name: "Cached User" });
+      }
+      return jsonResponse({});
+    });
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText("Email")).not.toBeNull()
+    );
+
+    expect(screen.getByPlaceholderText("Email").value).toBe("cached@test.com");
+    expect(screen.getByPlaceholderText("Password").value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Enter email and password.")).not.toBeNull()
+    );
+
+    const loginCalls = global.fetch.mock.calls.filter(([url, options]) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+      return path === "/auth/login" && method === "POST";
+    });
+    expect(loginCalls).toHaveLength(0);
+  });
+
   test("crew login replaces stale cached profile and bucket with backend data", async () => {
     window.localStorage.setItem(
       "wp-u",
