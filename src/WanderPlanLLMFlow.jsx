@@ -80,7 +80,19 @@ function mergeProfileIntoUser(baseUser,profile,emailHint,nameHint){
 
 function normalizePersonalBucketItems(items){
   return (Array.isArray(items)?items:[]).map(function(it){
-    return Object.assign({id:it.id},it);
+    var row=(it&&typeof it==="object")?it:{};
+    var name=String(row.name||row.destination||row.city||"").trim();
+    return {
+      id:row.id,
+      destination:String(row.destination||name||"").trim(),
+      name:name,
+      country:String(row.country||"").trim(),
+      bestMonths:Array.isArray(row.bestMonths)?row.bestMonths:(Array.isArray(row.best_months)?row.best_months:[]),
+      costPerDay:Number(row.costPerDay||row.cost_per_day||row.avgDailyCost||row.avg_daily_cost||0)||0,
+      tags:Array.isArray(row.tags)?row.tags:[],
+      bestTimeDesc:String(row.bestTimeDesc||row.best_time_desc||"").trim(),
+      costNote:String(row.costNote||row.cost_note||"").trim()
+    };
   });
 }
 
@@ -1716,7 +1728,7 @@ function normalizeBucketLLMResult(parsed){
       name:name,
       country:String(row.country||"").trim(),
       bestMonths:Array.isArray(row.bestMonths)?row.bestMonths:[],
-      costPerDay:Number(row.costPerDay||0)||0,
+      costPerDay:Number(row.costPerDay||row.cost_per_day||row.avgDailyCost||row.avg_daily_cost||0)||0,
       tags:Array.isArray(row.tags)?row.tags:[],
       bestTimeDesc:String(row.bestTimeDesc||"").trim(),
       costNote:String(row.costNote||"").trim()
@@ -10522,6 +10534,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       var computedTripDays=Math.max(1,Number(inclusiveIsoDays(startDateForSummary,endDateForSummary)||itin.length||sharedDurationDays||10));
       var totalItinCost=itin.reduce(function(s,d){return s+(d.items||[]).reduce(function(s2,it){return s2+(it.cost||0);},0);},0);
       var stayTotal=pStays.reduce(function(s,st){return s+(st.ratePerNight||0)*(st.totalNights||3);},0);
+      var destinationDailyTotal=dests.reduce(function(sum,d){
+        return sum+(Number(d&&d.costPerDay)||0);
+      },0);
+      var destinationBasedTotal=Math.round((dests.length>0?(destinationDailyTotal/dests.length):0)*computedTripDays);
+      var estimatedPerPersonTotal=Math.round(totalItinCost+stayTotal);
+      if(estimatedPerPersonTotal<=0&&destinationBasedTotal>0){
+        estimatedPerPersonTotal=destinationBasedTotal;
+      }
       var nextStatus=String((viewTrip&&viewTrip.status)||(newTrip&&newTrip.status)||(tr&&tr.status)||"").trim().toLowerCase();
       var tripActive=nextStatus==="active"||nextStatus==="completed";
       var routeStops=normalizedFlightRoutePlan();
@@ -10580,7 +10600,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
             {l:"Meals",v:mealCount+" meals planned"},
             {l:"Trip dates",v:tripDateLabel},
             {l:"Flights",v:flightConfirmed?"Confirmed":"Needs confirmation"},
-            {l:"Est. Total",v:"$"+(totalItinCost+stayTotal)+"/person"},
+            {l:"Est. Total",v:"$"+estimatedPerPersonTotal+"/person"},
           ].map(function(r){return(<div key={r.l} style={{display:"flex",justifyContent:"space-between",fontSize:14,marginBottom:4}}><span style={{color:C.tx3}}>{r.l}</span><span style={{fontWeight:600}}>{r.v}</span></div>);})}
         </div>
         <div style={{background:C.surface,borderRadius:14,padding:16,textAlign:"left",marginBottom:16,border:"1px solid "+C.border}}>
@@ -10615,4 +10635,3 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 }
 
 export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-

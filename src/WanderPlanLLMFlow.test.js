@@ -142,11 +142,53 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
   test("normalizePersonalBucketItems keeps backend ids on personal bucket entries", () => {
     expect(
       normalizePersonalBucketItems([
-        { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
+        { id: "bucket-1", destination: "Kyoto" },
       ])
-    ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+    ).toEqual([
+      {
+        id: "bucket-1",
+        destination: "Kyoto",
+        name: "Kyoto",
+        country: "",
+        bestMonths: [],
+        costPerDay: 0,
+        tags: [],
+        bestTimeDesc: "",
+        costNote: "",
+      },
+    ]);
   });
 
+  test("normalizePersonalBucketItems maps snake_case and avg daily cost aliases", () => {
+    const normalized = normalizePersonalBucketItems([
+      {
+        id: "bucket-2",
+        destination: "Tashkent",
+        best_months: [4, 5, 9],
+        avg_daily_cost: 60,
+        best_time_desc: "Apr-May, Sep",
+        cost_note: "Budget-friendly shoulder season",
+      },
+    ]);
+
+    expect(normalized).toHaveLength(1);
+    expect(normalized[0]).toEqual(
+      expect.objectContaining({
+        id: "bucket-2",
+        destination: "Tashkent",
+        name: "Tashkent",
+        country: "",
+        bestMonths: [4, 5, 9],
+        costPerDay: 60,
+        tags: [],
+        bestTimeDesc: "Apr-May, Sep",
+        costNote: "Budget-friendly shoulder season",
+      })
+    );
+    expect(normalized[0]).not.toHaveProperty("avg_daily_cost");
+    expect(normalized[0]).not.toHaveProperty("best_time_desc");
+    expect(normalized[0]).not.toHaveProperty("cost_note");
+  });
   test("bucketQueryNeedsSpecificChildren detects city-list style requests", () => {
     expect(bucketQueryNeedsSpecificChildren("popular tourist cities in Japan")).toBe(true);
     expect(bucketQueryNeedsSpecificChildren("Kyoto")).toBe(false);
