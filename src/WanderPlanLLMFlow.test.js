@@ -40,6 +40,7 @@ import {
   findDuplicatePoiKeys,
   fillMissingDurationPerDestination,
   formatMoney,
+  historyStateForScreen,
   inclusiveIsoDays,
   itineraryRowsScore,
   isCurrentVoteVoter,
@@ -76,6 +77,7 @@ import {
   resolveWizardTripId,
   roundTripFlightRoutePlan,
   routePlanDurationMap,
+  screenFromHistoryState,
   isManufacturedPoiName,
   resolvePoiVotingDecision,
   sanitizeAvailabilityOverlapData,
@@ -145,6 +147,13 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
     ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+  });
+
+  test("history state helpers round-trip SPA screen identifiers", () => {
+    expect(historyStateForScreen("crew")).toEqual({ wanderplan_screen: "crew" });
+    expect(historyStateForScreen("")).toEqual({ wanderplan_screen: "landing" });
+    expect(screenFromHistoryState({ wanderplan_screen: "bucket" })).toBe("bucket");
+    expect(screenFromHistoryState(null)).toBe("");
   });
 
   test("bucketQueryNeedsSpecificChildren detects city-list style requests", () => {
@@ -2255,6 +2264,78 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedUser.email).toBe("crew@test.com");
     expect(scopedBucket).toHaveLength(1);
     expect(scopedBucket[0].name).toBe("Kyoto");
+  });
+
+  test("browser back button restores previous SPA view after deep dashboard navigation", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({
+          accessToken: "test-token:crew-user",
+          name: "Crew Member",
+        });
+      }
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Crew Member",
+            travel_styles: ["friends"],
+            interests: { food: true, culture: true },
+            budget_tier: "budget",
+            dietary: ["Halal"],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [{ id: "crew-bucket-1", destination: "Kyoto", name: "Kyoto", country: "Japan" }],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({ peers: [] });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({ trips: [] });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({ invites: [] });
+      }
+      return jsonResponse({});
+    });
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "crew@test.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+
+    fireEvent.click(screen.getByText("Profile"));
+    await waitFor(() =>
+      expect(screen.queryByDisplayValue("Crew Member")).not.toBeNull()
+    );
+
+    fireEvent.click(screen.getByText("Crew"));
+    await waitFor(() => expect(screen.queryByText("My Crew")).not.toBeNull());
+
+    fireEvent.click(screen.getByText("Bucket List"));
+    await waitFor(() => expect(screen.queryByText("My Bucket List")).not.toBeNull());
+
+    window.history.back();
+    await waitFor(() => expect(screen.queryByText("My Crew")).not.toBeNull());
+
+    window.history.back();
+    await waitFor(() =>
+      expect(screen.queryByDisplayValue("Crew Member")).not.toBeNull()
+    );
   });
 });
 
