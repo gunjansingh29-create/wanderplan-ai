@@ -3789,7 +3789,7 @@ export default function WanderPlan(){
   var[rememberCreds,setRememberCreds]=useState(false);
   var[signinLoad,setSigninLoad]=useState(false);
   var[vpW,setVpW]=useState(typeof window!=="undefined"&&window.innerWidth?window.innerWidth:1024);
-  var[mobileNavOpen,setMNO]=useState(false);
+  var[mobileNavOpen,setMobileNavOpen]=useState(false);
   var[profileHydrated,setPH]=useState(false);
   var[authErr,setAE]=useState("");
   var[authInfo,setAI]=useState("");
@@ -4041,7 +4041,7 @@ export default function WanderPlan(){
     return function(){clearTimeout(t);};
   },[user,authToken,loaded,profileHydrated,currentTripId,newTrip,viewTrip&&viewTrip.id]);
 
-  function go(s){setMNO(false);setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
+  function go(s){setMobileNavOpen(false);setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
   function back(){if(!hist.length)return;setFade(true);setTimeout(function(){setSc(hist[hist.length-1]);setHist(function(h){return h.slice(0,-1);});setFade(false);},200);}
   function upU(k,v){setUser(function(p){var n=Object.assign({},p);n[k]=v;return n;});}
   function mergeCrewFromPeers(peers){
@@ -6098,7 +6098,7 @@ export default function WanderPlan(){
   var inDash=sc==="dash"||sc==="profile"||sc==="crew"||sc==="bucket"||sc==="analytics"||sc==="new_trip"||sc==="wizard"||sc==="trip_detail"||sc==="companion";
   var isPhone=vpW<=480;
   var isNarrow=vpW<=768;
-  var dashNavItems=[{id:"dash",l:"Trips"},{id:"bucket",l:"Bucket List"},{id:"crew",l:"Crew"},{id:"profile",l:"Profile"},{id:"analytics",l:"Stats"}];
+  var dashNavItems=[{id:"dash",label:"Trips"},{id:"bucket",label:"Bucket List"},{id:"crew",label:"Crew"},{id:"profile",label:"Profile"},{id:"analytics",label:"Stats"}];
   var pagePad=isNarrow?12:24;
   var formPad=isPhone?20:40;
   var landingPadX=isPhone?16:44;
@@ -6163,14 +6163,14 @@ export default function WanderPlan(){
   <header style={{position:"sticky",top:0,zIndex:50,background:C.bg+"ee",backdropFilter:"blur(16px)",borderBottom:"1px solid "+C.border}}>
     <div style={{maxWidth:900,margin:"0 auto",display:"flex",alignItems:"center",padding:"10px "+pagePad+"px",gap:10,flexWrap:isNarrow?"wrap":"nowrap"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginRight:"auto"}}><div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>W</div><span style={{fontSize:15,fontWeight:700}}>WanderPlan</span></div>
-      {isPhone?(<button aria-label={mobileNavOpen?"Close navigation menu":"Open navigation menu"} onClick={function(){setMNO(function(v){return !v;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:C.surface,color:C.tx2,fontSize:14,fontWeight:700,lineHeight:1,cursor:"pointer"}}>{mobileNavOpen?"✕":"☰"}</button>):(<><nav style={{display:"flex",gap:2,overflowX:isNarrow?"auto":"visible",maxWidth:isNarrow?"100%":"none",WebkitOverflowScrolling:"touch",flex:isNarrow?"1 1 100%":"0 1 auto"}}>
-        {dashNavItems.map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash")||(sc==="companion"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:isPhone?"6px 10px":"6px 14px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.l}</button>);})}
+      {isPhone?(<button aria-label={mobileNavOpen?"Close navigation menu":"Open navigation menu"} onClick={function(){setMobileNavOpen(function(v){return !v;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:C.surface,color:C.tx2,fontSize:14,fontWeight:700,lineHeight:1,cursor:"pointer"}}>{mobileNavOpen?"✕":"☰"}</button>):(<><nav style={{display:"flex",gap:2,overflowX:isNarrow?"auto":"visible",maxWidth:isNarrow?"100%":"none",WebkitOverflowScrolling:"touch",flex:isNarrow?"1 1 100%":"0 1 auto"}}>
+        {dashNavItems.map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash")||(sc==="companion"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:isPhone?"6px 10px":"6px 14px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.label}</button>);})}
       </nav>
       <button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{padding:"7px 16px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontWeight:600,fontSize:12,cursor:"pointer",marginLeft:4,whiteSpace:"nowrap"}}>+ New Trip</button>
       <div style={{marginLeft:4}}><Avi ini={user.name?user.name.charAt(0).toUpperCase():"?"} color={C.gold} size={28}/></div></>)}
       {isPhone&&mobileNavOpen&&(<div style={{width:"100%",display:"flex",flexDirection:"column",gap:8,paddingTop:2}}>
         <nav style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {dashNavItems.map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash")||(sc==="companion"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:"6px 10px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.l}</button>);})}
+          {dashNavItems.map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash")||(sc==="companion"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:"6px 10px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.label}</button>);})}
         </nav>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{padding:"7px 10px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontWeight:600,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>+ Trip</button>
