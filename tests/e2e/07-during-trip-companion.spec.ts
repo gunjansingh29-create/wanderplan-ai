@@ -5,6 +5,7 @@ const ACTIVE_TRIP_ID = '11111111-1111-4111-8111-111111111111';
 
 test.describe('07 - During-trip companion', () => {
   test.beforeEach(async ({ page }) => {
+    let companionFetchCount = 0;
     let liveCompanion = {
       trip: {
         id: ACTIVE_TRIP_ID,
@@ -189,7 +190,27 @@ test.describe('07 - During-trip companion', () => {
       });
     });
 
-    await page.route(`**/${ACTIVE_TRIP_ID}/companion`, async route => {
+    await page.route(`**/${ACTIVE_TRIP_ID}/companion*`, async route => {
+      companionFetchCount += 1;
+      if (companionFetchCount > 1) {
+        liveCompanion = {
+          ...liveCompanion,
+          current_item: {
+            activity_id: 'act-2',
+            time_slot: '10:15-11:00',
+            title: 'Walk to Sydney Opera House',
+            category: 'transit',
+            location: 'Sydney Harbour',
+          },
+          next_item: {
+            activity_id: 'act-3',
+            time_slot: '11:15-12:15',
+            title: 'Opera House guided entry',
+            category: 'culture',
+            location: 'Sydney Opera House',
+          },
+        };
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -263,6 +284,12 @@ test.describe('07 - During-trip companion', () => {
     await expect(page.getByText('Shinjuku Grand')).toBeVisible();
     await expect(page.getByText('DINING TODAY')).toBeVisible();
     await expect(page.getByText('Izakaya Hanabi')).toBeVisible();
+    await expect(page.getByText('Walk to Sydney Opera House')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await expect(page.getByText('Updated just now')).toBeVisible();
+    await expect(page.getByText('Walk to Sydney Opera House')).toBeVisible();
+    await expect(page.getByText('Opera House guided entry')).toBeVisible();
 
     await page.getByRole('button', { name: 'Done' }).first().click();
     await expect(page.getByText('Updated by Alice Test')).toBeVisible();
@@ -306,8 +333,8 @@ test.describe('07 - During-trip companion', () => {
       stats: { day_count: 0, approved_days: 0, item_count: 0 },
     };
 
-    await page.unroute(`**/${ACTIVE_TRIP_ID}/companion`);
-    await page.route(`**/${ACTIVE_TRIP_ID}/companion`, async route => {
+    await page.unroute(`**/${ACTIVE_TRIP_ID}/companion*`);
+    await page.route(`**/${ACTIVE_TRIP_ID}/companion*`, async route => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -325,4 +352,3 @@ test.describe('07 - During-trip companion', () => {
     await expect(page.getByText('TODAY PROGRESS')).toHaveCount(0);
   });
 });
-

@@ -3904,6 +3904,8 @@ export default function WanderPlan(){
   var[companionData,setCompanionData]=useState(null);
   var[companionLoad,setCompanionLoad]=useState(false);
   var[companionErr,setCompanionErr]=useState("");
+  var[companionRefreshLoad,setCompanionRefreshLoad]=useState(false);
+  var[companionRefreshStamp,setCompanionRefreshStamp]=useState("");
   var[companionActionLoad,setCompanionActionLoad]=useState(false);
   var[receiptText,setReceiptText]=useState("");
   var[receiptImage,setReceiptImage]=useState({name:"",mediaType:"",base64:""});
@@ -4995,13 +4997,17 @@ export default function WanderPlan(){
   function refreshCompanionNow(tid,silent){
     var tripId=String(tid||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
     if(!(loaded&&authToken&&tripId&&isUuidLike(tripId)))return Promise.resolve(null);
+    if(!silent)setCompanionRefreshLoad(true);
     if(!silent){
       setCompanionLoad(true);
       setCompanionErr("");
     }
-    return apiJson("/trips/"+tripId+"/companion",{method:"GET"},authToken).then(function(res){
+    return apiJson("/trips/"+tripId+"/companion?refresh_ts="+Date.now(),{method:"GET",cache:"no-store"},authToken).then(function(res){
       setCompanionData((res&&res.companion)||null);
-      if(!silent)setCompanionLoad(false);
+      if(!silent){
+        setCompanionLoad(false);
+        setCompanionRefreshStamp(new Date().toISOString());
+      }
       refreshCurrentTripSharedState(authToken,tripId).catch(function(){});
       return (res&&res.companion)||null;
     }).catch(function(e){
@@ -5010,6 +5016,8 @@ export default function WanderPlan(){
         setCompanionErr(String(e&&e.message||"Could not load live companion"));
       }
       throw e;
+    }).finally(function(){
+      if(!silent)setCompanionRefreshLoad(false);
     });
   }
   function parseReceiptForTrip(tripId,payload){
@@ -6553,8 +6561,9 @@ export default function WanderPlan(){
               <h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>Live Companion</h1>
               <p style={{fontSize:14,color:C.tx2}}>{tripTitle}</p>
             </div>
-            <button onClick={function(){refreshCompanionNow(String((tr&&tr.id)||currentTripId||""),false).catch(function(){});}} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
+            <button disabled={companionRefreshLoad} onClick={function(){refreshCompanionNow(String((tr&&tr.id)||currentTripId||""),false).catch(function(){});}} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:600,cursor:companionRefreshLoad?"default":"pointer",opacity:companionRefreshLoad?0.7:1}}>{companionRefreshLoad?"Refreshing...":"Refresh"}</button>
           </div>
+          {companionRefreshStamp&&<p style={{fontSize:11,color:C.tx3,marginBottom:10}}>Updated just now</p>}
           <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:12}}>
             {[{l:"Trip Window",v:formatCompanionWindow(lockedWindow)},{l:"Destinations",v:(Array.isArray(tr.dests)?tr.dests.join(" + "):(tr.destNames||""))||"TBD"},{l:"Travelers",v:String(members.length||1)+" active"}].map(function(item){return(<div key={item.l} style={{background:C.bg,borderRadius:12,padding:"12px 14px"}}><p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{item.l}</p><p style={{fontSize:14,fontWeight:600}}>{item.v}</p></div>);})}
           </div>
@@ -10615,4 +10624,3 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 }
 
 export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-

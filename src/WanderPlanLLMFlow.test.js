@@ -2278,6 +2278,7 @@ describe("WanderPlanLLMFlow companion entry", () => {
   });
 
   test("active trip detail opens live companion with shared trip payload", async () => {
+    let companionFetchCount = 0;
     let liveCompanion = {
       trip: {
         id: "11111111-1111-4111-8111-111111111111",
@@ -2490,6 +2491,26 @@ describe("WanderPlanLLMFlow companion entry", () => {
         });
       }
       if (path === "/trips/11111111-1111-4111-8111-111111111111/companion" && method === "GET") {
+        companionFetchCount += 1;
+        if (companionFetchCount > 1) {
+          liveCompanion = {
+            ...liveCompanion,
+            current_item: {
+              activity_id: "a-2",
+              time_slot: "10:15-11:00",
+              title: "Harbour Ferry Boarding",
+              category: "transit",
+              location: "Circular Quay",
+            },
+            next_item: {
+              activity_id: "a-3",
+              time_slot: "11:15-12:15",
+              title: "Sydney Opera House Tour",
+              category: "culture",
+              location: "Sydney Opera House",
+            },
+          };
+        }
         return jsonResponse({
           companion: liveCompanion,
         });
@@ -2583,6 +2604,16 @@ describe("WanderPlanLLMFlow companion entry", () => {
     expect(screen.queryByText("WHO PAID VS SHARE")).not.toBeNull();
     expect(screen.queryByText("Save Manual Expense")).not.toBeNull();
     expect(screen.queryAllByText("Pending").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Harbour Ferry Boarding")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(screen.queryByText("Updated just now")).not.toBeNull()
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Harbour Ferry Boarding")).not.toBeNull()
+    );
+    expect(screen.queryByText("Sydney Opera House Tour")).not.toBeNull();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Done" })[0]);
 
