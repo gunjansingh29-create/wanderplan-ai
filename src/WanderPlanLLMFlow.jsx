@@ -39,12 +39,13 @@ function emptyUserState(){
   return {name:"",email:"",styles:[],interests:{},budget:"moderate",dietary:[]};
 }
 
-function countEnabledInterests(interests){
-  return Object.keys(interests&&typeof interests==="object"?interests:{}).filter(function(key){
-    var value=interests[key];
-    if(value===true||value===1)return true;
-    if(typeof value==="string"){
-      var normalized=value.trim().toLowerCase();
+function countEnabledInterests(interestsObj){
+  var safeInterests=(interestsObj&&typeof interestsObj==="object")?interestsObj:{};
+  return Object.keys(safeInterests).filter(function(interestKey){
+    var interestValue=safeInterests[interestKey];
+    if(interestValue===true||interestValue===1)return true;
+    if(typeof interestValue==="string"){
+      var normalized=interestValue.trim().toLowerCase();
       return normalized==="y"||normalized==="yes"||normalized==="true"||normalized==="1";
     }
     return false;
