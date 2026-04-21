@@ -2942,6 +2942,122 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     });
   });
 
+  test("keeps locally cached wizard step when planning-state has no current_step after refresh", async () => {
+    const tripId = "44444444-4444-4444-8444-444444444444";
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const parsedUrl = new URL(String(url), "https://example.test");
+      const path = parsedUrl.pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Organizer",
+            travel_styles: ["friends"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [
+            { id: "bucket-somnath", destination: "Somnath", name: "Somnath", country: "India" },
+            { id: "bucket-kedarnath", destination: "Kedarnath", name: "Kedarnath", country: "India" },
+          ],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: tripId,
+              name: "Himalayan Choices",
+              status: "planning",
+              my_status: "owner",
+              my_role: "owner",
+              duration_days: 6,
+              members: [{ user_id: "member-1", email: "crew@test.com", status: "accepted" }],
+              destinations: [{ name: "Somnath" }, { name: "Kedarnath" }],
+            },
+          ],
+        });
+      }
+      if (path === `/trips/${tripId}` && method === "GET") {
+        return jsonResponse({
+          trip: {
+            id: tripId,
+            name: "Himalayan Choices",
+            status: "planning",
+            duration_days: 6,
+            members: [{ user_id: "member-1", email: "crew@test.com", status: "accepted" }],
+          },
+        });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "GET") {
+        return jsonResponse({
+          destinations: [{ name: "Somnath", votes: 0 }, { name: "Kedarnath", votes: 0 }],
+        });
+      }
+      if (path === `/trips/${tripId}/pois` && method === "GET") return jsonResponse({ pois: [] });
+      if (path === `/trips/${tripId}/planning-state` && method === "GET") {
+        return jsonResponse({
+          state: {
+            wizard_order_version: 3,
+            dest_member_votes: {
+              "dest:somnath": { "member-1": "up", "email:organizer@test.com": "up" },
+              "dest:kedarnath": { "member-1": "down", "email:organizer@test.com": "down" },
+            },
+          },
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:organizer-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:organizer-user",
+      JSON.stringify({
+        name: "Organizer",
+        email: "organizer@test.com",
+        styles: ["friends"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+    window.localStorage.setItem(
+      "wp-t:uid:organizer-user",
+      JSON.stringify([
+        {
+          id: tripId,
+          name: "Himalayan Choices",
+          status: "planning",
+          my_status: "owner",
+          my_role: "owner",
+          members: [{ id: "member-1", status: "accepted", email: "crew@test.com" }],
+          dests: ["Somnath", "Kedarnath"],
+          destNames: "Somnath + Kedarnath",
+          step: 2,
+        },
+      ])
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Himalayan Choices")).not.toBeNull());
+    fireEvent.click(screen.getByText("Himalayan Choices"));
+    await waitFor(() => expect(screen.queryByText("Continue Planning")).not.toBeNull());
+    fireEvent.click(screen.getByText("Continue Planning"));
+
+    await waitFor(() => expect(screen.queryByText("Voting Agent")).not.toBeNull());
+    expect(screen.queryByText("3/16")).not.toBeNull();
+  });
+
   test("persists the step 6 route plan before continuing", async () => {
     const putBodies = [];
     const tripId = "33333333-3333-4333-8333-333333333333";

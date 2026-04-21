@@ -4008,7 +4008,7 @@ export default function WanderPlan(){
         await acceptPendingInvite(tok,inviteTokenInUrl,inviteActionInUrl);
       }catch(e){}
       try{
-        await hydrateSignedInSession(tok,{baseUser:u||Object.assign(emptyUserState(),{email:accountEmail})});
+        await hydrateSignedInSession(tok,{baseUser:u||Object.assign(emptyUserState(),{email:accountEmail}),cachedTrips:t});
       }catch(e){}
       setSc("dash");
     }
@@ -4323,7 +4323,7 @@ export default function WanderPlan(){
     setUser(seededUser);
     setBucket([]);
     setCrew([]);
-    setTrips([]);
+    setTrips(Array.isArray(o.cachedTrips)?o.cachedTrips:[]);
     try{
       var prof=await apiJson("/me/profile",{method:"GET"},token);
       if(prof&&prof.profile){
