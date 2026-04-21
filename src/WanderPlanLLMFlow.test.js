@@ -2335,7 +2335,7 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(screen.queryByText("Sunset Caldera Cruise")).not.toBeNull();
     expect(screen.queryByText("Island Transfers")).not.toBeNull();
     expect(
-      screen.queryByText((text) => /2,?610\.00 total from receipts/.test(text))
+      screen.queryByText((text) => /2[,]?610\.00 total from receipts/.test(text))
     ).not.toBeNull();
     expect(screen.queryByText("$2610 spent")).not.toBeNull();
   });

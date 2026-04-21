@@ -306,8 +306,8 @@ function receiptItemsTotal(items){
 }
 
 function tripExpenseLineItems(trip){
-  var src=(trip&&Array.isArray(trip.expenses)&&trip.expenses.length)?trip.expenses:(trip&&Array.isArray(trip.recent_expenses)?trip.recent_expenses:[]);
-  return src.map(function(item,idx){
+  var sourceExpenses=(trip&&Array.isArray(trip.expenses)&&trip.expenses.length)?trip.expenses:(trip&&Array.isArray(trip.recent_expenses)?trip.recent_expenses:[]);
+  return sourceExpenses.map(function(item,idx){
     var amount=Number(item&&item.amount||0)||0;
     var merchant=String(item&&item.merchant||item&&item.name||"").trim();
     var category=String(item&&item.category||"").trim();
@@ -326,9 +326,7 @@ function tripExpenseLineItems(trip){
 }
 
 function tripExpenseLineItemsTotal(items){
-  return (Array.isArray(items)?items:[]).reduce(function(sum,item){
-    return sum+(Number(item&&item.amount||0)||0);
-  },0);
+  return receiptItemsTotal(items);
 }
 
 function defaultExpenseSplitMemberIds(members,currentUserId){
@@ -6325,7 +6323,7 @@ export default function WanderPlan(){
           {expenseItems.length>0&&(<div style={{background:C.bg,borderRadius:12,padding:"14px 16px",marginBottom:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
               <p style={{fontSize:12,fontWeight:600,color:C.tx3}}>EXPENSE BREAKDOWN</p>
-              <p style={{fontSize:12,color:C.tx2}}>{formatMoney(expenseItemsTotal,expenseItems[0]&&expenseItems[0].currency||"USD")} total from receipts</p>
+              <p style={{fontSize:12,color:C.tx2}}>{formatMoney(expenseItemsTotal,expenseItems[0].currency||"USD")} total from receipts</p>
             </div>
             <div style={{display:"grid",gap:8}}>
               {expenseItems.map(function(item){
