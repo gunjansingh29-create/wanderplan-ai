@@ -1750,8 +1750,12 @@ function normalizeBucketLLMResult(parsed){
 function bucketQueryNeedsSpecificChildren(userMsg){
   var q=String(userMsg||"").trim().toLowerCase();
   if(!q)return false;
-  return /\b(cities|towns|places|destinations|spots|areas|regions|islands)\b/.test(q) ||
-    /\b(popular|top|best|tourist|must-see|recommend|recommended)\b/.test(q);
+  var hasPlaceNoun=/\b(cities|city|towns|town|places|destinations|spots|areas|regions|islands)\b/.test(q);
+  var hasListIntent=/\b(popular|top|best|tourist|must-see|recommend|recommended)\b/.test(q);
+  if(hasListIntent)return true;
+  if(!hasPlaceNoun)return false;
+  if(q.split(/\s+/).filter(Boolean).length>18)return false;
+  return /\b(in|within|around|across|for)\b/.test(q);
 }
 
 function bucketQueryAnchorName(userMsg){
