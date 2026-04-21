@@ -3815,7 +3815,7 @@ export default function WanderPlan(){
   var[destinationMsg,setDSM]=useState("");
   var[tripFilter,setTF]=useState("all");
   var[viewTrip,setVT]=useState(null);
-  var[deletedSeedTrips,setDST]=useState({});
+  var[deletedSeedTripIds,setDeletedSeedTripIds]=useState({});
   var[wizStep,setWS]=useState(0);
   var[profileDebug,setProfileDebug]=useState({lastGet:null,lastPut:null,lastPutResult:null,tripProfiles:null});
   var[blChat,setBC]=useState([{from:"agent",text:"Tell me a place you dream of visiting! Be as vague or specific as you like."}]);
@@ -4052,7 +4052,7 @@ export default function WanderPlan(){
     if(!tripId)return false;
     setTrips(function(p){return p.filter(function(x){return String(x&&x.id||"").trim()!==tripId;});});
     if(trip.isSeed){
-      setDST(function(prev){var next=Object.assign({},prev);next[tripId]=true;return next;});
+      setDeletedSeedTripIds(function(prev){var next=Object.assign({},prev);next[tripId]=true;return next;});
     }
     setVT(function(prev){return String(prev&&prev.id||"").trim()===tripId?null:prev;});
     setCTID(function(prev){return String(prev||"").trim()===tripId?"":prev;});
@@ -6237,7 +6237,7 @@ export default function WanderPlan(){
         isSeed:true
       });
     }
-    var displayTrips=trips.concat(seedTrips).filter(function(t){return !deletedSeedTrips[String(t&&t.id||"").trim()];});
+    var displayTrips=trips.concat(seedTrips).filter(function(t){return !deletedSeedTripIds[String(t&&t.id||"").trim()];});
     var filtered=displayTrips.filter(function(t){return matchesTripFilter(t,tripFilter);});
     return(<div>
       <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Trips</h1><p style={{fontSize:14,color:C.tx2,marginBottom:20}}>{displayTrips.length} trip{displayTrips.length!==1?"s":""} total</p></Fade>
