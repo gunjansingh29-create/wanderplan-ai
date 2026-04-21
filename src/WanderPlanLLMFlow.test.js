@@ -2427,6 +2427,8 @@ describe("WanderPlanLLMFlow companion entry", () => {
       ],
       stats: { day_count: 7, approved_days: 7, item_count: 12 },
     };
+    let planningStateStep = 10;
+    const persistedSteps = [];
     global.fetch = jest.fn((url, options) => {
       const method = String((options && options.method) || "GET").toUpperCase();
       const path = new URL(String(url), "https://example.test").pathname;
@@ -2459,6 +2461,7 @@ describe("WanderPlanLLMFlow companion entry", () => {
               owner_id: "active-user",
               name: "Active Tokyo Sprint",
               status: "active",
+              step: planningStateStep,
               duration_days: 7,
               my_status: "accepted",
               my_role: "owner",
@@ -2494,8 +2497,20 @@ describe("WanderPlanLLMFlow companion entry", () => {
           companion: liveCompanion,
         });
       }
+      if (path === "/trips/11111111-1111-4111-8111-111111111111/planning-state" && method === "GET") {
+        return jsonResponse({
+          current_step: planningStateStep,
+          state: {},
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
       if (path === "/trips/11111111-1111-4111-8111-111111111111/planning-state" && method === "PUT") {
         const body = JSON.parse(String(options && options.body || "{}"));
+        if (typeof body.current_step === "number") {
+          planningStateStep = body.current_step;
+          persistedSteps.push(body.current_step);
+          return jsonResponse({ current_step: body.current_step, state: body.state || {}, updated_at: "2026-06-01T10:00:00Z" });
+        }
         const patch = body && body.state && body.state.companion_checkins && body.state.companion_checkins["a-1"];
         if (patch) {
           liveCompanion = {
@@ -2596,6 +2611,7 @@ describe("WanderPlanLLMFlow companion entry", () => {
     await waitFor(() =>
       expect(screen.queryByText("Itinerary")).not.toBeNull()
     );
+    expect(persistedSteps).toContain(12);
   });
 
   test("companion shows recovery state when active trip is not ready", async () => {
