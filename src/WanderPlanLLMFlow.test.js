@@ -33,6 +33,7 @@ import {
   canonicalPoiVoteKeyFromStoredKey,
   canonicalStayVoteKey,
   companionCheckinMeta,
+  countEnabledInterests,
   dedupeVoteVoters,
   destinationsNeedingPoiCoverage,
   emptyUserState,
@@ -98,6 +99,20 @@ import {
 import WanderPlan from "./WanderPlanLLMFlow";
 
 describe("WanderPlanLLMFlow account persistence helpers", () => {
+  test("countEnabledInterests counts only active interest values", () => {
+    expect(
+      countEnabledInterests({
+        hiking: true,
+        food: false,
+        culture: "Y",
+        nightlife: "N",
+        wellness: "yes",
+        shopping: "no",
+      })
+    ).toBe(3);
+    expect(countEnabledInterests({ hiking: "N", food: false })).toBe(0);
+  });
+
   test("accountCacheKey scopes cached data by token user id or email", () => {
     expect(accountCacheKey("wp-u", "test-token:user-123", "")).toBe(
       "wp-u:uid:user-123"
