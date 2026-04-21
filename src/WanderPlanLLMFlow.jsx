@@ -6177,7 +6177,7 @@ export default function WanderPlan(){
     function handleDeleteTrip(tr,nextScreen){
       var members=Array.isArray(tr&&tr.members)?tr.members:[];
       if(members.length>0&&typeof window!=="undefined"&&typeof window.confirm==="function"){
-        var confirmed=window.confirm("Are you sure? This cannot be undone.");
+        var confirmed=window.confirm("This trip has crew members. Delete anyway? This cannot be undone.");
         if(!confirmed)return;
       }
       setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});

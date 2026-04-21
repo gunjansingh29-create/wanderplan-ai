@@ -2862,7 +2862,7 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
               my_status: "owner",
               my_role: "owner",
               duration_days: 5,
-              members: [{ id: "member-1", status: "accepted" }],
+              members: [{ id: "crew-member-uuid-1", status: "accepted" }],
               destinations: [{ name: "Tokyo" }],
             },
           ],
@@ -2891,7 +2891,7 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
       await waitFor(() => expect(screen.queryByText("Crew Tokyo Trip")).not.toBeNull());
       fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
 
-      expect(confirmSpy).toHaveBeenCalledWith("Are you sure? This cannot be undone.");
+      expect(confirmSpy).toHaveBeenCalledWith("This trip has crew members. Delete anyway? This cannot be undone.");
       expect(screen.queryByText("Crew Tokyo Trip")).not.toBeNull();
     } finally {
       confirmSpy.mockRestore();
