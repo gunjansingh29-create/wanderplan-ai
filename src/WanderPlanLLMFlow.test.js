@@ -2266,7 +2266,7 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
   });
 
   test("bucket chat rejects gibberish destination suggestions and does not persist them", async () => {
-    var bucketPostCalls = 0;
+    let bucketPostCalls = 0;
     window.HTMLElement.prototype.scrollIntoView = jest.fn();
     global.fetch = jest.fn((url, options) => {
       const method = String((options && options.method) || "GET").toUpperCase();

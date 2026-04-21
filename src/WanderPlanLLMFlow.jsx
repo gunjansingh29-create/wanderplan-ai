@@ -9,6 +9,12 @@ var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-rang
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
 var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Route Planner","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
 var WIZARD_ORDER_VERSION=3;
+var MAX_BUCKET_DESTINATION_NAME_LENGTH=80;
+var MAX_CONSECUTIVE_CONSONANTS_IN_DESTINATION_NAME=6;
+var BUCKET_DESTINATION_DIGIT_RUN_RE=/\d{3,}/;
+var BUCKET_DESTINATION_ALLOWED_CHARS_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ .'\-()]/;
+var BUCKET_DESTINATION_LETTERS_ONLY_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ]/g;
+var BUCKET_DESTINATION_VOWEL_RE=/[aeiouyà-öø-ÿ]/i;
 var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" | "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
 var BUILD_STAMP_DETAIL=String(BUILD_INFO&&BUILD_INFO.builtAt||"unknown");
 
@@ -134,24 +140,24 @@ function canonicalTripDestinationName(value){
 function isPlausibleBucketDestinationName(value){
   var name=normalizeTripDestinationValue(value);
   if(!name)return false;
-  if(name.length<2||name.length>80)return false;
-  if(/[0-9]/.test(name))return false;
-  if(/[^A-Za-zÀ-ÖØ-öø-ÿ .'\-()]/.test(name))return false;
-  var letters=name.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g,"");
+  if(name.length<2||name.length>MAX_BUCKET_DESTINATION_NAME_LENGTH)return false;
+  if(BUCKET_DESTINATION_DIGIT_RUN_RE.test(name))return false;
+  if(BUCKET_DESTINATION_ALLOWED_CHARS_RE.test(name))return false;
+  var letters=name.replace(BUCKET_DESTINATION_LETTERS_ONLY_RE,"");
   if(letters.length<2)return false;
-  if(!/[aeiouyà-öø-ÿ]/i.test(letters))return false;
+  if(!BUCKET_DESTINATION_VOWEL_RE.test(letters))return false;
   var maxConsonantRun=0;
   var run=0;
   for(var i=0;i<letters.length;i++){
     var ch=letters.charAt(i);
-    if(/[aeiouyà-öø-ÿ]/i.test(ch)){
+    if(BUCKET_DESTINATION_VOWEL_RE.test(ch)){
       run=0;
     }else{
       run++;
       if(run>maxConsonantRun)maxConsonantRun=run;
     }
   }
-  if(maxConsonantRun>=6)return false;
+  if(maxConsonantRun>=MAX_CONSECUTIVE_CONSONANTS_IN_DESTINATION_NAME)return false;
   return true;
 }
 
