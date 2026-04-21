@@ -2775,6 +2775,11 @@ describe("WanderPlanLLMFlow trip deletion confirmation", () => {
     expect(screen.queryByText("Back to My Trips")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    expect(confirmSpy).toHaveBeenNthCalledWith(
+      2,
+      "Are you sure you want to delete this trip? This cannot be undone."
+    );
 
     await waitFor(() => expect(screen.queryByText("My Trips")).not.toBeNull());
     await waitFor(() =>
