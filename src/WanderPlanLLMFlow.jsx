@@ -6563,7 +6563,7 @@ export default function WanderPlan(){
             </div>
             <button disabled={companionRefreshLoad} onClick={function(){refreshCompanionNow(String((tr&&tr.id)||currentTripId||""),false).catch(function(){});}} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:600,cursor:companionRefreshLoad?"default":"pointer",opacity:companionRefreshLoad?0.7:1}}>{companionRefreshLoad?"Refreshing...":"Refresh"}</button>
           </div>
-          {companionRefreshStamp&&<p style={{fontSize:11,color:C.tx3,marginBottom:10}}>Updated just now</p>}
+          {companionRefreshStamp&&<p role="status" aria-live="polite" style={{fontSize:11,color:C.tx3,marginBottom:10}}>Updated just now</p>}
           <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:12}}>
             {[{l:"Trip Window",v:formatCompanionWindow(lockedWindow)},{l:"Destinations",v:(Array.isArray(tr.dests)?tr.dests.join(" + "):(tr.destNames||""))||"TBD"},{l:"Travelers",v:String(members.length||1)+" active"}].map(function(item){return(<div key={item.l} style={{background:C.bg,borderRadius:12,padding:"12px 14px"}}><p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{item.l}</p><p style={{fontSize:14,fontWeight:600}}>{item.v}</p></div>);})}
           </div>
