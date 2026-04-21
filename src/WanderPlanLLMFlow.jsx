@@ -6095,7 +6095,7 @@ export default function WanderPlan(){
   var acc=crew.filter(function(m){return m.status==="accepted";});
   var pendingCrewCount=crew.filter(function(m){return m.status==="pending"||m.status==="invited";}).length;
   var completedTripCount=trips.filter(function(t){
-    return String(t&&t.status||"").trim().toLowerCase()==="completed";
+    return String(t&&t.status!=null?t.status:"").trim().toLowerCase()==="completed";
   }).length;
   var inDash=sc==="dash"||sc==="profile"||sc==="crew"||sc==="bucket"||sc==="analytics"||sc==="new_trip"||sc==="wizard"||sc==="trip_detail"||sc==="companion";
   var isPhone=vpW<=480;
