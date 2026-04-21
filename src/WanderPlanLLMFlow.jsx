@@ -317,6 +317,11 @@ function defaultExpenseSplitMemberIds(members,currentUserId){
 }
 
 var TRIP_DETAIL_EXPENSE_CATEGORIES=["Transport","Accommodation","Food","Activities"];
+var tripDetailExpenseIdSeq=0;
+function nextTripDetailExpenseId(){
+  tripDetailExpenseIdSeq+=1;
+  return "exp-local-"+tripDetailExpenseIdSeq;
+}
 
 function seedTripDetailExpenses(trip){
   var budget=Number(trip&&trip.budget||0)||0;
@@ -6324,7 +6329,7 @@ export default function WanderPlan(){
       }
       setTripDetailExpenses(function(prev){
         var list=Array.isArray(prev)?prev.slice():[];
-        list.push({id:"exp-"+Date.now()+"-"+Math.floor(Math.random()*100000),name:name,category:category,amount:normalized});
+        list.push({id:nextTripDetailExpenseId(),name:name,category:category,amount:normalized});
         return list;
       });
       resetTripDetailExpenseForm();

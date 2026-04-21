@@ -19,6 +19,12 @@ const sh = {
   md:"0 4px 16px rgba(26,26,46,0.07),0 2px 6px rgba(26,26,46,0.03)",
   lg:"0 12px 40px rgba(26,26,46,0.1),0 4px 12px rgba(26,26,46,0.05)",
 };
+function nextDashboardExpenseId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `expense-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GLOBAL CSS
@@ -896,7 +902,7 @@ function BudgetTab({ trip }) {
 
     setExpenses((prev) => [
       ...prev,
-      { id: Date.now() + Math.random(), name, category, amount: normalizedAmount },
+      { id: nextDashboardExpenseId(), name, category, amount: normalizedAmount },
     ]);
     resetExpenseDraft();
   };
