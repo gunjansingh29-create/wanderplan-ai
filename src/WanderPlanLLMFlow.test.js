@@ -77,6 +77,7 @@ import {
   roundTripFlightRoutePlan,
   routePlanDurationMap,
   isManufacturedPoiName,
+  isPlausibleBucketDestinationName,
   resolvePoiVotingDecision,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
@@ -172,6 +173,13 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("isPlausibleBucketDestinationName rejects obvious gibberish destination strings", () => {
+    expect(isPlausibleBucketDestinationName("Kyoto")).toBe(true);
+    expect(isPlausibleBucketDestinationName("New York")).toBe(true);
+    expect(isPlausibleBucketDestinationName("asdfjkl xyz 123")).toBe(false);
+    expect(isPlausibleBucketDestinationName("xqztrwpln")).toBe(false);
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
@@ -2255,6 +2263,88 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedUser.email).toBe("crew@test.com");
     expect(scopedBucket).toHaveLength(1);
     expect(scopedBucket[0].name).toBe("Kyoto");
+  });
+
+  test("bucket chat rejects gibberish destination suggestions and does not persist them", async () => {
+    var bucketPostCalls = 0;
+    window.HTMLElement.prototype.scrollIntoView = jest.fn();
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({
+          accessToken: "test-token:crew-user",
+          name: "Crew Member",
+        });
+      }
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Crew Member",
+            travel_styles: ["friends"],
+            interests: { food: true, culture: true },
+            budget_tier: "budget",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/me/bucket-list" && method === "POST") {
+        bucketPostCalls += 1;
+        return jsonResponse({ item: { id: "bucket-1", destination: "asdfjkl xyz 123" } });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/llm/messages" && method === "POST") {
+        return jsonResponse({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                type: "destinations",
+                items: [{ name: "asdfjkl xyz 123", country: "" }],
+              }),
+            },
+          ],
+        });
+      }
+      if (path === "/nlp/extract-destinations" && method === "POST") {
+        return jsonResponse({ destinations: [{ name: "asdfjkl xyz 123", country: "" }] });
+      }
+      return jsonResponse({});
+    });
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "crew@test.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Bucket List"));
+    await waitFor(() => expect(screen.queryByText("0 destinations saved")).not.toBeNull());
+
+    fireEvent.change(screen.getByPlaceholderText(/northern lights/i), {
+      target: { value: "asdfjkl xyz 123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/Could you name specific cities, islands, or regions you want to explore\?/i)
+      ).not.toBeNull()
+    );
+    expect(screen.queryByText(/Added asdfjkl xyz 123 to your bucket list/i)).toBeNull();
+    expect(bucketPostCalls).toBe(0);
   });
 });
 
