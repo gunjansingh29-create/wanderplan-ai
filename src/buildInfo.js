@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "a161e7a",
+  "sha": "af3643d",
   "branch": "copilot/fix-navigation-bar-overflow",
-  "builtAt": "2026-04-21T11:54:45.687Z"
+  "builtAt": "2026-04-21T12:03:43.022Z"
 };

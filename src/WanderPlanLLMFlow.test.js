@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   accountCacheKey,
   activeTripTravelerCount,
@@ -3124,5 +3124,56 @@ describe("WanderPlanLLMFlow Step 3 interest consensus", () => {
     expect(summary.yesCount).toBe(0);
     expect(summary.totalCount).toBe(0);
     expect(summary.pct).toBe(0);
+  });
+});
+
+describe("WanderPlanLLMFlow mobile nav", () => {
+  const originalFetch = global.fetch;
+  const originalInnerWidth = window.innerWidth;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: originalInnerWidth });
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    window.localStorage.clear();
+  });
+
+  test("uses a collapsible menu at 375px and reveals nav items without horizontal tab row", async () => {
+    global.fetch = jest.fn(() => jsonResponse({}));
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 375 });
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:mobile-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:mobile-user",
+      JSON.stringify({
+        name: "Mobile User",
+        email: "mobile@test.com",
+        styles: [],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    const menuButton = await screen.findByRole("button", { name: "Open navigation menu" });
+    expect(screen.queryByText("Bucket List")).toBeNull();
+
+    fireEvent.click(menuButton);
+    expect(await screen.findByText("Bucket List")).not.toBeNull();
+    expect(screen.queryByText("+ Trip")).not.toBeNull();
   });
 });
