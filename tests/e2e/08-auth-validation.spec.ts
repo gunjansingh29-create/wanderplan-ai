@@ -14,7 +14,7 @@ test.describe('08 — Auth validation edge cases', () => {
     await page.getByRole('button', { name: /^sign in$/i }).click();
 
     await expect(page.locator('text=Please enter a valid email address.')).toBeVisible();
-    await expect(page.locator('text=/account not found\\. please sign up\\./i')).toHaveCount(0);
+    await expect(page.getByText(/account not found\. please sign up\./i)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^sign in$/i })).toBeVisible();
   });
 });
