@@ -43,7 +43,7 @@ function countEnabledInterests(interestsObj){
   var safeInterests=(interestsObj&&typeof interestsObj==="object")?interestsObj:{};
   return Object.keys(safeInterests).filter(function(interestKey){
     var interestValue=safeInterests[interestKey];
-    if(interestValue===true||interestValue===1)return true;
+    if(interestValue===true||interestValue===1||interestValue==="1")return true;
     if(typeof interestValue==="string"){
       var normalized=interestValue.trim().toLowerCase();
       return normalized==="y"||normalized==="yes"||normalized==="true"||normalized==="1";
