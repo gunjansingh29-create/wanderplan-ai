@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "unknown",
-  "branch": "unknown",
-  "builtAt": "2026-03-19T20:24:59.264Z"
+  "sha": "92622d6",
+  "branch": "copilot/g-14-fix-refresh-button-issue",
+  "builtAt": "2026-04-21T16:20:22.988Z"
 };
