@@ -170,6 +170,22 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
   });
 
+  test("refineBucketItemsForQuery keeps one primary destination for long-form essay input", () => {
+    const essay = `I spent an unforgettable week in Prague wandering cobblestone streets, watching sunrise over the Vltava River, and crossing Charles Bridge before the crowds arrived. Every evening I returned to Old Town Square, listened to music near the Astronomical Clock, and admired the Gothic facades that glow at dusk. I toured Prague Castle, explored hidden courtyards, and kept finding cozy cafes tucked into side lanes. The city felt intimate, walkable, and full of history. Even after day trips and long walks, Prague remained the clear center of the journey and the place I want to revisit first.`;
+    expect(
+      refineBucketItemsForQuery(essay, [
+        { name: "Prague", country: "Czech Republic" },
+        { name: "Czech Republic", country: "" },
+        { name: "Charles Bridge", country: "" },
+        { name: "Vltava River", country: "" },
+        { name: "Prague Castle", country: "" },
+        { name: "Old Town Square", country: "" },
+        { name: "Astronomical Clock", country: "" },
+        { name: "Gothic", country: "" },
+      ])
+    ).toEqual([{ name: "Prague", country: "Czech Republic" }]);
+  });
+
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
   });
@@ -2255,6 +2271,110 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedUser.email).toBe("crew@test.com");
     expect(scopedBucket).toHaveLength(1);
     expect(scopedBucket[0].name).toBe("Kyoto");
+  });
+
+  test("bucket chat keeps only Prague from a long Prague-focused essay extraction", async () => {
+    window.HTMLElement.prototype.scrollIntoView = jest.fn();
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({
+          accessToken: "test-token:essay-user",
+          name: "Essay Traveler",
+        });
+      }
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Essay Traveler",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/me/bucket-list" && method === "POST") {
+        return jsonResponse({
+          item: {
+            id: "saved-prague",
+            destination: "Prague",
+            name: "Prague",
+            country: "Czech Republic",
+          },
+        });
+      }
+      if (path === "/llm/messages" && method === "POST") {
+        return jsonResponse({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                type: "destinations",
+                items: [
+                  { name: "Prague", country: "Czech Republic" },
+                  { name: "Czech Republic", country: "" },
+                  { name: "Charles Bridge", country: "" },
+                  { name: "Vltava River", country: "" },
+                  { name: "Prague Castle", country: "" },
+                  { name: "Old Town Square", country: "" },
+                  { name: "Astronomical Clock", country: "" },
+                  { name: "Gothic", country: "" },
+                  { name: "Art Nouveau", country: "" },
+                ],
+              }),
+            },
+          ],
+          _meta: { provider: "anthropic", model_used: "test-model" },
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({ peers: [] });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({ trips: [] });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({ invites: [] });
+      }
+      return jsonResponse({});
+    });
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "essay@test.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Bucket List"));
+
+    const essay = "Prague was the center of my weeklong journey, from dawn walks along the Vltava to evenings in Old Town. I kept returning to Prague Castle, crossing Charles Bridge, and getting lost in side streets filled with cafés and music. The architecture mixed Gothic and Art Nouveau details, and each day felt richer than the last. Even when I visited nearby spots, Prague remained the clear highlight I would plan my next trip around.";
+    fireEvent.change(
+      await screen.findByPlaceholderText("e.g. 'northern lights' or 'Kyoto'"),
+      { target: { value: essay } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/1 destination saved/i)).not.toBeNull()
+    );
+
+    const scopedBucket = JSON.parse(
+      window.localStorage.getItem("wp-b:uid:essay-user") || "[]"
+    );
+    expect(scopedBucket).toHaveLength(1);
+    expect(scopedBucket[0].name).toBe("Prague");
   });
 });
 
