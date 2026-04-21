@@ -2258,6 +2258,48 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
   });
 });
 
+describe("WanderPlanLLMFlow sign in email validation", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+  });
+
+  test("shows an inline error for invalid sign in email format and blocks auth request", async () => {
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve("{}"),
+      })
+    );
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "notanemail" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Please enter a valid email address.")).not.toBeNull()
+    );
+    const loginCalls = global.fetch.mock.calls.filter((call) => {
+      const url = String((call && call[0]) || "");
+      return url.indexOf("/auth/login") >= 0;
+    });
+    expect(loginCalls).toHaveLength(0);
+  });
+});
+
 describe("WanderPlanLLMFlow companion entry", () => {
   const originalFetch = global.fetch;
 
