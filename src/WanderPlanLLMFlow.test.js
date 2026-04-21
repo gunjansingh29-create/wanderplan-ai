@@ -2300,7 +2300,7 @@ describe("WanderPlanLLMFlow companion entry", () => {
         },
       ],
       today: {
-        day_number: 1,
+        day_number: null,
         date: "2026-06-01",
         title: "Arrival Day",
         approved: true,
