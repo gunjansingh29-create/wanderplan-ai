@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "unknown",
-  "branch": "unknown",
-  "builtAt": "2026-03-19T20:24:59.264Z"
+  "sha": "0a9b985",
+  "branch": "copilot/g-10-fix-browser-back-button-issue",
+  "builtAt": "2026-04-21T16:18:31.385Z"
 };
