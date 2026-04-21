@@ -2277,6 +2277,93 @@ describe("WanderPlanLLMFlow companion entry", () => {
     window.localStorage.clear();
   });
 
+  test("stats view shows total days aggregated across trips", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Alice Active",
+            travel_styles: ["solo"],
+            interests: { culture: true, food: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [
+            { id: "bucket-1", destination: "Hawaii", name: "Hawaii", country: "USA" },
+            { id: "bucket-2", destination: "Kyoto", name: "Kyoto", country: "Japan" },
+          ],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              owner_id: "active-user",
+              name: "Hawaii",
+              status: "planning",
+              duration_days: 10,
+              my_status: "accepted",
+              my_role: "owner",
+              destinations: ["Hawaii"],
+              members: [],
+            },
+            {
+              id: "22222222-2222-4222-8222-222222222222",
+              owner_id: "active-user",
+              name: "Jyotirlinga",
+              status: "planning",
+              duration_days: 33,
+              my_status: "accepted",
+              my_role: "owner",
+              destinations: ["India"],
+              members: [],
+            },
+          ],
+        });
+      }
+      if (
+        (path === "/trips/11111111-1111-4111-8111-111111111111/planning-state" ||
+          path === "/trips/22222222-2222-4222-8222-222222222222/planning-state") &&
+        method === "GET"
+      ) {
+        return jsonResponse({ state: {} });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:active-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:active-user",
+      JSON.stringify({
+        name: "Alice Active",
+        email: "alice@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Stats"));
+    await waitFor(() => expect(screen.queryByText("Analytics")).not.toBeNull());
+
+    expect(screen.queryByText("Total Days")).not.toBeNull();
+    expect(screen.queryByText("43")).not.toBeNull();
+  });
+
   test("active trip detail opens live companion with shared trip payload", async () => {
     let liveCompanion = {
       trip: {
