@@ -85,6 +85,7 @@ import {
   shouldSkipPoiAutoGenerate,
   shouldResetTravelPlanForDurationChange,
   summarizeDestinationVotes,
+  summarizeActiveInterests,
   summarizeInterestConsensus,
   summarizeMealVotes,
   summarizePoiVotes,
@@ -172,6 +173,13 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("summarizeActiveInterests returns comma-separated enabled interests", () => {
+    expect(
+      summarizeActiveInterests({ hiking: true, food: false, adventure: true, culture: true })
+    ).toBe("hiking, adventure, culture");
+    expect(summarizeActiveInterests({ hiking: false })).toBe("");
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {
@@ -2255,6 +2263,96 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedUser.email).toBe("crew@test.com");
     expect(scopedBucket).toHaveLength(1);
     expect(scopedBucket[0].name).toBe("Kyoto");
+  });
+
+  test("bucket list agent sends an immediate hiking-aligned response even if save stalls", async () => {
+    window.HTMLElement.prototype.scrollIntoView = jest.fn();
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({
+          accessToken: "test-token:bucket-user",
+          name: "Bucket User",
+        });
+      }
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Bucket User",
+            travel_styles: ["solo"],
+            interests: { hiking: true, food: false, culture: false },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/llm/messages" && method === "POST") {
+        return jsonResponse({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                type: "destinations",
+                items: [
+                  {
+                    name: "Queenstown",
+                    country: "New Zealand",
+                    bestMonths: [11, 12, 1, 2],
+                    costPerDay: 220,
+                    tags: ["Hiking", "Adventure"],
+                    bestTimeDesc: "Summer for trail access",
+                    costNote: "Moderate to premium for peak season",
+                  },
+                ],
+              }),
+            },
+          ],
+        });
+      }
+      if (path === "/me/bucket-list" && method === "POST") {
+        return new Promise(() => {});
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({ peers: [] });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({ trips: [] });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({ invites: [] });
+      }
+      return jsonResponse({});
+    });
+
+    render(<WanderPlan />);
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "bucket@test.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Bucket List"));
+    await waitFor(() => expect(screen.queryByText("Bucket List Agent")).not.toBeNull());
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 'northern lights' or 'Kyoto'"), {
+      target: { value: "adventure travel" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Added Queenstown to your bucket list/i)).not.toBeNull()
+    );
+    expect(screen.queryByText(/Matched with your interests: hiking/i)).not.toBeNull();
+    expect(screen.queryAllByText("Queenstown").length).toBeGreaterThan(0);
   });
 });
 
