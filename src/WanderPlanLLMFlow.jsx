@@ -5745,6 +5745,21 @@ export default function WanderPlan(){
     });
   }
 
+  function mergePersistedBucketItem(item, fallback){
+    var resolved=item||{};
+    var base=fallback||{};
+    return Object.assign({},resolved,{
+      id:resolved.id||base.id,
+      name:resolved.name||base.name,
+      country:resolved.country||base.country,
+      bestMonths:resolved.bestMonths||base.bestMonths,
+      costPerDay:resolved.costPerDay||base.costPerDay,
+      tags:resolved.tags||base.tags,
+      bestTimeDesc:resolved.bestTimeDesc||base.bestTimeDesc,
+      costNote:resolved.costNote||base.costNote
+    });
+  }
+
   function searchDestinationsForTrip(){
     var msg=String(newTripDestInput||"").trim();
     if(!msg||tripDestSearchLoad)return;
@@ -6090,12 +6105,14 @@ export default function WanderPlan(){
               cost_per_day:d.costPerDay||0,best_time_desc:d.bestTimeDesc||"",cost_note:d.costNote||""
             }},authToken).then(function(saved){
               var item=(saved&&saved.item)?saved.item:d;
-              updateBucketItemLocal(Object.assign({},item,{id:item.id||d.id,name:item.name||d.name,country:item.country||d.country,bestMonths:item.bestMonths||d.bestMonths,costPerDay:item.costPerDay||d.costPerDay,tags:item.tags||d.tags,bestTimeDesc:item.bestTimeDesc||d.bestTimeDesc,costNote:item.costNote||d.costNote}));
+              updateBucketItemLocal(mergePersistedBucketItem(item,d));
               persistAt(idx+1);
             }).catch(function(){
               persistAt(idx+1);
             });
-          }else{persistAt(idx+1);}
+          }else{
+            persistAt(idx+1);
+          }
         }
         persistAt(0);
       }else{
