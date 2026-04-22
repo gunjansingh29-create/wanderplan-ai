@@ -1546,6 +1546,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
   test("resolveTripBudgetTier prefers organizer-selected shared budget tier", () => {
     expect(resolveTripBudgetTier("premium", "budget")).toBe("premium");
     expect(resolveTripBudgetTier("", "luxury")).toBe("luxury");
+    expect(resolveTripBudgetTier("budget", "premium")).toBe("budget");
   });
 
   test("duration plan signature changes when destinations or total days change", () => {
