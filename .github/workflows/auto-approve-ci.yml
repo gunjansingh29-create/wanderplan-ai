@@ -1,0 +1,40 @@
+name: Auto-approve CI workflow runs
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [requested]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Approve CI workflow run if required
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runId = context.payload.workflow_run.id;
+            try {
+              await github.request(
+                "POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve",
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: runId,
+                }
+              );
+              core.info(`Approved workflow run ${runId}.`);
+            } catch (error) {
+              if (error.status === 422) {
+                core.info(
+                  `Workflow run ${runId} does not require approval or has already been approved.`
+                );
+                return;
+              }
+              throw error;
+            }
