@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "unknown",
-  "branch": "unknown",
-  "builtAt": "2026-03-19T20:24:59.264Z"
+  "sha": "eb85fdf",
+  "branch": "copilot/fix-duplicate-destination-cards",
+  "builtAt": "2026-04-26T05:38:40.454Z"
 };
