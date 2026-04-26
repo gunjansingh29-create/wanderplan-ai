@@ -3823,6 +3823,7 @@ export default function WanderPlan(){
   var[bucketMsg,setBM]=useState("");
   var[invEmail,setIE]=useState("");
   var chatRef=useRef(null);
+  var blInFlightRef=useRef(false);
   var inviteAcceptSeenRef=useRef({});
   var tripInviteAttemptRef=useRef({});
   var tripInviteInFlightRef=useRef(false);
@@ -4019,7 +4020,7 @@ export default function WanderPlan(){
   useEffect(function(){if(loaded)svAccount("wp-b",authToken,user.email,bucket);},[bucket,loaded,authToken,user.email]);
   useEffect(function(){if(loaded)svAccount("wp-t",authToken,user.email,trips);},[trips,loaded,authToken,user.email]);
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
-  useEffect(function(){if(chatRef.current)chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
+  useEffect(function(){if(chatRef.current&&typeof chatRef.current.scrollIntoView==="function")chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
   useEffect(function(){if(sc==="new_trip"){setTIM("");setTIL({});}},[sc]);
   useEffect(function(){
     if(typeof window==="undefined")return;
@@ -6006,10 +6007,10 @@ export default function WanderPlan(){
   }
 
   function sendBL(){
-    if(!blIn.trim()||blLoad)return;var msg=blIn.trim();setBLI("");
+    if(!blIn.trim()||blLoad||blInFlightRef.current)return;var msg=blIn.trim();setBLI("");
+    blInFlightRef.current=true;
     setBC(function(p){return p.concat([{from:"user",text:msg}]);});setBLL(true);
     askLLM(msg,user.budget,blChat).then(function(res){
-      setBLL(false);
       if(res&&res.type==="destinations"&&Array.isArray(res.items)&&res.items.length){
         var proposed=[];
         var proposedSeen={};
@@ -6089,6 +6090,11 @@ export default function WanderPlan(){
       }else{
         setBC(function(p){return p.concat([{from:"agent",text:(res&&res.message)||"Tell me more?"}]);});
       }
+    }).catch(function(){
+      setBC(function(p){return p.concat([{from:"agent",text:"I ran into an issue processing that request. Please try again."}]);});
+    }).finally(function(){
+      blInFlightRef.current=false;
+      setBLL(false);
     });
   }
 
@@ -10615,4 +10621,3 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 }
 
 export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-

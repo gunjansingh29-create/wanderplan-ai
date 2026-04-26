@@ -2270,6 +2270,11 @@ describe("WanderPlanLLMFlow companion entry", () => {
 
   beforeEach(() => {
     window.localStorage.clear();
+    Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: jest.fn(),
+    });
   });
 
   afterEach(() => {
@@ -2698,6 +2703,138 @@ describe("WanderPlanLLMFlow companion entry", () => {
     expect(await screen.findByText("LIVE COMPANION SETUP")).not.toBeNull();
     expect(screen.queryByText("TODAY'S PLAN")).toBeNull();
     expect(screen.queryByText("TODAY PROGRESS")).toBeNull();
+  });
+});
+
+describe("WanderPlanLLMFlow bucket list rapid submit hardening", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+  });
+
+  test("deduplicates rapid Send clicks while bucket destination extraction is in flight", async () => {
+    let llmCalls = 0;
+    let bucketPostCalls = 0;
+    let resolveLlm;
+    const llmPromise = new Promise((resolve) => {
+      resolveLlm = resolve;
+    });
+
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Rapid User",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/llm/messages" && method === "POST") {
+        llmCalls += 1;
+        return llmPromise;
+      }
+      if (path === "/me/bucket-list" && method === "POST") {
+        bucketPostCalls += 1;
+        return jsonResponse({
+          item: {
+            id: "bucket-bruges",
+            destination: "Bruges",
+            name: "Bruges",
+            country: "Belgium",
+            best_months: [4, 5],
+            bestMonths: [4, 5],
+            cost_per_day: 180,
+            costPerDay: 180,
+            tags: ["Culture"],
+            best_time_desc: "Spring",
+            bestTimeDesc: "Spring",
+            cost_note: "Moderate shoulder season pricing",
+            costNote: "Moderate shoulder season pricing",
+          },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:rapid-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:rapid-user",
+      JSON.stringify({
+        name: "Rapid User",
+        email: "rapid@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Bucket List"));
+
+    const input = await screen.findByPlaceholderText("e.g. 'northern lights' or 'Kyoto'");
+    fireEvent.change(input, { target: { value: "Bruges Belgium" } });
+    const sendButton = screen.getByRole("button", { name: "Send" });
+
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+
+    expect(llmCalls).toBe(1);
+
+    resolveLlm(
+      jsonResponse({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              type: "destinations",
+              items: [
+                {
+                  name: "Bruges",
+                  country: "Belgium",
+                  bestMonths: [4, 5],
+                  costPerDay: 180,
+                  tags: ["Culture"],
+                  bestTimeDesc: "Spring",
+                  costNote: "Moderate shoulder season pricing",
+                },
+              ],
+            }),
+          },
+        ],
+      })
+    );
+
+    await waitFor(() => expect(bucketPostCalls).toBe(1));
+    await waitFor(() => expect(screen.queryAllByLabelText("Remove Bruges")).toHaveLength(1));
+    expect(screen.getAllByText("Bruges Belgium")).toHaveLength(1);
   });
 });
 
