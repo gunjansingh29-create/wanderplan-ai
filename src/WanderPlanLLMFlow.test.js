@@ -2942,6 +2942,118 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     });
   });
 
+  test("Pick for Trip routes back to wizard step 1 for the active planning trip", async () => {
+    const putBodies = [];
+    const tripId = "44444444-4444-4444-8444-444444444444";
+
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const parsedUrl = new URL(String(url), "https://example.test");
+      const path = parsedUrl.pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Organizer",
+            travel_styles: ["friends"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [{ id: "bucket-tokyo", destination: "Tokyo", name: "Tokyo", country: "Japan" }],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: tripId,
+              name: "Japan Sprint",
+              status: "planning",
+              my_status: "owner",
+              my_role: "owner",
+              duration_days: 6,
+              members: [],
+              destinations: [{ name: "Kyoto" }],
+            },
+          ],
+        });
+      }
+      if (path === `/trips/${tripId}` && method === "GET") {
+        return jsonResponse({
+          trip: { id: tripId, name: "Japan Sprint", status: "planning", duration_days: 6, members: [] },
+        });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "GET") {
+        return jsonResponse({ destinations: [{ name: "Kyoto", votes: 0 }] });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "PUT") {
+        const body = JSON.parse((options && options.body) || "{}");
+        putBodies.push(body);
+        return jsonResponse({
+          destinations: (Array.isArray(body.destinations) ? body.destinations : []).map((name) => ({
+            name,
+            votes: 0,
+          })),
+        });
+      }
+      if (path === `/trips/${tripId}/pois` && method === "GET") return jsonResponse({ pois: [] });
+      if (path === `/trips/${tripId}/planning-state` && method === "GET") {
+        return jsonResponse({
+          current_step: 0,
+          state: { wizard_order_version: 2 },
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      if (path === `/trips/${tripId}/planning-state` && method === "PUT") {
+        const body = JSON.parse((options && options.body) || "{}");
+        return jsonResponse({
+          current_step: body.current_step,
+          state: body.state || {},
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:organizer-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:organizer-user",
+      JSON.stringify({
+        name: "Organizer",
+        email: "organizer@test.com",
+        styles: ["friends"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Japan Sprint")).not.toBeNull());
+    fireEvent.click(screen.getByText("Japan Sprint"));
+    await waitFor(() => expect(screen.queryByText("Continue Planning")).not.toBeNull());
+    fireEvent.click(screen.getByText("Continue Planning"));
+
+    await waitFor(() => expect(screen.queryByText("Confirm 1 Destination")).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Bucket List" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Pick for Trip" })).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Pick for Trip" }));
+
+    await waitFor(() => expect(screen.queryByText("Confirm 2 Destinations")).not.toBeNull());
+    await waitFor(() => {
+      expect(putBodies.length).toBeGreaterThan(0);
+      expect(putBodies[putBodies.length - 1].destinations).toEqual(["Kyoto", "Tokyo"]);
+    });
+  });
+
   test("persists the step 6 route plan before continuing", async () => {
     const putBodies = [];
     const tripId = "33333333-3333-4333-8333-333333333333";
