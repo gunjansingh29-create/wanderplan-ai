@@ -41,6 +41,7 @@ import {
   fillMissingDurationPerDestination,
   formatMoney,
   inclusiveIsoDays,
+  isUuidLike,
   itineraryRowsScore,
   isCurrentVoteVoter,
   makeVoteUserId,
@@ -106,6 +107,12 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       "wp-b:email:crew@test.com"
     );
     expect(accountCacheKey("wp-t", "", "")).toBe("wp-t");
+  });
+
+  test("isUuidLike accepts modern UUID versions used by backend trip ids", () => {
+    expect(isUuidLike("11111111-1111-4111-8111-111111111111")).toBe(true);
+    expect(isUuidLike("0195f2a1-7b6c-7f9a-b2d3-123456789abc")).toBe(true);
+    expect(isUuidLike("not-a-uuid")).toBe(false);
   });
 
   test("mergeProfileIntoUser replaces stale local profile fields with backend profile", () => {
