@@ -8195,7 +8195,7 @@ export default function WanderPlan(){
             return nextUser;
           });
           if(nextUserForPersist){
-            var myEmail=String(nextUserForPersist&&nextUserForPersist.email||user.email||"").trim().toLowerCase();
+            var myEmail=String(nextUserForPersist&&nextUserForPersist.email||"").trim().toLowerCase();
             var tok=authToken;
             function patchMembersInterest(members){
               return (Array.isArray(members)?members:[]).map(function(m){
