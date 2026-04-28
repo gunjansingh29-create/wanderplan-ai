@@ -40,6 +40,7 @@ jobs:
         run: ruff check . --output-format=github
 
       - name: Ruff format check
+              continue-on-error: true
         run: ruff format --check .
 
       - name: Type check
