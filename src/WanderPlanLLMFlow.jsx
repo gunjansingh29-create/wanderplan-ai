@@ -217,6 +217,74 @@ function iniFromName(name){
   return (parts[0].charAt(0)+parts[1].charAt(0)).toUpperCase();
 }
 
+function normalizeCrewStatus(status){
+  var st=String(status||"").trim().toLowerCase();
+  if(st==="accepted"||st==="pending"||st==="invited"||st==="declined"||st==="link_only")return st;
+  if(st==="joined"||st==="active")return "accepted";
+  return "pending";
+}
+
+function normalizeCrewRelation(relation){
+  var rel=String(relation||"").trim().toLowerCase();
+  if(rel==="invitee"||rel==="inviter"||rel==="owner"||rel==="self"||rel==="crew")return rel;
+  return "crew";
+}
+
+function crewStatusRank(status){
+  var st=normalizeCrewStatus(status);
+  if(st==="accepted")return 4;
+  if(st==="pending"||st==="invited")return 3;
+  if(st==="link_only")return 2;
+  if(st==="declined")return 1;
+  return 0;
+}
+
+function defaultCrewNameFromEmail(email){
+  var local=String(email||"").trim().toLowerCase().split("@")[0]||"";
+  if(!local)return "Member";
+  return local
+    .split(/[._\-]+/)
+    .filter(Boolean)
+    .map(function(token){return token.charAt(0).toUpperCase()+token.slice(1);})
+    .join(" ");
+}
+
+function sanitizeCrewMembers(rows){
+  var list=Array.isArray(rows)?rows:[];
+  var out=[];
+  var emailToIdx={};
+  list.forEach(function(item){
+    var src=(item&&typeof item==="object")?item:{};
+    var profile=(src.profile&&typeof src.profile==="object")?src.profile:{};
+    var email=String(src.email||src.invitee_email||profile.email||"").trim().toLowerCase();
+    if(!email)return;
+    var name=String(src.name||profile.display_name||"").trim()||defaultCrewNameFromEmail(email);
+    var existingIdx=emailToIdx[email];
+    var candidate={
+      id:String(src.id||src.peer_user_id||("m-"+email)).trim()||("m-"+email),
+      name:name,
+      ini:String(src.ini||"").trim()||iniFromName(name),
+      color:src.color||CREW_COLORS[(existingIdx!==undefined?existingIdx:out.length)%CREW_COLORS.length],
+      status:normalizeCrewStatus(src.status||src.crew_status),
+      email:email,
+      profile:profile,
+      relation:normalizeCrewRelation(src.relation)
+    };
+    if(existingIdx===undefined){
+      emailToIdx[email]=out.length;
+      out.push(candidate);
+      return;
+    }
+    var current=out[existingIdx]||{};
+    if(crewStatusRank(candidate.status)>crewStatusRank(current.status)){
+      out[existingIdx]=Object.assign({},current,candidate,{color:current.color||candidate.color});
+    }else{
+      out[existingIdx]=Object.assign({},candidate,current);
+    }
+  });
+  return out;
+}
+
 function readJoinTripIdFromUrl(){
   try{
     var sp=new URLSearchParams(window.location.search||"");
@@ -3998,7 +4066,7 @@ export default function WanderPlan(){
     var tok=await ld("wp-auth","");if(tok)setAT(tok);
     var accountEmail=String(savedCreds&&savedCreds.email||"").trim().toLowerCase();
     var u=await ldAccount("wp-u",tok,accountEmail,null);if(u)setUser(Object.assign(emptyUserState(),u));
-    var c=await ldAccount("wp-c",tok,accountEmail,null);if(c)setCrew(c);
+    var c=await ldAccount("wp-c",tok,accountEmail,null);if(c)setCrew(sanitizeCrewMembers(c));
     var b=await ldAccount("wp-b",tok,accountEmail,null);if(b)setBucket(b);
     var t=await ldAccount("wp-t",tok,accountEmail,null);if(t)setTrips(t);
     var ch=await ld("wp-ch",null);if(ch&&ch.length>1)setBC(ch);
@@ -4015,7 +4083,7 @@ export default function WanderPlan(){
   })();},[]);
   useEffect(function(){if(loaded)svAccount("wp-u",authToken,user.email,user);},[user,loaded,authToken]);
   useEffect(function(){if(loaded){if(rememberCreds)sv("wp-auth",authToken||"");else sv("wp-auth","");}},[authToken,loaded,rememberCreds]);
-  useEffect(function(){if(loaded)svAccount("wp-c",authToken,user.email,crew);},[crew,loaded,authToken,user.email]);
+  useEffect(function(){if(loaded)svAccount("wp-c",authToken,user.email,sanitizeCrewMembers(crew));},[crew,loaded,authToken,user.email]);
   useEffect(function(){if(loaded)svAccount("wp-b",authToken,user.email,bucket);},[bucket,loaded,authToken,user.email]);
   useEffect(function(){if(loaded)svAccount("wp-t",authToken,user.email,trips);},[trips,loaded,authToken,user.email]);
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
@@ -10614,5 +10682,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
