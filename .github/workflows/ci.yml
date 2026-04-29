@@ -93,7 +93,12 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           POSTGRES_DSN: postgresql+asyncpg://wanderplan:test_password@localhost:5432/wanderplan_test
         run: |
-          pytest unit\ test/wanderplan_backend_test.py -k "not test_should_generate_same_code_within_same_30_second_window" -v --cov=agents --cov=core --cov=services \
+          UNIT_TEST_FILE="$(find . -type f -name 'wanderplan_backend_test.py' | head -n1)"
+          if [ -z "$UNIT_TEST_FILE" ]; then
+            echo "No backend unit test file found (wanderplan_backend_test.py)."
+            exit 1
+          fi
+          pytest "$UNIT_TEST_FILE" -k "not test_should_generate_same_code_within_same_30_second_window" -v --cov=agents --cov=core --cov=services \
             --cov-report=xml --cov-report=term-missing
 
       - name: Run integration tests
