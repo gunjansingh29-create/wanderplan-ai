@@ -86,14 +86,14 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest pytest-asyncio pytest-cov httpx
+        run: pip install -r requirements.txt pytest pytest-asyncio pytest-cov pytest-timeout httpx
 
       - name: Run unit tests
         env:
           REDIS_URL: redis://localhost:6379/0
           POSTGRES_DSN: postgresql+asyncpg://wanderplan:test_password@localhost:5432/wanderplan_test
         run: |
-          pytest "unit test/wanderplan_backend_test.py" -k "not test_should_generate_same_code_within_same_30_second_window" -v --cov=agents --cov=core --cov=services \
+          pytest unit\ test/wanderplan_backend_test.py -k "not test_should_generate_same_code_within_same_30_second_window" -v --cov=agents --cov=core --cov=services \
             --cov-report=xml --cov-report=term-missing
 
       - name: Run integration tests
@@ -102,7 +102,7 @@ jobs:
           POSTGRES_DSN: postgresql+asyncpg://wanderplan:test_password@localhost:5432/wanderplan_test
         run: |
           if [ -d tests/integration ] && find tests/integration -type f -name '*.py' -print -quit | grep -q .; then
-            pytest tests/integration/ -v
+            pytest tests/integration/ -v --timeout=60
           else
             echo "No Python integration tests found in tests/integration; skipping."
           fi
