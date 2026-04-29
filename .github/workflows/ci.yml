@@ -95,9 +95,11 @@ jobs:
         run: |
           UNIT_TEST_FILE="$(find . -type f -name 'wanderplan_backend_test.py' | head -n1)"
           if [ -z "$UNIT_TEST_FILE" ]; then
-            echo "No backend unit test file found (wanderplan_backend_test.py)."
+            echo "No backend unit test file (wanderplan_backend_test.py) found in repository."
+            echo "Expected file under the tracked unit-test suite path."
             exit 1
           fi
+          # Exclude a known flaky boundary test that crosses 30s TOTP windows nondeterministically.
           pytest "$UNIT_TEST_FILE" -k "not test_should_generate_same_code_within_same_30_second_window" -v --cov=agents --cov=core --cov=services \
             --cov-report=xml --cov-report=term-missing
 
@@ -106,7 +108,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           POSTGRES_DSN: postgresql+asyncpg://wanderplan:test_password@localhost:5432/wanderplan_test
         run: |
-          if [ -d tests/integration ] && find tests/integration -type f -name '*.py' -print -quit | grep -q .; then
+          if [ -d tests/integration ] && [ -n "$(find tests/integration -type f -name '*.py' -print -quit)" ]; then
             pytest tests/integration/ -v --timeout=60
           else
             echo "No Python integration tests found in tests/integration; skipping."
