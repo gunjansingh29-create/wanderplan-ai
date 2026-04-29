@@ -80,6 +80,7 @@ import {
   resolvePoiVotingDecision,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
+  sanitizeCrewMembers,
   sanitizeFlightDatesForTrip,
   shouldAutoGeneratePois,
   shouldSkipPoiAutoGenerate,
@@ -146,6 +147,46 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
     ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+  });
+
+  test("sanitizeCrewMembers ignores non-person rows and preserves valid members", () => {
+    expect(
+      sanitizeCrewMembers([
+        { id: "trip-1", name: "Hawaii Adventure", status: "active", dests: ["Hawaii"] },
+        { id: "crew-1", name: "Sam Carter", email: "sam@example.com", status: "accepted" },
+      ])
+    ).toEqual([
+      {
+        id: "crew-1",
+        name: "Sam Carter",
+        ini: "SC",
+        color: "#4DA8DA",
+        status: "accepted",
+        email: "sam@example.com",
+        profile: {},
+        relation: "crew",
+      },
+    ]);
+  });
+
+  test("sanitizeCrewMembers dedupes by email and keeps strongest status", () => {
+    expect(
+      sanitizeCrewMembers([
+        { email: "alex@example.com", name: "Alex", status: "pending" },
+        { email: "alex@example.com", name: "Alex P", status: "accepted", relation: "invitee" },
+      ])
+    ).toEqual([
+      {
+        id: "m-alex@example.com",
+        name: "Alex P",
+        ini: "AP",
+        color: "#4DA8DA",
+        status: "accepted",
+        email: "alex@example.com",
+        profile: {},
+        relation: "invitee",
+      },
+    ]);
   });
 
   test("bucketQueryNeedsSpecificChildren detects city-list style requests", () => {
