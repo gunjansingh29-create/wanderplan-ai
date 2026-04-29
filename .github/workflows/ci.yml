@@ -101,7 +101,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           POSTGRES_DSN: postgresql+asyncpg://wanderplan:test_password@localhost:5432/wanderplan_test
         run: |
-          if find tests/integration -type f -name '*.py' -print -quit | grep -q .; then
+          if [ -d tests/integration ] && find tests/integration -type f -name '*.py' -print -quit | grep -q .; then
             pytest tests/integration/ -v
           else
             echo "No Python integration tests found in tests/integration; skipping."
