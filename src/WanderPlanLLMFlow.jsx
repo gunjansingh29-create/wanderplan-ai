@@ -260,11 +260,12 @@ function sanitizeCrewMembers(rows){
     if(!email)return;
     var name=String(src.name||profile.display_name||"").trim()||defaultCrewNameFromEmail(email);
     var existingIdx=emailToIdx[email];
+    var existingColor=(existingIdx!==undefined&&out[existingIdx]&&out[existingIdx].color)?out[existingIdx].color:"";
     var candidate={
       id:String(src.id||src.peer_user_id||("m-"+email)).trim()||("m-"+email),
       name:name,
       ini:String(src.ini||"").trim()||iniFromName(name),
-      color:src.color||CREW_COLORS[(existingIdx!==undefined?existingIdx:out.length)%CREW_COLORS.length],
+      color:src.color||existingColor||CREW_COLORS[(existingIdx!==undefined?existingIdx:out.length)%CREW_COLORS.length],
       status:normalizeCrewStatus(src.status||src.crew_status),
       email:email,
       profile:profile,
@@ -276,11 +277,19 @@ function sanitizeCrewMembers(rows){
       return;
     }
     var current=out[existingIdx]||{};
+    var merged=Object.assign({},current);
     if(crewStatusRank(candidate.status)>crewStatusRank(current.status)){
-      out[existingIdx]=Object.assign({},current,candidate,{color:current.color||candidate.color});
-    }else{
-      out[existingIdx]=Object.assign({},candidate,current);
+      merged.id=candidate.id||merged.id;
+      merged.name=candidate.name||merged.name;
+      merged.ini=candidate.ini||merged.ini;
+      merged.status=candidate.status;
+      merged.relation=candidate.relation||merged.relation;
+      merged.profile=(candidate.profile&&Object.keys(candidate.profile).length)?candidate.profile:merged.profile;
     }
+    if(!merged.name&&candidate.name)merged.name=candidate.name;
+    if(!merged.ini&&candidate.ini)merged.ini=candidate.ini;
+    merged.color=current.color||candidate.color;
+    out[existingIdx]=merged;
   });
   return out;
 }
