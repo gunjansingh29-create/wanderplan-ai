@@ -89,6 +89,7 @@ import {
   shouldResetTravelPlanForDurationChange,
   shouldTreatBucketItemsAsSameDestination,
   summarizeDestinationVotes,
+  summarizeActiveInterests,
   summarizeInterestConsensus,
   summarizeMealVotes,
   summarizePoiVotes,
@@ -272,6 +273,13 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
+  });
+
+  test("summarizeActiveInterests returns comma-separated enabled interests", () => {
+    expect(
+      summarizeActiveInterests({ hiking: true, food: false, adventure: true, culture: true })
+    ).toBe("hiking, adventure, culture");
+    expect(summarizeActiveInterests({ hiking: false })).toBe("");
   });
 
   test("buildPoiRequestSignature changes when destinations or traveler profile inputs change", () => {

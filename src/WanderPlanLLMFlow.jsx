@@ -1908,6 +1908,13 @@ function bucketClarifyMessage(userMsg){
   return "Could you name specific cities, islands, or regions you want to explore?";
 }
 
+function summarizeActiveInterests(interests){
+  var keys=Object.keys((interests&&typeof interests==="object")?interests:{}).filter(function(key){
+    return interests[key]===true;
+  });
+  return keys.slice(0,3).join(", ");
+}
+
 async function fallbackExtractDestinations(userMsg){
   try{
     var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
@@ -5867,6 +5874,21 @@ export default function WanderPlan(){
     });
   }
 
+  function mergePersistedBucketItem(item, fallback){
+    var resolved=item||{};
+    var base=fallback||{};
+    return Object.assign({},resolved,{
+      id:resolved.id||base.id,
+      name:resolved.name||base.name,
+      country:resolved.country||base.country,
+      bestMonths:resolved.bestMonths||base.bestMonths,
+      costPerDay:resolved.costPerDay||base.costPerDay,
+      tags:resolved.tags||base.tags,
+      bestTimeDesc:resolved.bestTimeDesc||base.bestTimeDesc,
+      costNote:resolved.costNote||base.costNote
+    });
+  }
+
   function searchDestinationsForTrip(){
     var msg=String(newTripDestInput||"").trim();
     if(!msg||tripDestSearchLoad)return;
@@ -6210,10 +6232,19 @@ export default function WanderPlan(){
           return;
         }
 
+        var names=toAdd.map(function(d){return d.name;}).join(", ");
+        var interestCue=summarizeActiveInterests(user&&user.interests);
+        var responseText="Added "+names+" to your bucket list. Destinations become part of planning only after you pick them in Plan a New Trip.";
+        if(interestCue){
+          responseText+=" Matched with your interests: "+interestCue+".";
+        }
+        setBC(function(p){return p.concat([{from:"agent",text:responseText,suggestions:proposed}]);});
+        toAdd.forEach(function(d){
+          updateBucketItemLocal(d);
+        });
+
         function persistAt(idx){
           if(idx>=toAdd.length){
-            var names=toAdd.map(function(d){return d.name;}).join(", ");
-            setBC(function(p){return p.concat([{from:"agent",text:"Added "+names+" to your bucket list. Destinations become part of planning only after you pick them in Plan a New Trip.",suggestions:proposed}]);});
             return;
           }
           var d=toAdd[idx];
@@ -6223,14 +6254,12 @@ export default function WanderPlan(){
               cost_per_day:d.costPerDay||0,best_time_desc:d.bestTimeDesc||"",cost_note:d.costNote||""
             }},authToken).then(function(saved){
               var item=(saved&&saved.item)?saved.item:d;
-              updateBucketItemLocal(Object.assign({},item,{id:item.id||d.id,name:item.name||d.name,country:item.country||d.country,bestMonths:item.bestMonths||d.bestMonths,costPerDay:item.costPerDay||d.costPerDay,tags:item.tags||d.tags,bestTimeDesc:item.bestTimeDesc||d.bestTimeDesc,costNote:item.costNote||d.costNote}));
+              updateBucketItemLocal(mergePersistedBucketItem(item,d));
               persistAt(idx+1);
             }).catch(function(){
-              updateBucketItemLocal(d);
               persistAt(idx+1);
             });
           }else{
-            updateBucketItemLocal(d);
             persistAt(idx+1);
           }
         }
