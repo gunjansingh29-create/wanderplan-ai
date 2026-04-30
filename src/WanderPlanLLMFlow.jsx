@@ -84,6 +84,39 @@ function normalizePersonalBucketItems(items){
   });
 }
 
+function chooseBucketStringValue(primary,fallback){
+  var p=String(primary||"").trim();
+  if(p)return p;
+  return String(fallback||"").trim();
+}
+
+function chooseBucketArrayValue(primary,fallback){
+  var p=Array.isArray(primary)?primary.filter(Boolean):[];
+  if(p.length>0)return p;
+  return Array.isArray(fallback)?fallback.filter(Boolean):[];
+}
+
+function chooseBucketNumberValue(primary,fallback){
+  var p=Number(primary||0)||0;
+  if(p>0)return p;
+  return Number(fallback||0)||0;
+}
+
+function mergeBucketItemDetails(primary,fallback){
+  var basePrimary=(primary&&typeof primary==="object")?primary:{};
+  var baseFallback=(fallback&&typeof fallback==="object")?fallback:{};
+  return Object.assign({},baseFallback,basePrimary,{
+    id:chooseBucketStringValue(basePrimary.id,baseFallback.id),
+    name:chooseBucketStringValue(basePrimary.name,baseFallback.name),
+    country:chooseBucketStringValue(basePrimary.country,baseFallback.country),
+    bestMonths:chooseBucketArrayValue(basePrimary.bestMonths,baseFallback.bestMonths),
+    costPerDay:chooseBucketNumberValue(basePrimary.costPerDay,baseFallback.costPerDay),
+    tags:chooseBucketArrayValue(basePrimary.tags,baseFallback.tags),
+    bestTimeDesc:chooseBucketStringValue(basePrimary.bestTimeDesc,baseFallback.bestTimeDesc),
+    costNote:chooseBucketStringValue(basePrimary.costNote,baseFallback.costNote)
+  });
+}
+
 function normalizeTripDestinationValue(value){
   return String(value||"").replace(/\s+/g," ").trim();
 }
@@ -129,6 +162,16 @@ function canonicalTripDestinationName(value){
     .replace(/\s+/g," ")
     .trim()
     .toLowerCase();
+}
+
+function shouldTreatBucketItemsAsSameDestination(existing,incoming){
+  var existingName=canonicalTripDestinationName(existing&&existing.name||"");
+  var incomingName=canonicalTripDestinationName(incoming&&incoming.name||"");
+  if(!existingName||!incomingName||existingName!==incomingName)return false;
+  var existingCountry=canonicalTripDestinationName(existing&&existing.country||"");
+  var incomingCountry=canonicalTripDestinationName(incoming&&incoming.country||"");
+  if(!existingCountry||!incomingCountry)return true;
+  return existingCountry===incomingCountry;
 }
 
 function activeTripTravelerCount(members,tripJoinedMap){
@@ -3892,6 +3935,7 @@ export default function WanderPlan(){
   var[destinationMsg,setDSM]=useState("");
   var[tripFilter,setTF]=useState("all");
   var[viewTrip,setVT]=useState(null);
+  var[deletedSeedTripIds,setDeletedSeedTripIds]=useState({});
   var[wizStep,setWS]=useState(0);
   var[profileDebug,setProfileDebug]=useState({lastGet:null,lastPut:null,lastPutResult:null,tripProfiles:null});
   var[blChat,setBC]=useState([{from:"agent",text:"Tell me a place you dream of visiting! Be as vague or specific as you like."}]);
@@ -4118,6 +4162,22 @@ export default function WanderPlan(){
   },[user,authToken,loaded,profileHydrated,currentTripId,newTrip,viewTrip&&viewTrip.id]);
 
   function go(s){setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
+  function deleteTripWithConfirmation(trip){
+    if(!trip)return false;
+    if(typeof window!=="undefined"&&typeof window.confirm==="function"){
+      var ok=window.confirm("Are you sure you want to delete this trip? This cannot be undone.");
+      if(!ok)return false;
+    }
+    var tripId=String(trip.id||"").trim();
+    if(!tripId)return false;
+    setTrips(function(p){return p.filter(function(x){return String(x&&x.id||"").trim()!==tripId;});});
+    if(trip.isSeed){
+      setDeletedSeedTripIds(function(prev){var next=Object.assign({},prev);next[tripId]=true;return next;});
+    }
+    setVT(function(prev){return String(prev&&prev.id||"").trim()===tripId?null:prev;});
+    setCTID(function(prev){return String(prev||"").trim()===tripId?"":prev;});
+    return true;
+  }
   function back(){if(!hist.length)return;setFade(true);setTimeout(function(){setSc(hist[hist.length-1]);setHist(function(h){return h.slice(0,-1);});setFade(false);},200);}
   function upU(k,v){setUser(function(p){var n=Object.assign({},p);n[k]=v;return n;});}
   function mergeCrewFromPeers(peers){
@@ -6094,11 +6154,15 @@ export default function WanderPlan(){
           var it0=res.items[k]||{};
           var n0=String(it0.name||"").trim();
           if(!n0)continue;
+          var existingMatch0=bucket.find(function(savedItem){
+            return shouldTreatBucketItemsAsSameDestination(savedItem,{name:n0,country:it0.country});
+          })||null;
           var c0=String(it0.country||"").trim();
+          if(!c0&&existingMatch0)c0=String(existingMatch0.country||"").trim();
           var pKey=n0.toLowerCase()+"|"+c0.toLowerCase();
           if(proposedSeen[pKey])continue;
           proposedSeen[pKey]=true;
-          proposed.push({
+          var normalizedItem0={
             name:n0,
             country:c0,
             bestMonths:Array.isArray(it0.bestMonths)?it0.bestMonths:[],
@@ -6106,7 +6170,8 @@ export default function WanderPlan(){
             tags:Array.isArray(it0.tags)?it0.tags:[],
             bestTimeDesc:String(it0.bestTimeDesc||""),
             costNote:String(it0.costNote||"")
-          });
+          };
+          proposed.push(existingMatch0?mergeBucketItemDetails(existingMatch0,normalizedItem0):normalizedItem0);
         }
         var existing={};
         bucket.forEach(function(b){
@@ -6119,6 +6184,14 @@ export default function WanderPlan(){
           var nm=String(it.name||"").trim();
           if(!nm)continue;
           var ct=String(it.country||"").trim();
+          var existingMatch=bucket.find(function(savedItem){
+            return shouldTreatBucketItemsAsSameDestination(savedItem,{name:nm,country:ct});
+          })||null;
+          if(existingMatch){
+            var refreshed=mergeBucketItemDetails(existingMatch,it);
+            updateBucketItemLocal(refreshed);
+            continue;
+          }
           var key=(nm.toLowerCase()+"|"+ct.toLowerCase());
           if(existing[key])continue;
           existing[key]=true;
@@ -6297,7 +6370,7 @@ export default function WanderPlan(){
         isSeed:true
       });
     }
-    var displayTrips=trips.concat(seedTrips);
+    var displayTrips=trips.concat(seedTrips).filter(function(t){return !deletedSeedTripIds[String(t&&t.id||"").trim()];});
     var filtered=displayTrips.filter(function(t){return matchesTripFilter(t,tripFilter);});
     return(<div>
       <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Trips</h1><p style={{fontSize:14,color:C.tx2,marginBottom:20}}>{displayTrips.length} trip{displayTrips.length!==1?"s":""} total</p></Fade>
@@ -6314,7 +6387,7 @@ export default function WanderPlan(){
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {tr.status==="active"&&<div style={{width:6,height:6,borderRadius:999,background:C.grn,animation:"pulse 1.5s infinite"}}/>}
                   <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:st.c,background:st.bg,whiteSpace:"nowrap"}}>{st.l}</span>
-                  {!tr.isSeed&&<button onClick={function(e){e.stopPropagation();setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>}
+                  {!tr.isSeed&&<button onClick={function(e){e.stopPropagation();deleteTripWithConfirmation(tr);}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>}
                 </div>
               </div>
               <p style={{fontSize:13,color:C.tx2,marginBottom:10}}>{tr.destNames||"No destinations"}</p>
@@ -6398,7 +6471,7 @@ export default function WanderPlan(){
             </>)}
             {tr.status==="saved"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(Math.max(0,Number(tr.step||0)||0));go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Start Planning</button>}
             {tr.status==="completed"&&<button style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:"transparent",color:C.tx2,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>View Itinerary</button>}
-            <button onClick={function(){setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
+            <button onClick={function(){if(deleteTripWithConfirmation(tr))go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
           </div>
         </div>
       </div></Fade>
@@ -10718,4 +10791,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, updateUserInterestSelection, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, updateUserInterestSelection, voteKeyAliasesFor, wizardSyncIntervalMs };
