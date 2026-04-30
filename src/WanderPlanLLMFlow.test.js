@@ -272,6 +272,22 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
   });
 
+  test("refineBucketItemsForQuery keeps one primary destination for long-form essay input", () => {
+    const essay = `I spent an unforgettable week in Prague wandering cobblestone streets, watching sunrise over the Vltava River, and crossing Charles Bridge before the crowds arrived. Every evening I returned to Old Town Square, listened to music near the Astronomical Clock, and admired the Gothic facades that glow at dusk. I toured Prague Castle, explored hidden courtyards, and kept finding cozy cafes tucked into side lanes. The city felt intimate, walkable, and full of history. Even after day trips and long walks, Prague remained the clear center of the journey and the place I want to revisit first.`;
+    expect(
+      refineBucketItemsForQuery(essay, [
+        { name: "Prague", country: "Czech Republic" },
+        { name: "Czech Republic", country: "" },
+        { name: "Charles Bridge", country: "" },
+        { name: "Vltava River", country: "" },
+        { name: "Prague Castle", country: "" },
+        { name: "Old Town Square", country: "" },
+        { name: "Astronomical Clock", country: "" },
+        { name: "Gothic", country: "" },
+      ])
+    ).toEqual([{ name: "Prague", country: "Czech Republic" }]);
+  });
+
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
   });
