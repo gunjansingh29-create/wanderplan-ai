@@ -79,6 +79,7 @@ import {
   roundTripFlightRoutePlan,
   routePlanDurationMap,
   isManufacturedPoiName,
+  isPlausibleBucketDestinationName,
   resolvePoiVotingDecision,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,

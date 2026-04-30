@@ -9,6 +9,12 @@ var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-rang
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
 var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Route Planner","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
 var WIZARD_ORDER_VERSION=3;
+var MAX_BUCKET_DESTINATION_NAME_LENGTH=80;
+var MAX_CONSECUTIVE_CONSONANTS_IN_DESTINATION_NAME=6;
+var BUCKET_DESTINATION_DIGIT_RUN_RE=/\d{3,}/;
+var BUCKET_DESTINATION_ALLOWED_CHARS_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ .'\-()]/;
+var BUCKET_DESTINATION_LETTERS_ONLY_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ]/g;
+var BUCKET_DESTINATION_VOWEL_RE=/[aeiouyà-öø-ÿ]/i;
 var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" | "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
 var BUILD_STAMP_DETAIL=String(BUILD_INFO&&BUILD_INFO.builtAt||"unknown");
 
@@ -1823,6 +1829,7 @@ function normalizeBucketLLMResult(parsed){
     if(!row||typeof row!=="object")return null;
     var name=String(row.name||row.destination||row.city||"").trim();
     if(!name)return null;
+    if(!isPlausibleBucketDestinationName(name))return null;
     return {
       name:name,
       country:String(row.country||"").trim(),
@@ -1925,6 +1932,7 @@ async function fallbackExtractDestinations(userMsg){
       var it=arr[i]||{};
       var nm=String(it.name||it.destination||it.city||"").trim();
       if(!nm)continue;
+      if(!isPlausibleBucketDestinationName(nm))continue;
       out.push({
         name:nm,
         country:String(it.country||"").trim(),
