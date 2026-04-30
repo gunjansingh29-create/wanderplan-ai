@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "32d8566",
-  "branch": "copilot/bl-15-fix-essay-input-over-extraction",
-  "builtAt": "2026-04-21T16:30:01.347Z"
+  "sha": "976a0aa",
+  "branch": "copilot/perf-38-fix-navigation-to-wizard",
+  "builtAt": "2026-04-26T05:38:46.664Z"
 };
