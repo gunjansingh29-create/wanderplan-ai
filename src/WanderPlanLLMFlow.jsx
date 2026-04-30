@@ -5930,6 +5930,13 @@ export default function WanderPlan(){
     var picked=normalizeTripDestinationValue(dest&&dest.name);
     if(!picked)return;
     addDestinationToNewTrip(picked);
+    var activeTripId=String(resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
+    if(activeTripId&&isUuidLike(activeTripId)){
+      setCTID(activeTripId);
+      setWS(0);
+      go("wizard");
+      return;
+    }
     setCM("Destination selected for your next trip. Continue in Plan a New Trip.");
     go("new_trip");
   }

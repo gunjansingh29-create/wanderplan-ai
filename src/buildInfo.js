@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "01e3eff",
-  "branch": "copilot/bl-01-fix-kyoto-card-issue",
-  "builtAt": "2026-04-21T16:44:27.974Z"
+  "sha": "976a0aa",
+  "branch": "copilot/perf-38-fix-navigation-to-wizard",
+  "builtAt": "2026-04-26T05:38:46.664Z"
 };
