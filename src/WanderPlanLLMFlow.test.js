@@ -2742,6 +2742,93 @@ describe("WanderPlanLLMFlow companion entry", () => {
   });
 });
 
+describe("WanderPlanLLMFlow trip deletion confirmation", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+    jest.restoreAllMocks();
+  });
+
+  test("completed trip delete asks for confirmation and removes the trip after confirm", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Alice Active",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:active-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:active-user",
+      JSON.stringify({
+        name: "Alice Active",
+        email: "alice@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    const confirmSpy = jest.spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    render(<WanderPlan />);
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: /Completed/i }));
+    fireEvent.click(await screen.findByText("Santorini Celebration"));
+    await waitFor(() => expect(screen.queryByText("Back to My Trips")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Are you sure you want to delete this trip? This cannot be undone."
+    );
+    expect(screen.queryByText("Back to My Trips")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    expect(confirmSpy).toHaveBeenNthCalledWith(
+      2,
+      "Are you sure you want to delete this trip? This cannot be undone."
+    );
+
+    await waitFor(() => expect(screen.queryByText("My Trips")).not.toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText("Santorini Celebration")).toBeNull()
+    );
+  });
+});
+
 describe("WanderPlanLLMFlow trip setup hardening helpers", () => {
   test("trip destination helpers normalize direct entries and bucket ids into unique destination names", () => {
     const bucket = [
