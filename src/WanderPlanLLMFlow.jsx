@@ -9,6 +9,12 @@ var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-rang
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
 var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Route Planner","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
 var WIZARD_ORDER_VERSION=3;
+var MAX_BUCKET_DESTINATION_NAME_LENGTH=80;
+var MAX_CONSECUTIVE_CONSONANTS_IN_DESTINATION_NAME=6;
+var BUCKET_DESTINATION_DIGIT_RUN_RE=/\d{3,}/;
+var BUCKET_DESTINATION_ALLOWED_CHARS_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ .'\-()]/;
+var BUCKET_DESTINATION_LETTERS_ONLY_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ]/g;
+var BUCKET_DESTINATION_VOWEL_RE=/[aeiouyà-öø-ÿ]/i;
 var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" | "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
 var BUILD_STAMP_DETAIL=String(BUILD_INFO&&BUILD_INFO.builtAt||"unknown");
 
@@ -84,6 +90,39 @@ function normalizePersonalBucketItems(items){
   });
 }
 
+function chooseBucketStringValue(primary,fallback){
+  var p=String(primary||"").trim();
+  if(p)return p;
+  return String(fallback||"").trim();
+}
+
+function chooseBucketArrayValue(primary,fallback){
+  var p=Array.isArray(primary)?primary.filter(Boolean):[];
+  if(p.length>0)return p;
+  return Array.isArray(fallback)?fallback.filter(Boolean):[];
+}
+
+function chooseBucketNumberValue(primary,fallback){
+  var p=Number(primary||0)||0;
+  if(p>0)return p;
+  return Number(fallback||0)||0;
+}
+
+function mergeBucketItemDetails(primary,fallback){
+  var basePrimary=(primary&&typeof primary==="object")?primary:{};
+  var baseFallback=(fallback&&typeof fallback==="object")?fallback:{};
+  return Object.assign({},baseFallback,basePrimary,{
+    id:chooseBucketStringValue(basePrimary.id,baseFallback.id),
+    name:chooseBucketStringValue(basePrimary.name,baseFallback.name),
+    country:chooseBucketStringValue(basePrimary.country,baseFallback.country),
+    bestMonths:chooseBucketArrayValue(basePrimary.bestMonths,baseFallback.bestMonths),
+    costPerDay:chooseBucketNumberValue(basePrimary.costPerDay,baseFallback.costPerDay),
+    tags:chooseBucketArrayValue(basePrimary.tags,baseFallback.tags),
+    bestTimeDesc:chooseBucketStringValue(basePrimary.bestTimeDesc,baseFallback.bestTimeDesc),
+    costNote:chooseBucketStringValue(basePrimary.costNote,baseFallback.costNote)
+  });
+}
+
 function normalizeTripDestinationValue(value){
   return String(value||"").replace(/\s+/g," ").trim();
 }
@@ -129,6 +168,16 @@ function canonicalTripDestinationName(value){
     .replace(/\s+/g," ")
     .trim()
     .toLowerCase();
+}
+
+function shouldTreatBucketItemsAsSameDestination(existing,incoming){
+  var existingName=canonicalTripDestinationName(existing&&existing.name||"");
+  var incomingName=canonicalTripDestinationName(incoming&&incoming.name||"");
+  if(!existingName||!incomingName||existingName!==incomingName)return false;
+  var existingCountry=canonicalTripDestinationName(existing&&existing.country||"");
+  var incomingCountry=canonicalTripDestinationName(incoming&&incoming.country||"");
+  if(!existingCountry||!incomingCountry)return true;
+  return existingCountry===incomingCountry;
 }
 
 function activeTripTravelerCount(members,tripJoinedMap){
@@ -215,6 +264,74 @@ function iniFromName(name){
   if(parts.length===0)return"?";
   if(parts.length===1)return parts[0].substring(0,2).toUpperCase();
   return (parts[0].charAt(0)+parts[1].charAt(0)).toUpperCase();
+}
+
+function normalizeCrewStatus(status){
+  var st=String(status||"").trim().toLowerCase();
+  if(st==="accepted"||st==="pending"||st==="invited"||st==="declined"||st==="link_only")return st;
+  if(st==="joined"||st==="active")return "accepted";
+  return "pending";
+}
+
+function normalizeCrewRelation(relation){
+  var rel=String(relation||"").trim().toLowerCase();
+  if(rel==="invitee"||rel==="inviter"||rel==="owner"||rel==="self"||rel==="crew")return rel;
+  return "crew";
+}
+
+function crewStatusRank(status){
+  var st=normalizeCrewStatus(status);
+  if(st==="accepted")return 4;
+  if(st==="pending"||st==="invited")return 3;
+  if(st==="link_only")return 2;
+  if(st==="declined")return 1;
+  return 0;
+}
+
+function defaultCrewNameFromEmail(email){
+  var local=String(email||"").trim().toLowerCase().split("@")[0]||"";
+  if(!local)return "Member";
+  return local
+    .split(/[._\-]+/)
+    .filter(Boolean)
+    .map(function(token){return token.charAt(0).toUpperCase()+token.slice(1);})
+    .join(" ");
+}
+
+function sanitizeCrewMembers(rows){
+  var list=Array.isArray(rows)?rows:[];
+  var out=[];
+  var emailToIdx={};
+  list.forEach(function(item){
+    var src=(item&&typeof item==="object")?item:{};
+    var profile=(src.profile&&typeof src.profile==="object")?src.profile:{};
+    var email=String(src.email||src.invitee_email||profile.email||"").trim().toLowerCase();
+    if(!email)return;
+    var name=String(src.name||profile.display_name||"").trim()||defaultCrewNameFromEmail(email);
+    var existingIdx=emailToIdx[email];
+    var candidate={
+      id:String(src.id||src.peer_user_id||("m-"+email)).trim()||("m-"+email),
+      name:name,
+      ini:String(src.ini||"").trim()||iniFromName(name),
+      color:src.color||CREW_COLORS[(existingIdx!==undefined?existingIdx:out.length)%CREW_COLORS.length],
+      status:normalizeCrewStatus(src.status||src.crew_status),
+      email:email,
+      profile:profile,
+      relation:normalizeCrewRelation(src.relation)
+    };
+    if(existingIdx===undefined){
+      emailToIdx[email]=out.length;
+      out.push(candidate);
+      return;
+    }
+    var current=out[existingIdx]||{};
+    if(crewStatusRank(candidate.status)>crewStatusRank(current.status)){
+      out[existingIdx]=Object.assign({},current,candidate,{color:current.color||candidate.color});
+    }else{
+      out[existingIdx]=Object.assign({},candidate,current);
+    }
+  });
+  return out;
 }
 
 function readJoinTripIdFromUrl(){
@@ -485,7 +602,7 @@ function mapTripMemberStatus(rawStatus){
 
 function isUuidLike(value){
   var v=String(value||"").trim();
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 }
 
 function userIdFromToken(token){
@@ -1712,6 +1829,7 @@ function normalizeBucketLLMResult(parsed){
     if(!row||typeof row!=="object")return null;
     var name=String(row.name||row.destination||row.city||"").trim();
     if(!name)return null;
+    if(!isPlausibleBucketDestinationName(name))return null;
     return {
       name:name,
       country:String(row.country||"").trim(),
@@ -1797,6 +1915,13 @@ function bucketClarifyMessage(userMsg){
   return "Could you name specific cities, islands, or regions you want to explore?";
 }
 
+function summarizeActiveInterests(interests){
+  var keys=Object.keys((interests&&typeof interests==="object")?interests:{}).filter(function(key){
+    return interests[key]===true;
+  });
+  return keys.slice(0,3).join(", ");
+}
+
 async function fallbackExtractDestinations(userMsg){
   try{
     var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
@@ -1807,6 +1932,7 @@ async function fallbackExtractDestinations(userMsg){
       var it=arr[i]||{};
       var nm=String(it.name||it.destination||it.city||"").trim();
       if(!nm)continue;
+      if(!isPlausibleBucketDestinationName(nm))continue;
       out.push({
         name:nm,
         country:String(it.country||"").trim(),
@@ -3815,6 +3941,7 @@ export default function WanderPlan(){
   var[destinationMsg,setDSM]=useState("");
   var[tripFilter,setTF]=useState("all");
   var[viewTrip,setVT]=useState(null);
+  var[deletedSeedTripIds,setDeletedSeedTripIds]=useState({});
   var[wizStep,setWS]=useState(0);
   var[profileDebug,setProfileDebug]=useState({lastGet:null,lastPut:null,lastPutResult:null,tripProfiles:null});
   var[blChat,setBC]=useState([{from:"agent",text:"Tell me a place you dream of visiting! Be as vague or specific as you like."}]);
@@ -3823,6 +3950,7 @@ export default function WanderPlan(){
   var[bucketMsg,setBM]=useState("");
   var[invEmail,setIE]=useState("");
   var chatRef=useRef(null);
+  var blInFlightRef=useRef(false);
   var inviteAcceptSeenRef=useRef({});
   var tripInviteAttemptRef=useRef({});
   var tripInviteInFlightRef=useRef(false);
@@ -3998,7 +4126,7 @@ export default function WanderPlan(){
     var tok=await ld("wp-auth","");if(tok)setAT(tok);
     var accountEmail=String(savedCreds&&savedCreds.email||"").trim().toLowerCase();
     var u=await ldAccount("wp-u",tok,accountEmail,null);if(u)setUser(Object.assign(emptyUserState(),u));
-    var c=await ldAccount("wp-c",tok,accountEmail,null);if(c)setCrew(c);
+    var c=await ldAccount("wp-c",tok,accountEmail,null);if(c)setCrew(sanitizeCrewMembers(c));
     var b=await ldAccount("wp-b",tok,accountEmail,null);if(b)setBucket(b);
     var t=await ldAccount("wp-t",tok,accountEmail,null);if(t)setTrips(t);
     var ch=await ld("wp-ch",null);if(ch&&ch.length>1)setBC(ch);
@@ -4015,11 +4143,11 @@ export default function WanderPlan(){
   })();},[]);
   useEffect(function(){if(loaded)svAccount("wp-u",authToken,user.email,user);},[user,loaded,authToken]);
   useEffect(function(){if(loaded){if(rememberCreds)sv("wp-auth",authToken||"");else sv("wp-auth","");}},[authToken,loaded,rememberCreds]);
-  useEffect(function(){if(loaded)svAccount("wp-c",authToken,user.email,crew);},[crew,loaded,authToken,user.email]);
+  useEffect(function(){if(loaded)svAccount("wp-c",authToken,user.email,sanitizeCrewMembers(crew));},[crew,loaded,authToken,user.email]);
   useEffect(function(){if(loaded)svAccount("wp-b",authToken,user.email,bucket);},[bucket,loaded,authToken,user.email]);
   useEffect(function(){if(loaded)svAccount("wp-t",authToken,user.email,trips);},[trips,loaded,authToken,user.email]);
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
-  useEffect(function(){if(chatRef.current)chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
+  useEffect(function(){if(chatRef.current&&typeof chatRef.current.scrollIntoView==="function")chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
   useEffect(function(){if(sc==="new_trip"){setTIM("");setTIL({});}},[sc]);
   useEffect(function(){
     if(typeof window==="undefined")return;
@@ -4041,6 +4169,22 @@ export default function WanderPlan(){
   },[user,authToken,loaded,profileHydrated,currentTripId,newTrip,viewTrip&&viewTrip.id]);
 
   function go(s){setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
+  function deleteTripWithConfirmation(trip){
+    if(!trip)return false;
+    if(typeof window!=="undefined"&&typeof window.confirm==="function"){
+      var ok=window.confirm("Are you sure you want to delete this trip? This cannot be undone.");
+      if(!ok)return false;
+    }
+    var tripId=String(trip.id||"").trim();
+    if(!tripId)return false;
+    setTrips(function(p){return p.filter(function(x){return String(x&&x.id||"").trim()!==tripId;});});
+    if(trip.isSeed){
+      setDeletedSeedTripIds(function(prev){var next=Object.assign({},prev);next[tripId]=true;return next;});
+    }
+    setVT(function(prev){return String(prev&&prev.id||"").trim()===tripId?null:prev;});
+    setCTID(function(prev){return String(prev||"").trim()===tripId?"":prev;});
+    return true;
+  }
   function back(){if(!hist.length)return;setFade(true);setTimeout(function(){setSc(hist[hist.length-1]);setHist(function(h){return h.slice(0,-1);});setFade(false);},200);}
   function upU(k,v){setUser(function(p){var n=Object.assign({},p);n[k]=v;return n;});}
   function mergeCrewFromPeers(peers){
@@ -5740,6 +5884,21 @@ export default function WanderPlan(){
     });
   }
 
+  function mergePersistedBucketItem(item, fallback){
+    var resolved=item||{};
+    var base=fallback||{};
+    return Object.assign({},resolved,{
+      id:resolved.id||base.id,
+      name:resolved.name||base.name,
+      country:resolved.country||base.country,
+      bestMonths:resolved.bestMonths||base.bestMonths,
+      costPerDay:resolved.costPerDay||base.costPerDay,
+      tags:resolved.tags||base.tags,
+      bestTimeDesc:resolved.bestTimeDesc||base.bestTimeDesc,
+      costNote:resolved.costNote||base.costNote
+    });
+  }
+
   function searchDestinationsForTrip(){
     var msg=String(newTripDestInput||"").trim();
     if(!msg||tripDestSearchLoad)return;
@@ -5804,6 +5963,13 @@ export default function WanderPlan(){
     var picked=normalizeTripDestinationValue(dest&&dest.name);
     if(!picked)return;
     addDestinationToNewTrip(picked);
+    var activeTripId=String(resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
+    if(activeTripId&&isUuidLike(activeTripId)){
+      setCTID(activeTripId);
+      setWS(0);
+      go("wizard");
+      return;
+    }
     setCM("Destination selected for your next trip. Continue in Plan a New Trip.");
     go("new_trip");
   }
@@ -6008,10 +6174,10 @@ export default function WanderPlan(){
   }
 
   function sendBL(){
-    if(!blIn.trim()||blLoad)return;var msg=blIn.trim();setBLI("");
+    if(!blIn.trim()||blLoad||blInFlightRef.current)return;var msg=blIn.trim();setBLI("");
+    blInFlightRef.current=true;
     setBC(function(p){return p.concat([{from:"user",text:msg}]);});setBLL(true);
     askLLM(msg,user.budget,blChat).then(function(res){
-      setBLL(false);
       if(res&&res.type==="destinations"&&Array.isArray(res.items)&&res.items.length){
         var proposed=[];
         var proposedSeen={};
@@ -6019,11 +6185,15 @@ export default function WanderPlan(){
           var it0=res.items[k]||{};
           var n0=String(it0.name||"").trim();
           if(!n0)continue;
+          var existingMatch0=bucket.find(function(savedItem){
+            return shouldTreatBucketItemsAsSameDestination(savedItem,{name:n0,country:it0.country});
+          })||null;
           var c0=String(it0.country||"").trim();
+          if(!c0&&existingMatch0)c0=String(existingMatch0.country||"").trim();
           var pKey=n0.toLowerCase()+"|"+c0.toLowerCase();
           if(proposedSeen[pKey])continue;
           proposedSeen[pKey]=true;
-          proposed.push({
+          var normalizedItem0={
             name:n0,
             country:c0,
             bestMonths:Array.isArray(it0.bestMonths)?it0.bestMonths:[],
@@ -6031,7 +6201,8 @@ export default function WanderPlan(){
             tags:Array.isArray(it0.tags)?it0.tags:[],
             bestTimeDesc:String(it0.bestTimeDesc||""),
             costNote:String(it0.costNote||"")
-          });
+          };
+          proposed.push(existingMatch0?mergeBucketItemDetails(existingMatch0,normalizedItem0):normalizedItem0);
         }
         var existing={};
         bucket.forEach(function(b){
@@ -6044,6 +6215,14 @@ export default function WanderPlan(){
           var nm=String(it.name||"").trim();
           if(!nm)continue;
           var ct=String(it.country||"").trim();
+          var existingMatch=bucket.find(function(savedItem){
+            return shouldTreatBucketItemsAsSameDestination(savedItem,{name:nm,country:ct});
+          })||null;
+          if(existingMatch){
+            var refreshed=mergeBucketItemDetails(existingMatch,it);
+            updateBucketItemLocal(refreshed);
+            continue;
+          }
           var key=(nm.toLowerCase()+"|"+ct.toLowerCase());
           if(existing[key])continue;
           existing[key]=true;
@@ -6063,10 +6242,19 @@ export default function WanderPlan(){
           return;
         }
 
+        var names=toAdd.map(function(d){return d.name;}).join(", ");
+        var interestCue=summarizeActiveInterests(user&&user.interests);
+        var responseText="Added "+names+" to your bucket list. Destinations become part of planning only after you pick them in Plan a New Trip.";
+        if(interestCue){
+          responseText+=" Matched with your interests: "+interestCue+".";
+        }
+        setBC(function(p){return p.concat([{from:"agent",text:responseText,suggestions:proposed}]);});
+        toAdd.forEach(function(d){
+          updateBucketItemLocal(d);
+        });
+
         function persistAt(idx){
           if(idx>=toAdd.length){
-            var names=toAdd.map(function(d){return d.name;}).join(", ");
-            setBC(function(p){return p.concat([{from:"agent",text:"Added "+names+" to your bucket list. Destinations become part of planning only after you pick them in Plan a New Trip.",suggestions:proposed}]);});
             return;
           }
           var d=toAdd[idx];
@@ -6076,14 +6264,12 @@ export default function WanderPlan(){
               cost_per_day:d.costPerDay||0,best_time_desc:d.bestTimeDesc||"",cost_note:d.costNote||""
             }},authToken).then(function(saved){
               var item=(saved&&saved.item)?saved.item:d;
-              updateBucketItemLocal(Object.assign({},item,{id:item.id||d.id,name:item.name||d.name,country:item.country||d.country,bestMonths:item.bestMonths||d.bestMonths,costPerDay:item.costPerDay||d.costPerDay,tags:item.tags||d.tags,bestTimeDesc:item.bestTimeDesc||d.bestTimeDesc,costNote:item.costNote||d.costNote}));
+              updateBucketItemLocal(mergePersistedBucketItem(item,d));
               persistAt(idx+1);
             }).catch(function(){
-              updateBucketItemLocal(d);
               persistAt(idx+1);
             });
           }else{
-            updateBucketItemLocal(d);
             persistAt(idx+1);
           }
         }
@@ -6091,6 +6277,11 @@ export default function WanderPlan(){
       }else{
         setBC(function(p){return p.concat([{from:"agent",text:(res&&res.message)||"Tell me more?"}]);});
       }
+    }).catch(function(){
+      setBC(function(p){return p.concat([{from:"agent",text:"I ran into an issue processing that request. Please try again."}]);});
+    }).finally(function(){
+      blInFlightRef.current=false;
+      setBLL(false);
     });
   }
 
@@ -6222,7 +6413,7 @@ export default function WanderPlan(){
         isSeed:true
       });
     }
-    var displayTrips=trips.concat(seedTrips);
+    var displayTrips=trips.concat(seedTrips).filter(function(t){return !deletedSeedTripIds[String(t&&t.id||"").trim()];});
     var filtered=displayTrips.filter(function(t){return matchesTripFilter(t,tripFilter);});
     return(<div>
       <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Trips</h1><p style={{fontSize:14,color:C.tx2,marginBottom:20}}>{displayTrips.length} trip{displayTrips.length!==1?"s":""} total</p></Fade>
@@ -6239,7 +6430,7 @@ export default function WanderPlan(){
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {tr.status==="active"&&<div style={{width:6,height:6,borderRadius:999,background:C.grn,animation:"pulse 1.5s infinite"}}/>}
                   <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:st.c,background:st.bg,whiteSpace:"nowrap"}}>{st.l}</span>
-                  {!tr.isSeed&&<button onClick={function(e){e.stopPropagation();setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>}
+                  {!tr.isSeed&&<button onClick={function(e){e.stopPropagation();deleteTripWithConfirmation(tr);}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>}
                 </div>
               </div>
               <p style={{fontSize:13,color:C.tx2,marginBottom:10}}>{tr.destNames||"No destinations"}</p>
@@ -6323,7 +6514,7 @@ export default function WanderPlan(){
             </>)}
             {tr.status==="saved"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(Math.max(0,Number(tr.step||0)||0));go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Start Planning</button>}
             {tr.status==="completed"&&<button style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:"transparent",color:C.tx2,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>View Itinerary</button>}
-            <button onClick={function(){setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
+            <button onClick={function(){if(deleteTripWithConfirmation(tr))go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
           </div>
         </div>
       </div></Fade>
@@ -10616,4 +10807,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
