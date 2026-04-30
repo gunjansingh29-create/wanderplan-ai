@@ -5729,7 +5729,9 @@ export default function WanderPlan(){
     setAI("");
     setSigninLoad(true);
     var email=(user.email||"").trim().toLowerCase();
+    var isValidEmail=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     if(!email||!signinPass){setAE("Enter email and password.");setSigninLoad(false);return;}
+    if(!isValidEmail){setAE("Please enter a valid email address.");setSigninLoad(false);return;}
     try{
       var reg=await apiJson("/auth/login",{method:"POST",body:{email:email,password:signinPass}});
       if(reg&&reg.accessToken){
