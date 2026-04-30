@@ -41,11 +41,13 @@ import {
   fillMissingDurationPerDestination,
   formatMoney,
   inclusiveIsoDays,
+  isUuidLike,
   itineraryRowsScore,
   isCurrentVoteVoter,
   makeVoteUserId,
   materializeItineraryDates,
   mergeAvailabilityDraft,
+  mergeBucketItemDetails,
   mergeProfileIntoUser,
   mergeSharedFlightDates,
   mergeVoteRows,
@@ -80,10 +82,12 @@ import {
   resolvePoiVotingDecision,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
+  sanitizeCrewMembers,
   sanitizeFlightDatesForTrip,
   shouldAutoGeneratePois,
   shouldSkipPoiAutoGenerate,
   shouldResetTravelPlanForDurationChange,
+  shouldTreatBucketItemsAsSameDestination,
   summarizeDestinationVotes,
   summarizeActiveInterests,
   summarizeInterestConsensus,
@@ -107,6 +111,12 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       "wp-b:email:crew@test.com"
     );
     expect(accountCacheKey("wp-t", "", "")).toBe("wp-t");
+  });
+
+  test("isUuidLike accepts modern UUID versions used by backend trip ids", () => {
+    expect(isUuidLike("11111111-1111-4111-8111-111111111111")).toBe(true);
+    expect(isUuidLike("0195f2a1-7b6c-7f9a-b2d3-123456789abc")).toBe(true);
+    expect(isUuidLike("not-a-uuid")).toBe(false);
   });
 
   test("mergeProfileIntoUser replaces stale local profile fields with backend profile", () => {
@@ -146,6 +156,96 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
     ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+  });
+
+  test("shouldTreatBucketItemsAsSameDestination matches same city even when one side misses country", () => {
+    expect(
+      shouldTreatBucketItemsAsSameDestination(
+        { name: "Kyoto", country: "Japan" },
+        { name: "Kyoto", country: "" }
+      )
+    ).toBe(true);
+    expect(
+      shouldTreatBucketItemsAsSameDestination(
+        { name: "Paris", country: "France" },
+        { name: "Paris", country: "United States" }
+      )
+    ).toBe(false);
+  });
+
+  test("mergeBucketItemDetails preserves richer destination metadata", () => {
+    expect(
+      mergeBucketItemDetails(
+        {
+          id: "bucket-kyoto",
+          name: "Kyoto",
+          country: "Japan",
+          tags: ["Culture", "History", "Nature", "Photography"],
+          bestMonths: [3, 4, 5, 10, 11],
+          costPerDay: 160,
+          bestTimeDesc: "Mar-May & Oct-Nov",
+          costNote: "Shoulder seasons and peak blossom periods.",
+        },
+        {
+          name: "Kyoto",
+          country: "",
+          tags: ["Culture", "Food"],
+          bestMonths: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          costPerDay: 150,
+          bestTimeDesc: "Shoulder seasons are usually best for weather and crowds.",
+          costNote: "Estimated default until preferences refine this.",
+        }
+      )
+    ).toEqual({
+      id: "bucket-kyoto",
+      name: "Kyoto",
+      country: "Japan",
+      tags: ["Culture", "History", "Nature", "Photography"],
+      bestMonths: [3, 4, 5, 10, 11],
+      costPerDay: 160,
+      bestTimeDesc: "Mar-May & Oct-Nov",
+      costNote: "Shoulder seasons and peak blossom periods.",
+    });
+  });
+
+  test("sanitizeCrewMembers ignores non-person rows and preserves valid members", () => {
+    expect(
+      sanitizeCrewMembers([
+        { id: "trip-1", name: "Hawaii Adventure", status: "active", dests: ["Hawaii"] },
+        { id: "crew-1", name: "Sam Carter", email: "sam@example.com", status: "accepted" },
+      ])
+    ).toEqual([
+      {
+        id: "crew-1",
+        name: "Sam Carter",
+        ini: "SC",
+        color: "#4DA8DA",
+        status: "accepted",
+        email: "sam@example.com",
+        profile: {},
+        relation: "crew",
+      },
+    ]);
+  });
+
+  test("sanitizeCrewMembers dedupes by email and keeps strongest status", () => {
+    expect(
+      sanitizeCrewMembers([
+        { email: "alex@example.com", name: "Alex", status: "pending" },
+        { email: "alex@example.com", name: "Alex P", status: "accepted", relation: "invitee" },
+      ])
+    ).toEqual([
+      {
+        id: "m-alex@example.com",
+        name: "Alex P",
+        ini: "AP",
+        color: "#4DA8DA",
+        status: "accepted",
+        email: "alex@example.com",
+        profile: {},
+        relation: "invitee",
+      },
+    ]);
   });
 
   test("bucketQueryNeedsSpecificChildren detects city-list style requests", () => {
@@ -2265,32 +2365,58 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedBucket[0].name).toBe("Kyoto");
   });
 
-  test("bucket list agent sends an immediate hiking-aligned response even if save stalls", async () => {
-    window.HTMLElement.prototype.scrollIntoView = jest.fn();
+  test("bucket send dedupes Kyoto when LLM omits country and uses fallback metadata", async () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = jest.fn();
+    const bucketCreatePosts = [];
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:bucket-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:bucket-user",
+      JSON.stringify({
+        name: "Bucket User",
+        email: "bucket@test.com",
+        styles: ["friends"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
     global.fetch = jest.fn((url, options) => {
       const method = String((options && options.method) || "GET").toUpperCase();
       const path = new URL(String(url), "https://example.test").pathname;
 
-      if (path === "/auth/login" && method === "POST") {
-        return jsonResponse({
-          accessToken: "test-token:bucket-user",
-          name: "Bucket User",
-        });
-      }
       if (path === "/me/profile" && method === "GET") {
         return jsonResponse({
           profile: {
             display_name: "Bucket User",
-            travel_styles: ["solo"],
-            interests: { hiking: true, food: false, culture: false },
+            travel_styles: ["friends"],
+            interests: { culture: true },
             budget_tier: "moderate",
             dietary: [],
           },
         });
       }
       if (path === "/me/bucket-list" && method === "GET") {
-        return jsonResponse({ items: [] });
+        return jsonResponse({
+          items: [
+            {
+              id: "bucket-kyoto",
+              destination: "Kyoto",
+              name: "Kyoto",
+              country: "Japan",
+              tags: ["Culture", "History", "Nature", "Photography"],
+              bestMonths: [3, 4, 5, 10, 11],
+              costPerDay: 160,
+              bestTimeDesc: "Mar-May & Oct-Nov",
+              costNote: "Peak blossom season",
+            },
+          ],
+        });
       }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
       if (path === "/llm/messages" && method === "POST") {
         return jsonResponse({
           content: [
@@ -2300,13 +2426,14 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
                 type: "destinations",
                 items: [
                   {
-                    name: "Queenstown",
-                    country: "New Zealand",
-                    bestMonths: [11, 12, 1, 2],
-                    costPerDay: 220,
-                    tags: ["Hiking", "Adventure"],
-                    bestTimeDesc: "Summer for trail access",
-                    costNote: "Moderate to premium for peak season",
+                    name: "Kyoto",
+                    country: "",
+                    tags: ["Culture", "Food"],
+                    bestMonths: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                    costPerDay: 150,
+                    bestTimeDesc:
+                      "Shoulder seasons are usually best for weather and crowds.",
+                    costNote: "Estimated default until preferences refine this.",
                   },
                 ],
               }),
@@ -2315,44 +2442,32 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
         });
       }
       if (path === "/me/bucket-list" && method === "POST") {
-        return new Promise(() => {});
-      }
-      if (path === "/crew/peer-profiles" && method === "GET") {
-        return jsonResponse({ peers: [] });
-      }
-      if (path === "/me/trips" && method === "GET") {
-        return jsonResponse({ trips: [] });
-      }
-      if (path === "/crew/invites/sent" && method === "GET") {
-        return jsonResponse({ invites: [] });
+        bucketCreatePosts.push(JSON.parse(String(options && options.body) || "{}"));
+        return jsonResponse({});
       }
       return jsonResponse({});
     });
 
-    render(<WanderPlan />);
-    fireEvent.click(await screen.findByText("Start your bucket list"));
-    fireEvent.change(await screen.findByPlaceholderText("Email"), {
-      target: { value: "bucket@test.com" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("Password"), {
-      target: { value: "secret123" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+    try {
+      render(<WanderPlan />);
 
-    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
-    fireEvent.click(screen.getByText("Bucket List"));
-    await waitFor(() => expect(screen.queryByText("Bucket List Agent")).not.toBeNull());
+      await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+      fireEvent.click(screen.getByText("Bucket List"));
+      await waitFor(() => expect(screen.queryByText("Kyoto")).not.toBeNull());
 
-    fireEvent.change(screen.getByPlaceholderText("e.g. 'northern lights' or 'Kyoto'"), {
-      target: { value: "adventure travel" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      fireEvent.change(screen.getByPlaceholderText("e.g. 'northern lights' or 'Kyoto'"), {
+        target: { value: "Kyoto" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() =>
-      expect(screen.queryByText(/Added Queenstown to your bucket list/i)).not.toBeNull()
-    );
-    expect(screen.queryByText(/Matched with your interests: hiking/i)).not.toBeNull();
-    expect(screen.queryAllByText("Queenstown").length).toBeGreaterThan(0);
+      await waitFor(() =>
+        expect(screen.queryByText(/already in your bucket list/i)).not.toBeNull()
+      );
+      expect(screen.getAllByLabelText("Remove Kyoto")).toHaveLength(1);
+      expect(bucketCreatePosts).toHaveLength(0);
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 });
 
@@ -2799,6 +2914,225 @@ describe("WanderPlanLLMFlow companion entry", () => {
   });
 });
 
+describe("WanderPlanLLMFlow trip deletion confirmation", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+    jest.restoreAllMocks();
+  });
+
+  test("completed trip delete asks for confirmation and removes the trip after confirm", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Alice Active",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:active-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:active-user",
+      JSON.stringify({
+        name: "Alice Active",
+        email: "alice@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    const confirmSpy = jest.spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    render(<WanderPlan />);
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: /Completed/i }));
+    fireEvent.click(await screen.findByText("Santorini Celebration"));
+    await waitFor(() => expect(screen.queryByText("Back to My Trips")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Are you sure you want to delete this trip? This cannot be undone."
+    );
+    expect(screen.queryByText("Back to My Trips")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    expect(confirmSpy).toHaveBeenNthCalledWith(
+      2,
+      "Are you sure you want to delete this trip? This cannot be undone."
+    );
+
+    await waitFor(() => expect(screen.queryByText("My Trips")).not.toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText("Santorini Celebration")).toBeNull()
+    );
+  });
+});
+
+describe("WanderPlanLLMFlow bucket list rapid submit hardening", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+  });
+
+  test("deduplicates rapid Send clicks while bucket destination extraction is in flight", async () => {
+    let llmCalls = 0;
+    let bucketPostCalls = 0;
+    let resolveLlm;
+    const llmPromise = new Promise((resolve) => {
+      resolveLlm = resolve;
+    });
+
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Rapid User",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/llm/messages" && method === "POST") {
+        llmCalls += 1;
+        return llmPromise;
+      }
+      if (path === "/me/bucket-list" && method === "POST") {
+        bucketPostCalls += 1;
+        return jsonResponse({
+          item: {
+            id: "bucket-bruges",
+            destination: "Bruges",
+            name: "Bruges",
+            country: "Belgium",
+            best_months: [4, 5],
+            bestMonths: [4, 5],
+            cost_per_day: 180,
+            costPerDay: 180,
+            tags: ["Culture"],
+            best_time_desc: "Spring",
+            bestTimeDesc: "Spring",
+            cost_note: "Moderate shoulder season pricing",
+            costNote: "Moderate shoulder season pricing",
+          },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:rapid-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:rapid-user",
+      JSON.stringify({
+        name: "Rapid User",
+        email: "rapid@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Bucket List"));
+
+    const input = await screen.findByPlaceholderText("e.g. 'northern lights' or 'Kyoto'");
+    fireEvent.change(input, { target: { value: "Bruges Belgium" } });
+    const sendButton = screen.getByRole("button", { name: "Send" });
+
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+
+    expect(llmCalls).toBe(1);
+
+    resolveLlm(
+      jsonResponse({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              type: "destinations",
+              items: [
+                {
+                  name: "Bruges",
+                  country: "Belgium",
+                  bestMonths: [4, 5],
+                  costPerDay: 180,
+                  tags: ["Culture"],
+                  bestTimeDesc: "Spring",
+                  costNote: "Moderate shoulder season pricing",
+                },
+              ],
+            }),
+          },
+        ],
+      })
+    );
+
+    await waitFor(() => expect(bucketPostCalls).toBe(1));
+    await waitFor(() => expect(screen.queryAllByLabelText("Remove Bruges")).toHaveLength(1));
+    expect(screen.getAllByText("Bruges Belgium")).toHaveLength(1);
+  });
+});
+
 describe("WanderPlanLLMFlow trip setup hardening helpers", () => {
   test("trip destination helpers normalize direct entries and bucket ids into unique destination names", () => {
     const bucket = [
@@ -3037,6 +3371,118 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     await waitFor(() => {
       expect(putBodies.length).toBeGreaterThan(0);
       expect(putBodies[putBodies.length - 1].destinations).toEqual(["Osaka"]);
+    });
+  });
+
+  test("Pick for Trip routes back to wizard step 1 for the active planning trip", async () => {
+    const putBodies = [];
+    const tripId = "44444444-4444-4444-8444-444444444444";
+
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const parsedUrl = new URL(String(url), "https://example.test");
+      const path = parsedUrl.pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Organizer",
+            travel_styles: ["friends"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [{ id: "bucket-tokyo", destination: "Tokyo", name: "Tokyo", country: "Japan" }],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: tripId,
+              name: "Japan Sprint",
+              status: "planning",
+              my_status: "owner",
+              my_role: "owner",
+              duration_days: 6,
+              members: [],
+              destinations: [{ name: "Kyoto" }],
+            },
+          ],
+        });
+      }
+      if (path === `/trips/${tripId}` && method === "GET") {
+        return jsonResponse({
+          trip: { id: tripId, name: "Japan Sprint", status: "planning", duration_days: 6, members: [] },
+        });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "GET") {
+        return jsonResponse({ destinations: [{ name: "Kyoto", votes: 0 }] });
+      }
+      if (path === `/trips/${tripId}/destinations` && method === "PUT") {
+        const body = JSON.parse((options && options.body) || "{}");
+        putBodies.push(body);
+        return jsonResponse({
+          destinations: (Array.isArray(body.destinations) ? body.destinations : []).map((name) => ({
+            name,
+            votes: 0,
+          })),
+        });
+      }
+      if (path === `/trips/${tripId}/pois` && method === "GET") return jsonResponse({ pois: [] });
+      if (path === `/trips/${tripId}/planning-state` && method === "GET") {
+        return jsonResponse({
+          current_step: 0,
+          state: { wizard_order_version: 2 },
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      if (path === `/trips/${tripId}/planning-state` && method === "PUT") {
+        const body = JSON.parse((options && options.body) || "{}");
+        return jsonResponse({
+          current_step: body.current_step,
+          state: body.state || {},
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:organizer-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:organizer-user",
+      JSON.stringify({
+        name: "Organizer",
+        email: "organizer@test.com",
+        styles: ["friends"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Japan Sprint")).not.toBeNull());
+    fireEvent.click(screen.getByText("Japan Sprint"));
+    await waitFor(() => expect(screen.queryByText("Continue Planning")).not.toBeNull());
+    fireEvent.click(screen.getByText("Continue Planning"));
+
+    await waitFor(() => expect(screen.queryByText("Confirm 1 Destination")).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Bucket List" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Pick for Trip" })).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Pick for Trip" }));
+
+    await waitFor(() => expect(screen.queryByText("Confirm 2 Destinations")).not.toBeNull());
+    await waitFor(() => {
+      expect(putBodies.length).toBeGreaterThan(0);
+      expect(putBodies[putBodies.length - 1].destinations).toEqual(["Kyoto", "Tokyo"]);
     });
   });
 

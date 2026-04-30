@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "88e7af8",
-  "branch": "copilot/p-10-fix-bucket-list-agent-responses",
-  "builtAt": "2026-04-22T01:02:41.944Z"
+  "sha": "976a0aa",
+  "branch": "copilot/perf-38-fix-navigation-to-wizard",
+  "builtAt": "2026-04-26T05:38:46.664Z"
 };
