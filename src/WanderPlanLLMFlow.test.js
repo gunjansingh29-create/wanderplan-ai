@@ -41,11 +41,13 @@ import {
   fillMissingDurationPerDestination,
   formatMoney,
   inclusiveIsoDays,
+  isUuidLike,
   itineraryRowsScore,
   isCurrentVoteVoter,
   makeVoteUserId,
   materializeItineraryDates,
   mergeAvailabilityDraft,
+  mergeBucketItemDetails,
   mergeProfileIntoUser,
   mergeSharedFlightDates,
   mergeVoteRows,
@@ -80,10 +82,12 @@ import {
   resolvePoiVotingDecision,
   sanitizeAvailabilityOverlapData,
   sanitizeAvailabilityWindow,
+  sanitizeCrewMembers,
   sanitizeFlightDatesForTrip,
   shouldAutoGeneratePois,
   shouldSkipPoiAutoGenerate,
   shouldResetTravelPlanForDurationChange,
+  shouldTreatBucketItemsAsSameDestination,
   summarizeDestinationVotes,
   summarizeInterestConsensus,
   summarizeMealVotes,
@@ -106,6 +110,12 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       "wp-b:email:crew@test.com"
     );
     expect(accountCacheKey("wp-t", "", "")).toBe("wp-t");
+  });
+
+  test("isUuidLike accepts modern UUID versions used by backend trip ids", () => {
+    expect(isUuidLike("11111111-1111-4111-8111-111111111111")).toBe(true);
+    expect(isUuidLike("0195f2a1-7b6c-7f9a-b2d3-123456789abc")).toBe(true);
+    expect(isUuidLike("not-a-uuid")).toBe(false);
   });
 
   test("mergeProfileIntoUser replaces stale local profile fields with backend profile", () => {
@@ -145,6 +155,96 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
     ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+  });
+
+  test("shouldTreatBucketItemsAsSameDestination matches same city even when one side misses country", () => {
+    expect(
+      shouldTreatBucketItemsAsSameDestination(
+        { name: "Kyoto", country: "Japan" },
+        { name: "Kyoto", country: "" }
+      )
+    ).toBe(true);
+    expect(
+      shouldTreatBucketItemsAsSameDestination(
+        { name: "Paris", country: "France" },
+        { name: "Paris", country: "United States" }
+      )
+    ).toBe(false);
+  });
+
+  test("mergeBucketItemDetails preserves richer destination metadata", () => {
+    expect(
+      mergeBucketItemDetails(
+        {
+          id: "bucket-kyoto",
+          name: "Kyoto",
+          country: "Japan",
+          tags: ["Culture", "History", "Nature", "Photography"],
+          bestMonths: [3, 4, 5, 10, 11],
+          costPerDay: 160,
+          bestTimeDesc: "Mar-May & Oct-Nov",
+          costNote: "Shoulder seasons and peak blossom periods.",
+        },
+        {
+          name: "Kyoto",
+          country: "",
+          tags: ["Culture", "Food"],
+          bestMonths: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          costPerDay: 150,
+          bestTimeDesc: "Shoulder seasons are usually best for weather and crowds.",
+          costNote: "Estimated default until preferences refine this.",
+        }
+      )
+    ).toEqual({
+      id: "bucket-kyoto",
+      name: "Kyoto",
+      country: "Japan",
+      tags: ["Culture", "History", "Nature", "Photography"],
+      bestMonths: [3, 4, 5, 10, 11],
+      costPerDay: 160,
+      bestTimeDesc: "Mar-May & Oct-Nov",
+      costNote: "Shoulder seasons and peak blossom periods.",
+    });
+  });
+
+  test("sanitizeCrewMembers ignores non-person rows and preserves valid members", () => {
+    expect(
+      sanitizeCrewMembers([
+        { id: "trip-1", name: "Hawaii Adventure", status: "active", dests: ["Hawaii"] },
+        { id: "crew-1", name: "Sam Carter", email: "sam@example.com", status: "accepted" },
+      ])
+    ).toEqual([
+      {
+        id: "crew-1",
+        name: "Sam Carter",
+        ini: "SC",
+        color: "#4DA8DA",
+        status: "accepted",
+        email: "sam@example.com",
+        profile: {},
+        relation: "crew",
+      },
+    ]);
+  });
+
+  test("sanitizeCrewMembers dedupes by email and keeps strongest status", () => {
+    expect(
+      sanitizeCrewMembers([
+        { email: "alex@example.com", name: "Alex", status: "pending" },
+        { email: "alex@example.com", name: "Alex P", status: "accepted", relation: "invitee" },
+      ])
+    ).toEqual([
+      {
+        id: "m-alex@example.com",
+        name: "Alex P",
+        ini: "AP",
+        color: "#4DA8DA",
+        status: "accepted",
+        email: "alex@example.com",
+        profile: {},
+        relation: "invitee",
+      },
+    ]);
   });
 
   test("bucketQueryNeedsSpecificChildren detects city-list style requests", () => {
@@ -2256,6 +2356,111 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedBucket).toHaveLength(1);
     expect(scopedBucket[0].name).toBe("Kyoto");
   });
+
+  test("bucket send dedupes Kyoto when LLM omits country and uses fallback metadata", async () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = jest.fn();
+    const bucketCreatePosts = [];
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:bucket-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:bucket-user",
+      JSON.stringify({
+        name: "Bucket User",
+        email: "bucket@test.com",
+        styles: ["friends"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Bucket User",
+            travel_styles: ["friends"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({
+          items: [
+            {
+              id: "bucket-kyoto",
+              destination: "Kyoto",
+              name: "Kyoto",
+              country: "Japan",
+              tags: ["Culture", "History", "Nature", "Photography"],
+              bestMonths: [3, 4, 5, 10, 11],
+              costPerDay: 160,
+              bestTimeDesc: "Mar-May & Oct-Nov",
+              costNote: "Peak blossom season",
+            },
+          ],
+        });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/llm/messages" && method === "POST") {
+        return jsonResponse({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                type: "destinations",
+                items: [
+                  {
+                    name: "Kyoto",
+                    country: "",
+                    tags: ["Culture", "Food"],
+                    bestMonths: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                    costPerDay: 150,
+                    bestTimeDesc:
+                      "Shoulder seasons are usually best for weather and crowds.",
+                    costNote: "Estimated default until preferences refine this.",
+                  },
+                ],
+              }),
+            },
+          ],
+        });
+      }
+      if (path === "/me/bucket-list" && method === "POST") {
+        bucketCreatePosts.push(JSON.parse(String(options && options.body) || "{}"));
+        return jsonResponse({});
+      }
+      return jsonResponse({});
+    });
+
+    try {
+      render(<WanderPlan />);
+
+      await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+      fireEvent.click(screen.getByText("Bucket List"));
+      await waitFor(() => expect(screen.queryByText("Kyoto")).not.toBeNull());
+
+      fireEvent.change(screen.getByPlaceholderText("e.g. 'northern lights' or 'Kyoto'"), {
+        target: { value: "Kyoto" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+      await waitFor(() =>
+        expect(screen.queryByText(/already in your bucket list/i)).not.toBeNull()
+      );
+      expect(screen.getAllByLabelText("Remove Kyoto")).toHaveLength(1);
+      expect(bucketCreatePosts).toHaveLength(0);
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
 });
 
 describe("WanderPlanLLMFlow companion entry", () => {
@@ -2698,6 +2903,93 @@ describe("WanderPlanLLMFlow companion entry", () => {
     expect(await screen.findByText("LIVE COMPANION SETUP")).not.toBeNull();
     expect(screen.queryByText("TODAY'S PLAN")).toBeNull();
     expect(screen.queryByText("TODAY PROGRESS")).toBeNull();
+  });
+});
+
+describe("WanderPlanLLMFlow trip deletion confirmation", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+    jest.restoreAllMocks();
+  });
+
+  test("completed trip delete asks for confirmation and removes the trip after confirm", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Alice Active",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:active-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:active-user",
+      JSON.stringify({
+        name: "Alice Active",
+        email: "alice@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    const confirmSpy = jest.spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    render(<WanderPlan />);
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: /Completed/i }));
+    fireEvent.click(await screen.findByText("Santorini Celebration"));
+    await waitFor(() => expect(screen.queryByText("Back to My Trips")).not.toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Are you sure you want to delete this trip? This cannot be undone."
+    );
+    expect(screen.queryByText("Back to My Trips")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    expect(confirmSpy).toHaveBeenNthCalledWith(
+      2,
+      "Are you sure you want to delete this trip? This cannot be undone."
+    );
+
+    await waitFor(() => expect(screen.queryByText("My Trips")).not.toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText("Santorini Celebration")).toBeNull()
+    );
   });
 });
 
