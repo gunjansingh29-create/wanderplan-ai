@@ -7669,6 +7669,87 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     expect(screen.queryByText("Majority needed: 1 of 1")).not.toBeNull();
   });
 
+  test("enables step 1 Search AI and uses query input for AI suggestions instead of adding a literal destination", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Solo Traveler",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
+      if (path === "/llm/messages" && method === "POST") {
+        return jsonResponse({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                type: "destinations",
+                items: [
+                  {
+                    name: "Bali",
+                    country: "Indonesia",
+                    bestMonths: [4, 5, 9],
+                    costPerDay: 180,
+                    tags: ["Beach", "Culture"],
+                    bestTimeDesc: "April to September is ideal for dry weather.",
+                    costNote: "Moderate budget range with many options.",
+                  },
+                ],
+              }),
+            },
+          ],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:solo-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:solo-user",
+      JSON.stringify({
+        name: "Solo Traveler",
+        email: "solo@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Plan a new trip"));
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText("e.g. Summer 2025")).not.toBeNull()
+    );
+    fireEvent.change(screen.getByPlaceholderText("e.g. Summer 2025"), {
+      target: { value: "Solo Escape" },
+    });
+
+    const destinationInput = screen.getByPlaceholderText("Add a destination directly (e.g. Kyoto)");
+    fireEvent.change(destinationInput, { target: { value: "beaches in Southeast Asia" } });
+
+    const searchAiButton = screen.getByRole("button", { name: "Search AI" });
+    expect(searchAiButton.disabled).toBe(false);
+    fireEvent.keyDown(destinationInput, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(screen.queryByText("Bali")).not.toBeNull());
+    expect(screen.queryByText("beaches in Southeast Asia")).toBeNull();
+  });
+
   test("persists step 1 destination removals for saved trips", async () => {
     const putBodies = [];
     global.fetch = jest.fn((url, options) => {
