@@ -183,15 +183,31 @@ function canonicalTripDestinationName(value){
     .toLowerCase();
 }
 
-function shouldTreatBucketItemsAsSameDestination(existing,incoming){
-  var existingName=canonicalTripDestinationName(existing&&existing.name||"");
-  var incomingName=canonicalTripDestinationName(incoming&&incoming.name||"");
-  if(!existingName||!incomingName||existingName!==incomingName)return false;
-  var existingCountry=canonicalTripDestinationName(existing&&existing.country||"");
-  var incomingCountry=canonicalTripDestinationName(incoming&&incoming.country||"");
-  if(!existingCountry||!incomingCountry)return true;
-  return existingCountry===incomingCountry;
-}
+function dedupeBucketSuggestionsForExisting(proposedItems, bucketItems){
+  var existingByName = {};
+  (Array.isArray(bucketItems)?bucketItems:[]).forEach(function(item){
+    var key = canonicalTripDestinationName(item&&item.name);
+    if(key)existingByName[key] = String(item&&item.name||"").trim()||String(item&&item.destination||"").trim()||"Destination";
+  });
+  var seen = Object.assign({},existingByName);
+  var duplicateMap = {};
+  var toAdd = [];
+  (Array.isArray(proposedItems)?proposedItems:[]).forEach(function(it){
+    var nm = String(it&&it.name||"").trim();
+    if(!nm)return;
+    var key = canonicalTripDestinationName(nm);
+    if(!key)return;
+    if(seen[key]){
+      if(!duplicateMap[key])duplicateMap[key] = seen[key];
+      return;
+    }
+    seen[key] = nm;
+    toAdd.push(it);
+  });
+  return {
+    toAdd:toAdd,
+    duplicateNames:Object.keys(duplicateMap).map(function(key){return duplicateMap[key];})
+  };}
 
 function activeTripTravelerCount(members,tripJoinedMap){
   var count=1;
@@ -6358,41 +6374,26 @@ export default function WanderPlan(){
           };
           proposed.push(existingMatch0?mergeBucketItemDetails(existingMatch0,normalizedItem0):normalizedItem0);
         }
-        var existing={};
-        bucket.forEach(function(b){
-          var key=(String(b.name||"").trim().toLowerCase()+"|"+String(b.country||"").trim().toLowerCase());
-          if(key!=="|")existing[key]=true;
-        });
-        var toAdd=[];
-        for(var i=0;i<proposed.length;i++){
-          var it=proposed[i]||{};
-          var nm=String(it.name||"").trim();
-          if(!nm)continue;
-          var ct=String(it.country||"").trim();
-          var existingMatch=bucket.find(function(savedItem){
-            return shouldTreatBucketItemsAsSameDestination(savedItem,{name:nm,country:ct});
-          })||null;
-          if(existingMatch){
-            var refreshed=mergeBucketItemDetails(existingMatch,it);
-            updateBucketItemLocal(refreshed);
-            continue;
-          }
-          var key=(nm.toLowerCase()+"|"+ct.toLowerCase());
-          if(existing[key])continue;
-          existing[key]=true;
-          toAdd.push({
-            id:"d"+Date.now()+"-"+i,
+        var split=dedupeBucketSuggestionsForExisting(proposed,bucket);
+        var duplicateNames=split.duplicateNames;
+        var toAdd=split.toAdd.map(function(it,i){
+          var nm=String(it&&it.name||"").trim();
+          var ct=String(it&&it.country||"").trim();
+          return {            id:"d"+Date.now()+"-"+i,
             name:nm,
             country:ct,
-            bestMonths:Array.isArray(it.bestMonths)?it.bestMonths:[],
-            costPerDay:Number(it.costPerDay||0)||0,
-            tags:Array.isArray(it.tags)?it.tags:[],
-            bestTimeDesc:String(it.bestTimeDesc||""),
-            costNote:String(it.costNote||"")
-          });
-        }
+            bestMonths:Array.isArray(it&&it.bestMonths)?it.bestMonths:[],
+            costPerDay:Number(it&&it.costPerDay||0)||0,
+            tags:Array.isArray(it&&it.tags)?it.tags:[],
+            bestTimeDesc:String(it&&it.bestTimeDesc||""),
+            costNote:String(it&&it.costNote||"")
+          };
+        });
         if(!toAdd.length){
-          setBC(function(p){return p.concat([{from:"agent",text:"Those places are already in your bucket list. Pick destinations from Bucket List cards when you start planning a trip.",suggestions:proposed}]);});
+          var duplicateMsg=duplicateNames.length===1
+            ? (duplicateNames[0]+" is already in your bucket list.")
+            : (duplicateNames.join(", ")+" are already in your bucket list.");
+          setBC(function(p){return p.concat([{from:"agent",text:duplicateMsg+" Pick destinations from Bucket List cards when you start planning a trip.",suggestions:proposed}]);});
           return;
         }
 
