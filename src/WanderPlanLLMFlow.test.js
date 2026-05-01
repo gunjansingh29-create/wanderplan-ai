@@ -274,6 +274,22 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     ]);
   });
 
+  test("refineBucketItemsForQuery keeps one primary destination for long-form essay input", () => {
+    const essay = `I spent an unforgettable week in Prague wandering cobblestone streets, watching sunrise over the Vltava River, and crossing Charles Bridge before the crowds arrived. Every evening I returned to Old Town Square, listened to music near the Astronomical Clock, and admired the Gothic facades that glow at dusk. I toured Prague Castle, explored hidden courtyards, and kept finding cozy cafes tucked into side lanes. The city felt intimate, walkable, and full of history. Even after day trips and long walks, Prague remained the clear center of the journey and the place I want to revisit first.`;
+    expect(
+      refineBucketItemsForQuery(essay, [
+        { name: "Prague", country: "Czech Republic" },
+        { name: "Czech Republic", country: "" },
+        { name: "Charles Bridge", country: "" },
+        { name: "Vltava River", country: "" },
+        { name: "Prague Castle", country: "" },
+        { name: "Old Town Square", country: "" },
+        { name: "Astronomical Clock", country: "" },
+        { name: "Gothic", country: "" },
+      ])
+    ).toEqual([{ name: "Prague", country: "Czech Republic" }]);
+  });
+
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);
   });
@@ -2552,6 +2568,48 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     } finally {
       Element.prototype.scrollIntoView = originalScrollIntoView;
     }
+  });
+});
+
+describe("WanderPlanLLMFlow sign in email validation", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+  });
+
+  test("shows an inline error for invalid sign in email format and blocks auth request", async () => {
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve("{}"),
+      })
+    );
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "notanemail" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Please enter a valid email address.")).not.toBeNull()
+    );
+    const loginCalls = global.fetch.mock.calls.filter((call) => {
+      const url = String((call && call[0]) || "");
+      return url.indexOf("/auth/login") >= 0;
+    });
+    expect(loginCalls).toHaveLength(0);
   });
 });
 

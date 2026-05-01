@@ -24,6 +24,5 @@ yarn-error.log*
 Thumbs.db
 .vercel
 
-# Generated build artifacts
+# Build outputs
 build/
-src/buildInfo.js
