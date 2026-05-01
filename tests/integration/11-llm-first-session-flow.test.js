@@ -32,6 +32,18 @@ describe('11 — LLM Gateway + Wizard Session Flow', () => {
     expect(typeof res.body._meta.model_used).toBe('string');
   });
 
+  test('POST /nlp/extract-destinations keeps one primary destination for long-form essay input', async () => {
+    const essay = 'Prague was the center of my weeklong journey, from dawn walks along the Vltava River to evenings in Old Town Square. I crossed Charles Bridge multiple times, explored Prague Castle, and kept returning to the same neighborhoods for cafés and live music. The architecture had Gothic and Art Nouveau details everywhere, and each day made me want to revisit Prague first. Even with nearby side trips, Prague remained the clear destination anchor for the whole experience.';
+    const res = await request(API_V1)
+      .post('/nlp/extract-destinations')
+      .send({ text: essay })
+      .expect(200);
+
+    expect(Array.isArray(res.body.destinations)).toBe(true);
+    expect(res.body.destinations).toHaveLength(1);
+    expect(res.body.destinations[0].name.toLowerCase()).toBe('prague');
+  });
+
   test('POST /wizard/sessions creates a persisted session and trip', async () => {
     const res = await request(API_V1)
       .post('/wizard/sessions')
@@ -111,4 +123,3 @@ describe('11 — LLM Gateway + Wizard Session Flow', () => {
     expect(types).toContain('add_bucket_item');
   });
 });
-
