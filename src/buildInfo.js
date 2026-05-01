@@ -1,5 +1,5 @@
 export const BUILD_INFO = {
-  "sha": "unknown",
-  "branch": "unknown",
-  "builtAt": "2026-03-19T20:24:59.264Z"
+  "sha": "976a0aa",
+  "branch": "copilot/perf-38-fix-navigation-to-wizard",
+  "builtAt": "2026-04-26T05:38:46.664Z"
 };
