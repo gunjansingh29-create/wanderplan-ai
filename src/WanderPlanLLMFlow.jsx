@@ -6647,7 +6647,10 @@ export default function WanderPlan(){
       var tid=String((tr&&tr.id)||currentTripId||"").trim();
       var fallbackDests=(Array.isArray(tr.dests)&&tr.dests.length)?tr.dests:String(tr.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
       setCTID(tid);
-      setVT(tr);
+      setVT(function(prev){
+        var base=(prev&&typeof prev==="object")?prev:{};
+        return Object.assign({},base,tr,{step:stepIndex});
+      });
       setNT(function(prev){
         var base=(prev&&typeof prev==="object")?prev:{};
         var nextTrip=Object.assign({},base,tr,{step:stepIndex});
@@ -6655,7 +6658,8 @@ export default function WanderPlan(){
         if(!Array.isArray(nextTrip.members))nextTrip.members=Array.isArray(tr.members)?tr.members:[];
         return nextTrip;
       });
-      setWS(stepIndex);
+      updateLocalWizardStepState(stepIndex,tid);
+      persistWizardStepWithRetry(stepIndex,tid,1);
       go("wizard");
     }
     function submitCompanionCheckin(item,status){
