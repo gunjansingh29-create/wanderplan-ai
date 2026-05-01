@@ -139,4 +139,45 @@ describe('16 - Planning State Deep Merge', () => {
     expect(readRow[SEED_USERS.bob.id]).toBe('up');
     expect(readRow[bobEmailAlias]).toBe('up');
   });
+
+  test('shared trip budget tier override persists in planning state without changing profile budget tier', async () => {
+    const trip = await createTrip(aliceToken, { name: `Planning Budget Override ${Date.now()}` });
+
+    await request(API_V1)
+      .put('/me/profile')
+      .set('Authorization', `Bearer ${aliceToken}`)
+      .send({
+        display_name: 'Alice Owner',
+        travel_styles: ['friends'],
+        interests: { food: true },
+        budget_tier: 'premium',
+        dietary: [],
+      })
+      .expect(200);
+
+    await request(API_V1)
+      .put(`/trips/${trip.id}/planning-state`)
+      .set('Authorization', `Bearer ${aliceToken}`)
+      .send({
+        merge: true,
+        state: {
+          shared_budget_tier: 'budget',
+        },
+      })
+      .expect(200);
+
+    const stateRes = await request(API_V1)
+      .get(`/trips/${trip.id}/planning-state`)
+      .set('Authorization', `Bearer ${aliceToken}`)
+      .expect(200);
+
+    expect(stateRes.body?.state?.shared_budget_tier).toBe('budget');
+
+    const profileRes = await request(API_V1)
+      .get('/me/profile')
+      .set('Authorization', `Bearer ${aliceToken}`)
+      .expect(200);
+
+    expect(profileRes.body?.profile?.budget_tier).toBe('premium');
+  });
 });
