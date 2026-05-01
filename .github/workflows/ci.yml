@@ -41,9 +41,6 @@ jobs:
         continue-on-error: true
         run: mypy agents/ core/ schemas/ models/ services/ --ignore-missing-imports
 
-  # =========================================================================
-  # Unit & Integration Tests
-  # =========================================================================
   test:
     name: test
     runs-on: ubuntu-latest
