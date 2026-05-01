@@ -45,6 +45,19 @@ function emptyUserState(){
   return {name:"",email:"",styles:[],interests:{},budget:"moderate",dietary:[]};
 }
 
+function countEnabledInterests(interestsObj){
+  var safeInterests=(interestsObj&&typeof interestsObj==="object")?interestsObj:{};
+  return Object.keys(safeInterests).filter(function(interestKey){
+    var interestValue=safeInterests[interestKey];
+    if(interestValue===true||interestValue===1||interestValue==="1")return true;
+    if(typeof interestValue==="string"){
+      var normalized=interestValue.trim().toLowerCase();
+      return normalized==="y"||normalized==="yes"||normalized==="true"||normalized==="1";
+    }
+    return false;
+  }).length;
+}
+
 function accountCacheKey(baseKey,token,email){
   var base=String(baseKey||"").trim();
   if(!base)return "";
@@ -527,6 +540,18 @@ function buildWhatsAppShareUrl(text){
   var msg=String(text||"").trim();
   if(!msg)return "";
   return "https://wa.me/?text="+encodeURIComponent(msg);
+}
+
+var SPA_HISTORY_SCREEN_KEY="wanderplan_screen";
+
+function historyStateForScreen(screen){
+  return {[SPA_HISTORY_SCREEN_KEY]:String(screen||"").trim()||"landing"};
+}
+
+function screenFromHistoryState(state){
+  if(!state||typeof state!=="object")return "";
+  var screen=String(state[SPA_HISTORY_SCREEN_KEY]||"").trim();
+  return screen;
 }
 
 function companionReadinessCopy(reason){
@@ -1497,6 +1522,15 @@ function summarizeInterestConsensus(catId,myInterests,members,tripJoinedMap){
   });
   var pct=totalCount>0?Math.round((yesCount/totalCount)*100):0;
   return {yesCount:yesCount,totalCount:totalCount,pct:pct,myValue:my};
+}
+
+function updateUserInterestSelection(userState, catId, selected){
+  var base=Object.assign(emptyUserState(),userState||{});
+  var nextInterests=(base.interests&&typeof base.interests==="object")
+    ? Object.assign({},base.interests)
+    : {};
+  nextInterests[String(catId||"")]=!!selected;
+  return Object.assign({},base,{interests:nextInterests});
 }
 
 function isCurrentMemberRow(member, token, myEmail){
@@ -4034,6 +4068,8 @@ export default function WanderPlan(){
   var mealDraftSaveTimerRef=useRef(null);
   var pendingWizardStepPersistRef=useRef(null);
   var wizardStepPersistRetryRef=useRef(null);
+  var historyBootstrappedRef=useRef(false);
+  var restoringFromBrowserHistoryRef=useRef(false);
   // Wizard interaction states
   var[destMemberVotes,setDMV]=useState({});
   var[tripJoined,setTJ]=useState({});
@@ -4220,6 +4256,32 @@ export default function WanderPlan(){
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
   useEffect(function(){if(chatRef.current&&typeof chatRef.current.scrollIntoView==="function")chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
   useEffect(function(){if(sc==="new_trip"){setTIM("");setTIL({});}},[sc]);
+  useEffect(function(){
+    if(typeof window==="undefined")return;
+    function onPopState(ev){
+      var nextScreen=screenFromHistoryState(ev&&ev.state);
+      if(!nextScreen)return;
+      restoringFromBrowserHistoryRef.current=true;
+      setSc(nextScreen);
+    }
+    window.addEventListener("popstate",onPopState);
+    return function(){window.removeEventListener("popstate",onPopState);};
+  },[]);
+  useEffect(function(){
+    if(typeof window==="undefined")return;
+    var nextState=historyStateForScreen(sc);
+    if(!historyBootstrappedRef.current){
+      window.history.replaceState(nextState,"",window.location.href);
+      historyBootstrappedRef.current=true;
+      restoringFromBrowserHistoryRef.current=false;
+      return;
+    }
+    if(restoringFromBrowserHistoryRef.current){
+      restoringFromBrowserHistoryRef.current=false;
+      return;
+    }
+    window.history.pushState(nextState,"",window.location.href);
+  },[sc]);
   useEffect(function(){
     if(typeof window==="undefined")return;
     function onResize(){
@@ -6653,7 +6715,10 @@ export default function WanderPlan(){
       var tid=String((tr&&tr.id)||currentTripId||"").trim();
       var fallbackDests=(Array.isArray(tr.dests)&&tr.dests.length)?tr.dests:String(tr.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
       setCTID(tid);
-      setVT(tr);
+      setVT(function(prev){
+        var base=(prev&&typeof prev==="object")?prev:{};
+        return Object.assign({},base,tr,{step:stepIndex});
+      });
       setNT(function(prev){
         var base=(prev&&typeof prev==="object")?prev:{};
         var nextTrip=Object.assign({},base,tr,{step:stepIndex});
@@ -6661,13 +6726,14 @@ export default function WanderPlan(){
         if(!Array.isArray(nextTrip.members))nextTrip.members=Array.isArray(tr.members)?tr.members:[];
         return nextTrip;
       });
-      setWS(stepIndex);
+      updateLocalWizardStepState(stepIndex,tid);
+      persistWizardStepWithRetry(stepIndex,tid,1);
       go("wizard");
     }
     function submitCompanionCheckin(item,status){
       var activityId=String(item&&item.activity_id||"").trim();
       var normalizedStatus=normalizeCompanionCheckinStatus(status);
-      if(!(activityId&&today&&today.day_number))return;
+      if(!(activityId&&today))return;
       setCompanionActionLoad(true);
       setCompanionErr("");
       saveTripPlanningState({state:{companion_checkins:(function(){
@@ -7408,7 +7474,7 @@ export default function WanderPlan(){
 
   {sc==="analytics"&&(<div>
     <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:24}}>Analytics</h1></Fade>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,200px),1fr))",gap:14,marginBottom:24}}>{[{l:"Trips",v:trips.length,c:C.gold},{l:"Destinations",v:bucket.length,c:C.teal},{l:"Crew",v:crew.length,c:C.sky},{l:"Interests",v:Object.keys(user.interests||{}).length+"/8",c:C.coral}].map(function(s,i){return(<Fade key={i} delay={100+i*50}><div style={{background:C.surface,borderRadius:14,padding:"18px 20px",border:"1px solid "+C.border}}><p style={{fontSize:12,color:C.tx3,marginBottom:6}}>{s.l}</p><p style={{fontWeight:700,fontSize:28,color:s.c}}>{s.v}</p></div></Fade>);})}</div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,200px),1fr))",gap:14,marginBottom:24}}>{[{l:"Trips",v:trips.length,c:C.gold},{l:"Destinations",v:bucket.length,c:C.teal},{l:"Crew",v:crew.length,c:C.sky},{l:"Interests",v:countEnabledInterests(user.interests)+"/"+CATS.length,c:C.coral}].map(function(s,i){return(<Fade key={i} delay={100+i*50}><div style={{background:C.surface,borderRadius:14,padding:"18px 20px",border:"1px solid "+C.border}}><p style={{fontSize:12,color:C.tx3,marginBottom:6}}>{s.l}</p><p style={{fontWeight:700,fontSize:28,color:s.c}}>{s.v}</p></div></Fade>);})}</div>
     {bucket.length>0&&(<Fade delay={300}><div style={{background:C.surface,borderRadius:14,padding:20,border:"1px solid "+C.border}}><h3 style={{fontWeight:700,fontSize:16,marginBottom:14}}>Bucket List Costs</h3>{bucket.map(function(d){return(<div key={d.id} style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,color:C.tx2}}>{d.name}</span><span style={{fontSize:13,fontWeight:600,color:C.goldT}}>~${d.costPerDay||0}/day</span></div>);})}</div></Fade>)}
   </div>)}
 
@@ -8474,11 +8540,38 @@ export default function WanderPlan(){
       {ab("Interest Profiler","Your profile interests merged with the group. Green = strong consensus.")}
       {(function(){
         function setInterestForCurrentUser(catId,val){
-          var next=Object.assign({},user.interests||{});
-          next[catId]=val;
-          var nextUser=Object.assign({},user,{interests:next});
-          setUser(nextUser);
-          persistProfileNow(nextUser,currentTripId||tr.id);
+          var nextUserForPersist=null;
+          setUser(function(prev){
+            var nextUser=updateUserInterestSelection(prev,catId,val);
+            nextUserForPersist=nextUser;
+            return nextUser;
+          });
+          if(nextUserForPersist){
+            var myEmail=String(nextUserForPersist&&nextUserForPersist.email||"").trim().toLowerCase();
+            var tok=authToken;
+            function patchMembersInterest(members){
+              return (Array.isArray(members)?members:[]).map(function(m){
+                if(!isCurrentMemberRow(m,tok,myEmail))return m;
+                var profile=(m&&m.profile&&typeof m.profile==="object")?Object.assign({},m.profile):{};
+                profile.interests=(profile.interests&&typeof profile.interests==="object")
+                  ? Object.assign({},profile.interests)
+                  : {};
+                profile.interests[String(catId||"")]=!!val;
+                return Object.assign({},m,{profile:profile});
+              });
+            }
+            setNT(function(prev){
+              if(!prev)return prev;
+              return Object.assign({},prev,{members:patchMembersInterest(prev.members)});
+            });
+            setTrips(function(prev){
+              return (Array.isArray(prev)?prev:[]).map(function(trip){
+                if(!trip||String(trip.id||"")!==String((currentTripId||tr.id||"")).trim())return trip;
+                return Object.assign({},trip,{members:patchMembersInterest(trip.members)});
+              });
+            });
+          }
+          if(nextUserForPersist)persistProfileNow(nextUserForPersist,currentTripId||tr.id);
         }
         return CATS.map(function(cat,i){
           var sum=summarizeInterestConsensus(cat.id,user.interests,tm,tripJoined);
@@ -10909,4 +11002,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
+<<<<<<< copilot/fix-no-expense-breakdown-completed-trip
 export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, tripExpenseLineItems, tripExpenseLineItemsTotal, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+=======
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, updateUserInterestSelection, voteKeyAliasesFor, wizardSyncIntervalMs };
+>>>>>>> main

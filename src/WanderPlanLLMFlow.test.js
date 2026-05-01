@@ -33,6 +33,7 @@ import {
   canonicalPoiVoteKeyFromStoredKey,
   canonicalStayVoteKey,
   companionCheckinMeta,
+  countEnabledInterests,
   dedupeVoteVoters,
   destinationsNeedingPoiCoverage,
   emptyUserState,
@@ -40,6 +41,7 @@ import {
   findDuplicatePoiKeys,
   fillMissingDurationPerDestination,
   formatMoney,
+  historyStateForScreen,
   inclusiveIsoDays,
   isUuidLike,
   itineraryRowsScore,
@@ -78,6 +80,7 @@ import {
   resolveWizardTripId,
   roundTripFlightRoutePlan,
   routePlanDurationMap,
+  screenFromHistoryState,
   isManufacturedPoiName,
   isPlausibleBucketDestinationName,
   resolvePoiVotingDecision,
@@ -101,11 +104,26 @@ import {
   trimPoiErrorDetail,
   trimRouteErrorDetail,
   tripDestinationNamesFromValues,
+  updateUserInterestSelection,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
 
 describe("WanderPlanLLMFlow account persistence helpers", () => {
+  test("countEnabledInterests counts only active interest values", () => {
+    expect(
+      countEnabledInterests({
+        hiking: true,
+        food: false,
+        culture: "Y",
+        nightlife: "N",
+        wellness: "yes",
+        shopping: "no",
+      })
+    ).toBe(3);
+    expect(countEnabledInterests({ hiking: "N", food: false })).toBe(0);
+  });
+
   test("accountCacheKey scopes cached data by token user id or email", () => {
     expect(accountCacheKey("wp-u", "test-token:user-123", "")).toBe(
       "wp-u:uid:user-123"
@@ -2655,7 +2673,7 @@ describe("WanderPlanLLMFlow companion entry", () => {
         },
       ],
       today: {
-        day_number: 1,
+        day_number: null,
         date: "2026-06-01",
         title: "Arrival Day",
         approved: true,
@@ -2782,6 +2800,8 @@ describe("WanderPlanLLMFlow companion entry", () => {
       ],
       stats: { day_count: 7, approved_days: 7, item_count: 12 },
     };
+    let planningStateStep = 10;
+    const persistedSteps = [];
     global.fetch = jest.fn((url, options) => {
       const method = String((options && options.method) || "GET").toUpperCase();
       const path = new URL(String(url), "https://example.test").pathname;
@@ -2814,6 +2834,7 @@ describe("WanderPlanLLMFlow companion entry", () => {
               owner_id: "active-user",
               name: "Active Tokyo Sprint",
               status: "active",
+              step: planningStateStep,
               duration_days: 7,
               my_status: "accepted",
               my_role: "owner",
@@ -2849,8 +2870,20 @@ describe("WanderPlanLLMFlow companion entry", () => {
           companion: liveCompanion,
         });
       }
+      if (path === "/trips/11111111-1111-4111-8111-111111111111/planning-state" && method === "GET") {
+        return jsonResponse({
+          current_step: planningStateStep,
+          state: {},
+          updated_at: "2026-06-01T10:00:00Z",
+        });
+      }
       if (path === "/trips/11111111-1111-4111-8111-111111111111/planning-state" && method === "PUT") {
         const body = JSON.parse(String(options && options.body || "{}"));
+        if (typeof body.current_step === "number") {
+          planningStateStep = body.current_step;
+          persistedSteps.push(body.current_step);
+          return jsonResponse({ current_step: body.current_step, state: body.state || {}, updated_at: "2026-06-01T10:00:00Z" });
+        }
         const patch = body && body.state && body.state.companion_checkins && body.state.companion_checkins["a-1"];
         if (patch) {
           liveCompanion = {
@@ -2951,6 +2984,7 @@ describe("WanderPlanLLMFlow companion entry", () => {
     await waitFor(() =>
       expect(screen.queryByText("Itinerary")).not.toBeNull()
     );
+    expect(persistedSteps).toContain(12);
   });
 
   test("companion shows recovery state when active trip is not ready", async () => {
@@ -3810,5 +3844,24 @@ describe("WanderPlanLLMFlow Step 3 interest consensus", () => {
     expect(summary.yesCount).toBe(0);
     expect(summary.totalCount).toBe(0);
     expect(summary.pct).toBe(0);
+  });
+});
+
+describe("WanderPlanLLMFlow interest selection updates", () => {
+  test("updateUserInterestSelection toggles one category while preserving others", () => {
+    const base = {
+      name: "Tester",
+      email: "tester@example.com",
+      styles: [],
+      interests: { hiking: true, food: false },
+      budget: "moderate",
+      dietary: [],
+    };
+
+    const toNo = updateUserInterestSelection(base, "hiking", false);
+    expect(toNo.interests).toEqual({ hiking: false, food: false });
+
+    const backToYes = updateUserInterestSelection(toNo, "hiking", true);
+    expect(backToYes.interests).toEqual({ hiking: true, food: false });
   });
 });
