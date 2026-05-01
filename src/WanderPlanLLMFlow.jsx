@@ -6621,7 +6621,7 @@ export default function WanderPlan(){
     function submitCompanionCheckin(item,status){
       var activityId=String(item&&item.activity_id||"").trim();
       var normalizedStatus=normalizeCompanionCheckinStatus(status);
-      if(!(activityId&&today&&today.day_number))return;
+      if(!(activityId&&today))return;
       setCompanionActionLoad(true);
       setCompanionErr("");
       saveTripPlanningState({state:{companion_checkins:(function(){
