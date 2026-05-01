@@ -4051,6 +4051,7 @@ export default function WanderPlan(){
   var[rememberCreds,setRememberCreds]=useState(false);
   var[signinLoad,setSigninLoad]=useState(false);
   var[vpW,setVpW]=useState(typeof window!=="undefined"&&window.innerWidth?window.innerWidth:1024);
+  var[mobileNavOpen,setMobileNavOpen]=useState(false);
   var[profileHydrated,setPH]=useState(false);
   var[authErr,setAE]=useState("");
   var[authInfo,setAI]=useState("");
@@ -4332,8 +4333,7 @@ export default function WanderPlan(){
     return function(){clearTimeout(t);};
   },[user,authToken,loaded,profileHydrated,currentTripId,newTrip,viewTrip&&viewTrip.id]);
 
-  function go(s){setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
-  function deleteTripWithConfirmation(trip){
+  function go(s){setMobileNavOpen(false);setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}  function deleteTripWithConfirmation(trip){
     if(!trip)return false;
     if(typeof window!=="undefined"&&typeof window.confirm==="function"){
       var ok=window.confirm("Are you sure you want to delete this trip? This cannot be undone.");
