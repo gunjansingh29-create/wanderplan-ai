@@ -1,4 +1,3 @@
-// CI trigger
 import { useState, useEffect, useRef } from "react";
 import { BUILD_INFO } from "./buildInfo";
 
