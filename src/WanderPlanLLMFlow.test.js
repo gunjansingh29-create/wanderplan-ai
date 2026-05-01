@@ -24,6 +24,7 @@ import {
   buildTripShareSummary,
   buildTripWhatsAppText,
   buildWhatsAppShareUrl,
+  buildBucketFallbackDestinations,
   bucketClarifyMessage,
   bucketPreferenceSeedDestinations,
   bucketQueryAnchorName,
@@ -7798,15 +7799,8 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
       }
       if (path === "/me/bucket-list" && method === "GET") {
         return jsonResponse({
-<<<<<<< copilot/a-06-add-logout-button
-          items: [
-            { id: "bucket-somnath", destination: "Somnath", name: "Somnath", country: "India" },
-            { id: "bucket-kedarnath", destination: "Kedarnath", name: "Kedarnath", country: "India" },
-          ],        });
-=======
           items: [{ id: "bucket-tokyo", destination: "Tokyo", name: "Tokyo", country: "Japan" }],
         });
->>>>>>> main
       }
       if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
       if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
@@ -7815,14 +7809,6 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
           trips: [
             {
               id: tripId,
-<<<<<<< copilot/a-06-add-logout-button
-              name: "Himalayan Choices",              status: "planning",
-              my_status: "owner",
-              my_role: "owner",
-              duration_days: 6,
-              members: [{ user_id: "member-1", email: "crew@test.com", status: "accepted" }],
-              destinations: [{ name: "Somnath" }, { name: "Kedarnath" }],            },
-=======
               name: "Japan Sprint",
               status: "planning",
               my_status: "owner",
@@ -7831,26 +7817,11 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
               members: [],
               destinations: [{ name: "Kyoto" }],
             },
->>>>>>> main
           ],
         });
       }
       if (path === `/trips/${tripId}` && method === "GET") {
         return jsonResponse({
-<<<<<<< copilot/a-06-add-logout-button
-          trip: {
-            id: tripId,
-            name: "Himalayan Choices",
-            status: "planning",
-            duration_days: 6,
-            members: [{ user_id: "member-1", email: "crew@test.com", status: "accepted" }],
-          },
-        });
-      }
-      if (path === `/trips/${tripId}/destinations` && method === "GET") {
-        return jsonResponse({
-          destinations: [{ name: "Somnath", votes: 0 }, { name: "Kedarnath", votes: 0 }],        });
-=======
           trip: { id: tripId, name: "Japan Sprint", status: "planning", duration_days: 6, members: [] },
         });
       }
@@ -7866,20 +7837,10 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
             votes: 0,
           })),
         });
->>>>>>> main
       }
       if (path === `/trips/${tripId}/pois` && method === "GET") return jsonResponse({ pois: [] });
       if (path === `/trips/${tripId}/planning-state` && method === "GET") {
         return jsonResponse({
-<<<<<<< copilot/a-06-add-logout-button
-          state: {
-            wizard_order_version: 3,
-            dest_member_votes: {
-              "dest:somnath": { "member-1": "up", "email:organizer@test.com": "up" },
-              "dest:kedarnath": { "member-1": "down", "email:organizer@test.com": "down" },
-            },
-          },          updated_at: "2026-06-01T10:00:00Z",
-=======
           current_step: 0,
           state: { wizard_order_version: 2 },
           updated_at: "2026-06-01T10:00:00Z",
@@ -7891,7 +7852,6 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
           current_step: body.current_step,
           state: body.state || {},
           updated_at: "2026-06-01T10:00:00Z",
->>>>>>> main
         });
       }
       return jsonResponse({});
@@ -7909,34 +7869,6 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
         dietary: [],
       })
     );
-<<<<<<< copilot/a-06-add-logout-button
-    window.localStorage.setItem(
-      "wp-t:uid:organizer-user",
-      JSON.stringify([
-        {
-          id: tripId,
-          name: "Himalayan Choices",
-          status: "planning",
-          my_status: "owner",
-          my_role: "owner",
-          members: [{ id: "member-1", status: "accepted", email: "crew@test.com" }],
-          dests: ["Somnath", "Kedarnath"],
-          destNames: "Somnath + Kedarnath",
-          step: 2,
-        },
-      ])
-    );
-
-    render(<WanderPlan />);
-
-    await waitFor(() => expect(screen.queryByText("Himalayan Choices")).not.toBeNull());
-    fireEvent.click(screen.getByText("Himalayan Choices"));
-    await waitFor(() => expect(screen.queryByText("Continue Planning")).not.toBeNull());
-    fireEvent.click(screen.getByText("Continue Planning"));
-
-    await waitFor(() => expect(screen.queryByText("Voting Agent")).not.toBeNull());
-    expect(screen.queryByText("3/16")).not.toBeNull();  });
-=======
 
     render(<WanderPlan />);
 
@@ -7956,7 +7888,6 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
       expect(putBodies[putBodies.length - 1].destinations).toEqual(["Kyoto", "Tokyo"]);
     });
   });
->>>>>>> main
 
   test("persists the step 6 route plan before continuing", async () => {
     const putBodies = [];

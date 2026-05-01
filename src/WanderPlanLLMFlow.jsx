@@ -2182,7 +2182,7 @@ async function fallbackExtractDestinations(userMsg){
     }
     return out;
   }catch(e){
-    return [];
+    return buildBucketFallbackDestinations(userMsg,[]);
   }
 }
 
