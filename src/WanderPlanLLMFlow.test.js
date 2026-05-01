@@ -3548,6 +3548,71 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     expect(screen.queryByText("Majority needed: 1 of 1")).not.toBeNull();
   });
 
+  test("asks for confirmation before deleting a trip that has crew members", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Organizer",
+            travel_styles: ["friends"],
+            interests: {},
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: "44444444-4444-4444-8444-444444444444",
+              name: "Crew Tokyo Trip",
+              status: "planning",
+              my_status: "owner",
+              my_role: "owner",
+              duration_days: 5,
+              members: [{ id: "crew-member-uuid-1", status: "accepted" }],
+              destinations: [{ name: "Tokyo" }],
+            },
+          ],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:organizer-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:organizer-user",
+      JSON.stringify({
+        name: "Organizer",
+        email: "organizer@test.com",
+        styles: ["friends"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    try {
+      render(<WanderPlan />);
+
+      await waitFor(() => expect(screen.queryByText("Crew Tokyo Trip")).not.toBeNull());
+      fireEvent.click(screen.getByRole("button", { name: "Delete trip" }));
+
+      expect(confirmSpy).toHaveBeenCalledWith("This trip has crew members. Delete anyway? This cannot be undone.");
+      expect(screen.queryByText("Crew Tokyo Trip")).not.toBeNull();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
   test("persists step 1 destination removals for saved trips", async () => {
     const putBodies = [];
     global.fetch = jest.fn((url, options) => {
