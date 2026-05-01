@@ -4218,6 +4218,7 @@ import {
   isLikelyBucketDestinationName,
   makeVoteUserId,
   materializeItineraryDates,
+  maybeResolveBucketConceptDestinations,
   mergeAvailabilityDraft,
   mergeBucketItemDetails,
   mergeProfileIntoUser,
