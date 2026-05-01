@@ -1902,6 +1902,38 @@ def _simple_destination_heuristic(text: str) -> list[dict[str, str]]:
             continue
         seen.add(key)
         out.append({"name": name})
+    words = re.findall(r"\S+", normalized)
+    if len(words) >= 60 and len(out) > 1:
+        def _score_candidate(row: dict[str, str]) -> float:
+            name = str(row.get("name") or "").strip()
+            if not name:
+                return -1.0
+            escaped = re.escape(name)
+            mentions = len(re.findall(rf"\b{escaped}\b", normalized, flags=re.IGNORECASE))
+            intent_mentions = (
+                len(re.findall(rf"\bto\s+{escaped}\b", normalized, flags=re.IGNORECASE))
+                + len(re.findall(rf"\bin\s+{escaped}\b", normalized, flags=re.IGNORECASE))
+                + len(re.findall(rf"\bvisit(?:ing)?\s+{escaped}\b", normalized, flags=re.IGNORECASE))
+                + len(re.findall(rf"\bexplore\s+{escaped}\b", normalized, flags=re.IGNORECASE))
+                + len(re.findall(rf"\btrip\s+to\s+{escaped}\b", normalized, flags=re.IGNORECASE))
+                + len(re.findall(rf"\btravel\s+to\s+{escaped}\b", normalized, flags=re.IGNORECASE))
+            )
+            landmark_penalty = (
+                5
+                if re.search(
+                    r"\b(bridge|river|castle|square|clock|monument|museum|cathedral|temple|church|palace|tower|fort|gothic|baroque|art nouveau)\b",
+                    name,
+                    flags=re.IGNORECASE,
+                )
+                else 0
+            )
+            first_idx = lowered.find(name.lower())
+            position_bonus = max(0, 5000 - first_idx) if first_idx >= 0 else 0
+            return (intent_mentions * 100) + (mentions * 20) + position_bonus - landmark_penalty
+
+        best = max(out, key=_score_candidate)
+        if best.get("name"):
+            return [best]
     return out[:10]
 
 
