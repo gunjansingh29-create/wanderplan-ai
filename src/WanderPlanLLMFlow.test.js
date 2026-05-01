@@ -6711,6 +6711,99 @@ describe("WanderPlanLLMFlow sign in email validation", () => {
   });
 });
 
+describe("WanderPlanLLMFlow analytics stats", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  test("shows completed trips breakdown on Stats", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const parsedUrl = new URL(String(url), "https://example.test");
+      const path = parsedUrl.pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            user_id: "stats-user",
+            email: "stats@test.com",
+            display_name: "Stats User",
+            travel_styles: ["friends"],
+            interests: { hiking: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({ peers: [] });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({ invites: [] });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: "trip-planning",
+              name: "Hawaii Adventure",
+              status: "planning",
+              my_status: "owner",
+              destinations: [{ destination_name: "Honolulu" }],
+              members: [],
+            },
+            {
+              id: "trip-completed",
+              name: "Tokyo Sprint",
+              status: "completed",
+              my_status: "owner",
+              destinations: [{ destination_name: "Tokyo" }],
+              members: [],
+            },
+          ],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:stats-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:stats-user",
+      JSON.stringify({
+        name: "Stats User",
+        email: "stats@test.com",
+        styles: ["friends"],
+        interests: { hiking: true },
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+    fireEvent.click(screen.getByText("Stats"));
+    await waitFor(() => expect(screen.queryByText("Analytics")).not.toBeNull());
+    expect(screen.queryByText("1 completed")).not.toBeNull();
+  });
+});
+
 describe("WanderPlanLLMFlow companion entry", () => {
   const originalFetch = global.fetch;
 
