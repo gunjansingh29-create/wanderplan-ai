@@ -6535,7 +6535,7 @@ export default function WanderPlan(){
             onMouseLeave={function(e){e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform="none";}}>
             <div style={{padding:"16px 20px 14px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                <h3 style={{fontWeight:700,fontSize:16,flex:1,marginRight:8}}>{tr.name}</h3>
+                <h3 style={{fontWeight:700,fontSize:16,flex:1,minWidth:0,marginRight:8,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{tr.name}</h3>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {tr.status==="active"&&<div style={{width:6,height:6,borderRadius:999,background:C.grn,animation:"pulse 1.5s infinite"}}/>}
                   <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:st.c,background:st.bg,whiteSpace:"nowrap"}}>{st.l}</span>

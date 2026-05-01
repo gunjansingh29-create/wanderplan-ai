@@ -3800,6 +3800,89 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
 
 });
 
+describe("WanderPlanLLMFlow trip cards", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+  });
+
+  test("truncates long trip names with ellipsis in dashboard cards", async () => {
+    const longName = "A".repeat(200);
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Traveler",
+            travel_styles: ["solo"],
+            interests: { culture: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
+      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
+      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({
+          trips: [
+            {
+              id: "33333333-3333-4333-8333-333333333333",
+              name: longName,
+              status: "planning",
+              destination_names: "Kyoto",
+              dates: "Jun 1 - Jun 5",
+              days: 5,
+              budget: 2500,
+              spent: 0,
+              members: [],
+              wizard_step: 1,
+            },
+          ],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:trip-user"));
+    window.localStorage.setItem(
+      "wp-u:uid:trip-user",
+      JSON.stringify({
+        name: "Traveler",
+        email: "traveler@test.com",
+        styles: ["solo"],
+        interests: {},
+        budget: "moderate",
+        dietary: [],
+      })
+    );
+
+    render(<WanderPlan />);
+
+    const title = await screen.findByRole("heading", { level: 3, name: longName });
+    expect(title.style.minWidth).toBe("0");
+    expect(title.style.whiteSpace).toBe("nowrap");
+    expect(title.style.overflow).toBe("hidden");
+    expect(title.style.textOverflow).toBe("ellipsis");
+  });
+});
+
 describe("WanderPlanLLMFlow Step 3 interest consensus", () => {
   test("counts only current user + accepted/joined members", () => {
     const members = [
