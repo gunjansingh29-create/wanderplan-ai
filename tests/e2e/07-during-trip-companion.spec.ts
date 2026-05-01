@@ -27,7 +27,7 @@ test.describe('07 - During-trip companion', () => {
         },
       ],
       today: {
-        day_number: 1,
+        day_number: null,
         date: '2026-06-01',
         title: 'Arrival Day',
         approved: true,
@@ -199,32 +199,66 @@ test.describe('07 - During-trip companion', () => {
 
     await page.route(`**/${ACTIVE_TRIP_ID}/planning-state`, async route => {
       const body = route.request().postDataJSON() as any;
-      const patch = body?.state?.companion_checkins?.['act-1'];
-      if (patch) {
+      const patchedActivityIds = Object.keys(body?.state?.companion_checkins || {});
+      if (patchedActivityIds.length > 0) {
+        const latestPatch = body?.state?.companion_checkins?.[patchedActivityIds[patchedActivityIds.length - 1]];
+        const statusByActivityId = Object.assign(
+          {},
+          ...liveCompanion.today.items.map((item) => ({ [item.activity_id]: item.live_status || 'pending' })),
+          ...patchedActivityIds.map((activityId) => ({ [activityId]: body.state.companion_checkins[activityId]?.status }))
+        );
+        const doneCount = liveCompanion.today.items.reduce(
+          (sum, item) => sum + (statusByActivityId[item.activity_id] === 'done' ? 1 : 0),
+          0
+        );
+        const skippedCount = liveCompanion.today.items.reduce(
+          (sum, item) => sum + (statusByActivityId[item.activity_id] === 'skipped' ? 1 : 0),
+          0
+        );
+        const inProgressCount = liveCompanion.today.items.reduce(
+          (sum, item) => sum + (statusByActivityId[item.activity_id] === 'in_progress' ? 1 : 0),
+          0
+        );
+        const completedCount = doneCount + skippedCount;
+        const totalItems = liveCompanion.today.items.length;
+        const pendingCount = Math.max(0, totalItems - doneCount - skippedCount - inProgressCount);
         liveCompanion = {
           ...liveCompanion,
           today: {
             ...liveCompanion.today,
             items: liveCompanion.today.items.map((item) =>
-              item.activity_id === 'act-1'
-                ? { ...item, live_status: patch.status, live_updated_by_name: 'Alice Test' }
+              statusByActivityId[item.activity_id]
+                ? { ...item, live_status: statusByActivityId[item.activity_id], live_updated_by_name: 'Alice Test' }
                 : item
             ),
           },
           today_checkins: liveCompanion.today_checkins.map((row) =>
-            row.activity_id === 'act-1'
-              ? { ...row, status: patch.status, updated_by: patch.updated_by, updated_by_name: 'Alice Test', updated_at: patch.updated_at }
-              : row
+            (function () {
+              const incomingPatch = body.state.companion_checkins[row.activity_id];
+              if (incomingPatch) {
+                return {
+                  ...row,
+                  status: statusByActivityId[row.activity_id],
+                  updated_by: incomingPatch.updated_by,
+                  updated_by_name: 'Alice Test',
+                  updated_at: incomingPatch.updated_at,
+                };
+              }
+              if (statusByActivityId[row.activity_id] && statusByActivityId[row.activity_id] !== row.status) {
+                return { ...row, status: statusByActivityId[row.activity_id] };
+              }
+              return row;
+            })()
           ),
           day_progress: {
-            total_items: 2,
-            done: patch.status === 'done' ? 1 : 0,
-            skipped: patch.status === 'skipped' ? 1 : 0,
-            in_progress: patch.status === 'in_progress' ? 1 : 0,
-            pending: patch.status === 'pending' ? 2 : 1,
-            completed_items: patch.status === 'done' || patch.status === 'skipped' ? 1 : 0,
-            completion_pct: patch.status === 'done' || patch.status === 'skipped' ? 50 : 0,
-            last_updated_at: patch.updated_at,
+            total_items: totalItems,
+            done: doneCount,
+            skipped: skippedCount,
+            in_progress: inProgressCount,
+            pending: pendingCount,
+            completed_items: completedCount,
+            completion_pct: totalItems > 0 ? Math.round((completedCount / totalItems) * 100) : 0,
+            last_updated_at: latestPatch?.updated_at || null,
           },
         };
       }
@@ -264,9 +298,13 @@ test.describe('07 - During-trip companion', () => {
     await expect(page.getByText('DINING TODAY')).toBeVisible();
     await expect(page.getByText('Izakaya Hanabi')).toBeVisible();
 
+    await page.getByRole('button', { name: 'Start' }).first().click();
+    await expect(page.getByText('In Progress').first()).toBeVisible();
     await page.getByRole('button', { name: 'Done' }).first().click();
-    await expect(page.getByText('Updated by Alice Test')).toBeVisible();
-    await expect(page.getByText('50%')).toBeVisible();
+    await page.getByRole('button', { name: 'Done' }).nth(1).click();
+    await expect(page.getByText('Updated by Alice Test').first()).toBeVisible();
+    await expect(page.getByText('2 of 2 items closed')).toBeVisible();
+    await expect(page.getByText('100%')).toBeVisible();
 
     await page.getByText('Open Itinerary').click();
     await expect(page.getByText('Itinerary')).toBeVisible();
@@ -325,4 +363,3 @@ test.describe('07 - During-trip companion', () => {
     await expect(page.getByText('TODAY PROGRESS')).toHaveCount(0);
   });
 });
-
