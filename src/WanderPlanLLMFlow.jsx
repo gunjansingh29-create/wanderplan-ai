@@ -45,6 +45,19 @@ function emptyUserState(){
   return {name:"",email:"",styles:[],interests:{},budget:"moderate",dietary:[]};
 }
 
+function countEnabledInterests(interestsObj){
+  var safeInterests=(interestsObj&&typeof interestsObj==="object")?interestsObj:{};
+  return Object.keys(safeInterests).filter(function(interestKey){
+    var interestValue=safeInterests[interestKey];
+    if(interestValue===true||interestValue===1||interestValue==="1")return true;
+    if(typeof interestValue==="string"){
+      var normalized=interestValue.trim().toLowerCase();
+      return normalized==="y"||normalized==="yes"||normalized==="true"||normalized==="1";
+    }
+    return false;
+  }).length;
+}
+
 function accountCacheKey(baseKey,token,email){
   var base=String(baseKey||"").trim();
   if(!base)return "";
@@ -309,11 +322,12 @@ function sanitizeCrewMembers(rows){
     if(!email)return;
     var name=String(src.name||profile.display_name||"").trim()||defaultCrewNameFromEmail(email);
     var existingIdx=emailToIdx[email];
+    var existingColor=(existingIdx!==undefined&&out[existingIdx]&&out[existingIdx].color)?out[existingIdx].color:"";
     var candidate={
       id:String(src.id||src.peer_user_id||("m-"+email)).trim()||("m-"+email),
       name:name,
       ini:String(src.ini||"").trim()||iniFromName(name),
-      color:src.color||CREW_COLORS[(existingIdx!==undefined?existingIdx:out.length)%CREW_COLORS.length],
+      color:src.color||existingColor||CREW_COLORS[(existingIdx!==undefined?existingIdx:out.length)%CREW_COLORS.length],
       status:normalizeCrewStatus(src.status||src.crew_status),
       email:email,
       profile:profile,
@@ -325,11 +339,19 @@ function sanitizeCrewMembers(rows){
       return;
     }
     var current=out[existingIdx]||{};
+    var merged=Object.assign({},current);
     if(crewStatusRank(candidate.status)>crewStatusRank(current.status)){
-      out[existingIdx]=Object.assign({},current,candidate,{color:current.color||candidate.color});
-    }else{
-      out[existingIdx]=Object.assign({},candidate,current);
+      merged.id=candidate.id||merged.id;
+      merged.name=candidate.name||merged.name;
+      merged.ini=candidate.ini||merged.ini;
+      merged.status=candidate.status;
+      merged.relation=candidate.relation||merged.relation;
+      merged.profile=(candidate.profile&&Object.keys(candidate.profile).length)?candidate.profile:merged.profile;
     }
+    if(!merged.name&&candidate.name)merged.name=candidate.name;
+    if(!merged.ini&&candidate.ini)merged.ini=candidate.ini;
+    merged.color=current.color||candidate.color;
+    out[existingIdx]=merged;
   });
   return out;
 }
@@ -422,6 +444,30 @@ function receiptItemsTotal(items){
   },0);
 }
 
+function tripExpenseLineItems(trip){
+  var sourceExpenses=(trip&&Array.isArray(trip.expenses)&&trip.expenses.length)?trip.expenses:(trip&&Array.isArray(trip.recent_expenses)?trip.recent_expenses:[]);
+  return sourceExpenses.map(function(item,idx){
+    var amount=Number(item&&item.amount||0)||0;
+    var merchant=String(item&&item.merchant||item&&item.name||"").trim();
+    var category=String(item&&item.category||"").trim();
+    var date=String(item&&item.expense_date||item&&item.date||"").trim();
+    return {
+      id:String(item&&item.id||("expense-"+idx)),
+      merchant:merchant||("Expense "+(idx+1)),
+      category:category||"misc",
+      expense_date:date,
+      amount:amount,
+      currency:String(item&&item.currency||trip&&trip.currency||"USD").trim().toUpperCase()||"USD"
+    };
+  }).filter(function(item){
+    return item.amount>0;
+  });
+}
+
+function tripExpenseLineItemsTotal(items){
+  return receiptItemsTotal(items);
+}
+
 function defaultExpenseSplitMemberIds(members,currentUserId){
   var out=[];
   (Array.isArray(members)?members:[]).forEach(function(member){
@@ -503,6 +549,18 @@ function buildWhatsAppShareUrl(text){
   var msg=String(text||"").trim();
   if(!msg)return "";
   return "https://wa.me/?text="+encodeURIComponent(msg);
+}
+
+var SPA_HISTORY_SCREEN_KEY="wanderplan_screen";
+
+function historyStateForScreen(screen){
+  return {[SPA_HISTORY_SCREEN_KEY]:String(screen||"").trim()||"landing"};
+}
+
+function screenFromHistoryState(state){
+  if(!state||typeof state!=="object")return "";
+  var screen=String(state[SPA_HISTORY_SCREEN_KEY]||"").trim();
+  return screen;
 }
 
 function companionReadinessCopy(reason){
@@ -1475,6 +1533,15 @@ function summarizeInterestConsensus(catId,myInterests,members,tripJoinedMap){
   return {yesCount:yesCount,totalCount:totalCount,pct:pct,myValue:my};
 }
 
+function updateUserInterestSelection(userState, catId, selected){
+  var base=Object.assign(emptyUserState(),userState||{});
+  var nextInterests=(base.interests&&typeof base.interests==="object")
+    ? Object.assign({},base.interests)
+    : {};
+  nextInterests[String(catId||"")]=!!selected;
+  return Object.assign({},base,{interests:nextInterests});
+}
+
 function isCurrentMemberRow(member, token, myEmail){
   var mid=String(member&&member.user_id||member&&member.id||"").trim();
   var tokUid=userIdFromToken(token||"");
@@ -2023,11 +2090,17 @@ async function askLLM(userMsg, budget, history) {
         return {type:"clarify",message:bucketClarifyMessage(userMsg)};
       }
     }
+    if(normalized&&normalized.type==="clarify"){
+      var clarifySeeds=bucketPreferenceSeedDestinations(userMsg,budget);
+      if(clarifySeeds.length)return {type:"destinations",items:clarifySeeds};
+    }
     if(normalized)return normalized;
   } catch (e) {}
   var fb=await fallbackExtractDestinations(userMsg);
   var refinedFallback=refineBucketItemsForQuery(userMsg, fb);
   if(refinedFallback.length)return {type:"destinations",items:refinedFallback};
+  var preferenceSeeds=bucketPreferenceSeedDestinations(userMsg,budget);
+  if(preferenceSeeds.length)return {type:"destinations",items:preferenceSeeds};
   return {type: "clarify", message: bucketClarifyMessage(userMsg)};
 }
 
@@ -3962,6 +4035,7 @@ export default function WanderPlan(){
   var[rememberCreds,setRememberCreds]=useState(false);
   var[signinLoad,setSigninLoad]=useState(false);
   var[vpW,setVpW]=useState(typeof window!=="undefined"&&window.innerWidth?window.innerWidth:1024);
+  var[mobileNavOpen,setMobileNavOpen]=useState(false);
   var[profileHydrated,setPH]=useState(false);
   var[authErr,setAE]=useState("");
   var[authInfo,setAI]=useState("");
@@ -4010,6 +4084,8 @@ export default function WanderPlan(){
   var mealDraftSaveTimerRef=useRef(null);
   var pendingWizardStepPersistRef=useRef(null);
   var wizardStepPersistRetryRef=useRef(null);
+  var historyBootstrappedRef=useRef(false);
+  var restoringFromBrowserHistoryRef=useRef(false);
   // Wizard interaction states
   var[destMemberVotes,setDMV]=useState({});
   var[tripJoined,setTJ]=useState({});
@@ -4183,7 +4259,7 @@ export default function WanderPlan(){
         await acceptPendingInvite(tok,inviteTokenInUrl,inviteActionInUrl);
       }catch(e){}
       try{
-        await hydrateSignedInSession(tok,{baseUser:u||Object.assign(emptyUserState(),{email:accountEmail})});
+        await hydrateSignedInSession(tok,{baseUser:u||Object.assign(emptyUserState(),{email:accountEmail}),cachedTrips:t});
       }catch(e){}
       setSc("dash");
     }
@@ -4196,6 +4272,32 @@ export default function WanderPlan(){
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
   useEffect(function(){if(chatRef.current&&typeof chatRef.current.scrollIntoView==="function")chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
   useEffect(function(){if(sc==="new_trip"){setTIM("");setTIL({});}},[sc]);
+  useEffect(function(){
+    if(typeof window==="undefined")return;
+    function onPopState(ev){
+      var nextScreen=screenFromHistoryState(ev&&ev.state);
+      if(!nextScreen)return;
+      restoringFromBrowserHistoryRef.current=true;
+      setSc(nextScreen);
+    }
+    window.addEventListener("popstate",onPopState);
+    return function(){window.removeEventListener("popstate",onPopState);};
+  },[]);
+  useEffect(function(){
+    if(typeof window==="undefined")return;
+    var nextState=historyStateForScreen(sc);
+    if(!historyBootstrappedRef.current){
+      window.history.replaceState(nextState,"",window.location.href);
+      historyBootstrappedRef.current=true;
+      restoringFromBrowserHistoryRef.current=false;
+      return;
+    }
+    if(restoringFromBrowserHistoryRef.current){
+      restoringFromBrowserHistoryRef.current=false;
+      return;
+    }
+    window.history.pushState(nextState,"",window.location.href);
+  },[sc]);
   useEffect(function(){
     if(typeof window==="undefined")return;
     function onResize(){
@@ -4215,8 +4317,7 @@ export default function WanderPlan(){
     return function(){clearTimeout(t);};
   },[user,authToken,loaded,profileHydrated,currentTripId,newTrip,viewTrip&&viewTrip.id]);
 
-  function go(s){setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
-  function deleteTripWithConfirmation(trip){
+  function go(s){setMobileNavOpen(false);setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}  function deleteTripWithConfirmation(trip){
     if(!trip)return false;
     if(typeof window!=="undefined"&&typeof window.confirm==="function"){
       var ok=window.confirm("Are you sure you want to delete this trip? This cannot be undone.");
@@ -4381,7 +4482,10 @@ export default function WanderPlan(){
           dates:"",
           days:Number(t.duration_days||0)||0,
           budget:0,
-          spent:0
+          spent:0,
+          expenses:Array.isArray(t.expenses)?t.expenses:[],
+          recent_expenses:Array.isArray(t.recent_expenses)?t.recent_expenses:[],
+          currency:String(t&&t.expense_summary&&t.expense_summary.currency||"USD").trim().toUpperCase()||"USD"
         };
       });
       var planningMetaRows=await Promise.all((mapped||[]).map(async function(tripItem){
@@ -4436,7 +4540,10 @@ export default function WanderPlan(){
             dates:t.dates||p.dates||"",
             days:Math.max(0,Number(t.days||p.days)||0),
             budget:Number(p.budget||0)||0,
-            spent:Number(p.spent||0)||0
+            spent:Number(p.spent||0)||0,
+            expenses:(Array.isArray(t.expenses)&&t.expenses.length)?t.expenses:(Array.isArray(p.expenses)?p.expenses:[]),
+            recent_expenses:(Array.isArray(t.recent_expenses)&&t.recent_expenses.length)?t.recent_expenses:(Array.isArray(p.recent_expenses)?p.recent_expenses:[]),
+            currency:t.currency||p.currency||"USD"
           });
         });
         var syncedIds={};synced.forEach(function(t){syncedIds[t.id]=1;});
@@ -4514,7 +4621,7 @@ export default function WanderPlan(){
     setUser(seededUser);
     setBucket([]);
     setCrew([]);
-    setTrips([]);
+    setTrips(Array.isArray(o.cachedTrips)?o.cachedTrips:[]);
     try{
       var prof=await apiJson("/me/profile",{method:"GET"},token);
       if(prof&&prof.profile){
@@ -6337,6 +6444,7 @@ export default function WanderPlan(){
   var inDash=sc==="dash"||sc==="profile"||sc==="crew"||sc==="bucket"||sc==="analytics"||sc==="new_trip"||sc==="wizard"||sc==="trip_detail"||sc==="companion";
   var isPhone=vpW<=480;
   var isNarrow=vpW<=768;
+  var dashNavItems=[{id:"dash",label:"Trips"},{id:"bucket",label:"Bucket List"},{id:"crew",label:"Crew"},{id:"profile",label:"Profile"},{id:"analytics",label:"Stats"}];
   var pagePad=isNarrow?12:24;
   var formPad=isPhone?20:40;
   var landingPadX=isPhone?16:44;
@@ -6396,16 +6504,25 @@ export default function WanderPlan(){
 
 {sc==="ob5"&&(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{maxWidth:440,width:"100%",padding:formPad}}><Fade delay={100}><div style={{height:3,background:C.border,borderRadius:2,marginBottom:32}}><div style={{height:"100%",width:"100%",background:"linear-gradient(90deg,"+C.gold+","+C.coral+")",borderRadius:2}}/></div><p style={{fontSize:12,color:C.goldT,marginBottom:8}}>STEP 5 OF 5</p><h2 style={{fontSize:28,fontWeight:700,marginBottom:6}}>Dietary needs?</h2><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{["Vegetarian","Vegan","Gluten-free","Halal","Kosher","None"].map(function(item){var sel=(user.dietary||[]).indexOf(item)>=0;return(<button key={item} onClick={function(){var cur=user.dietary||[];upU("dietary",cur.indexOf(item)>=0?cur.filter(function(x){return x!==item;}):cur.concat([item]));}} style={{padding:"8px 16px",borderRadius:10,border:"1.5px solid "+(sel?C.tealL+"50":C.border),background:sel?C.tealL+"12":"transparent",color:sel?C.tealL:C.tx2,fontSize:14,fontWeight:sel?600:400,cursor:"pointer"}}>{item}</button>);})}</div><button onClick={function(){go("dash");}} style={{width:"100%",marginTop:20,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Enter WanderPlan</button></Fade></div></div>)}
 
-{inDash&&(<div style={{minHeight:"100vh",background:C.bg}}>
+  {inDash&&(<div style={{minHeight:"100vh",background:C.bg}}>
   {/* Top navigation bar */}
   <header style={{position:"sticky",top:0,zIndex:50,background:C.bg+"ee",backdropFilter:"blur(16px)",borderBottom:"1px solid "+C.border}}>
     <div style={{maxWidth:900,margin:"0 auto",display:"flex",alignItems:"center",padding:"10px "+pagePad+"px",gap:10,flexWrap:isNarrow?"wrap":"nowrap"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginRight:"auto"}}><div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>W</div><span style={{fontSize:15,fontWeight:700}}>WanderPlan</span></div>
-      <nav style={{display:"flex",gap:2,overflowX:isNarrow?"auto":"visible",maxWidth:isNarrow?"100%":"none",WebkitOverflowScrolling:"touch",flex:isNarrow?"1 1 100%":"0 1 auto"}}>
-        {[{id:"dash",l:"Trips"},{id:"bucket",l:"Bucket List"},{id:"crew",l:"Crew"},{id:"profile",l:"Profile"},{id:"analytics",l:"Stats"}].map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash")||(sc==="companion"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:isPhone?"6px 10px":"6px 14px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.l}</button>);})}
+      {isPhone?(<button aria-label={mobileNavOpen?"Close navigation menu":"Open navigation menu"} onClick={function(){setMobileNavOpen(function(v){return !v;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:C.surface,color:C.tx2,fontSize:14,fontWeight:700,lineHeight:1,cursor:"pointer"}}>{mobileNavOpen?"✕":"☰"}</button>):(<><nav style={{display:"flex",gap:2,overflowX:isNarrow?"auto":"visible",maxWidth:isNarrow?"100%":"none",WebkitOverflowScrolling:"touch",flex:isNarrow?"1 1 100%":"0 1 auto"}}>
+        {dashNavItems.map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash")||(sc==="companion"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:isPhone?"6px 10px":"6px 14px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.label}</button>);})}
       </nav>
-      <button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{padding:isPhone?"7px 10px":"7px 16px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontWeight:600,fontSize:12,cursor:"pointer",marginLeft:4,whiteSpace:"nowrap"}}>{isPhone?"+ Trip":"+ New Trip"}</button>
-      <div style={{marginLeft:4}}><Avi ini={user.name?user.name.charAt(0).toUpperCase():"?"} color={C.gold} size={28}/></div>
+      <button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{padding:"7px 16px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontWeight:600,fontSize:12,cursor:"pointer",marginLeft:4,whiteSpace:"nowrap"}}>+ New Trip</button>
+      <div style={{marginLeft:4}}><Avi ini={user.name?user.name.charAt(0).toUpperCase():"?"} color={C.gold} size={28}/></div></>)}
+      {isPhone&&mobileNavOpen&&(<div style={{width:"100%",display:"flex",flexDirection:"column",gap:8,paddingTop:2}}>
+        <nav style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {dashNavItems.map(function(it){var a=sc===it.id||(sc==="wizard"&&it.id==="dash")||(sc==="new_trip"&&it.id==="dash")||(sc==="trip_detail"&&it.id==="dash")||(sc==="companion"&&it.id==="dash");return(<button key={it.id} onClick={function(){go(it.id);}} style={{padding:"6px 10px",borderRadius:8,border:"none",background:a?C.goldDim:"transparent",color:a?C.goldT:C.tx3,cursor:"pointer",fontSize:12.5,fontWeight:a?600:400,whiteSpace:"nowrap"}}>{it.label}</button>);})}
+        </nav>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <button onClick={function(){setNT({name:"",dests:[],members:[],step:0});go("new_trip");}} style={{padding:"7px 10px",borderRadius:8,border:"none",background:C.gold,color:C.bg,fontWeight:600,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>+ Trip</button>
+          <Avi ini={user.name?user.name.charAt(0).toUpperCase():"?"} color={C.gold} size={28}/>
+        </div>
+      </div>)}
     </div>
   </header>
   {/* Main content area */}
@@ -6466,6 +6583,12 @@ export default function WanderPlan(){
         days:7,
         budget:2800,
         spent:2610,
+        expenses:[
+          {id:"seed-expense-1",merchant:"Canava Seaside Suites",category:"accommodation",amount:1220,currency:"USD",expense_date:"2025-09-03"},
+          {id:"seed-expense-2",merchant:"Ammoudi Dining",category:"dining",amount:540,currency:"USD",expense_date:"2025-09-05"},
+          {id:"seed-expense-3",merchant:"Sunset Caldera Cruise",category:"activities",amount:430,currency:"USD",expense_date:"2025-09-06"},
+          {id:"seed-expense-4",merchant:"Island Transfers",category:"transport",amount:420,currency:"USD",expense_date:"2025-09-08"}
+        ],
         isSeed:true
       });
     }
@@ -6482,7 +6605,7 @@ export default function WanderPlan(){
             onMouseLeave={function(e){e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform="none";}}>
             <div style={{padding:"16px 20px 14px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                <h3 style={{fontWeight:700,fontSize:16,flex:1,marginRight:8}}>{tr.name}</h3>
+                <h3 style={{fontWeight:700,fontSize:16,flex:1,minWidth:0,marginRight:8,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{tr.name}</h3>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {tr.status==="active"&&<div style={{width:6,height:6,borderRadius:999,background:C.grn,animation:"pulse 1.5s infinite"}}/>}
                   <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:st.c,background:st.bg,whiteSpace:"nowrap"}}>{st.l}</span>
@@ -6515,6 +6638,8 @@ export default function WanderPlan(){
   {sc==="trip_detail"&&viewTrip&&(function(){
     var tr=viewTrip;var st={active:{l:"Active",c:C.grn},planning:{l:"Planning",c:C.wrn},invited:{l:"Invited",c:C.sky},saved:{l:"Planning",c:C.wrn},completed:{l:"Completed",c:C.tx3}};var s=st[tr.status]||st.saved;
     var pct=tr.budget>0&&tr.spent>0?Math.round((tr.spent/tr.budget)*100):0;
+    var expenseItems=tripExpenseLineItems(tr);
+    var expenseItemsTotal=tripExpenseLineItemsTotal(expenseItems);
     return(<div style={{maxWidth:640}}>
       <Fade delay={50}><button onClick={function(){go("dash");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13,marginBottom:16,display:"flex",alignItems:"center",gap:4}}>Back to My Trips</button></Fade>
       <Fade delay={100}><div style={{background:C.surface,borderRadius:18,border:"1px solid "+C.border,overflow:"hidden",marginBottom:20}}>
@@ -6530,6 +6655,23 @@ export default function WanderPlan(){
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,color:C.tx2}}>Budget</span><span style={{fontSize:16,fontWeight:700,color:C.goldT}}>${tr.budget}</span></div>
             {tr.spent>0&&(<div><div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span style={{color:C.tx3}}>${tr.spent} spent</span><span style={{color:pct>90?C.red:pct>70?C.wrn:C.grn}}>{pct}% used</span></div><div style={{height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:Math.min(pct,100)+"%",background:pct>90?C.red:pct>70?C.wrn:C.grn,borderRadius:999}}/></div></div>)}
             {tr.spent===0&&<p style={{fontSize:12,color:C.tx3}}>No spending recorded yet</p>}
+          </div>)}
+          {expenseItems.length>0&&(<div style={{background:C.bg,borderRadius:12,padding:"14px 16px",marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+              <p style={{fontSize:12,fontWeight:600,color:C.tx3}}>EXPENSE BREAKDOWN</p>
+              <p style={{fontSize:12,color:C.tx2}}>{formatMoney(expenseItemsTotal,expenseItems[0].currency||"USD")} total from receipts</p>
+            </div>
+            <div style={{display:"grid",gap:8}}>
+              {expenseItems.map(function(item){
+                return(<div key={item.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",border:"1px solid "+C.border,borderRadius:10,padding:"9px 10px",background:C.surface}}>
+                  <div>
+                    <p style={{fontSize:13,fontWeight:600}}>{item.merchant}</p>
+                    <p style={{fontSize:11,color:C.tx3,textTransform:"capitalize"}}>{item.category}{item.expense_date?(" · "+item.expense_date):""}</p>
+                  </div>
+                  <p style={{fontSize:13,fontWeight:700,color:C.goldT}}>{formatMoney(item.amount,item.currency)}</p>
+                </div>);
+              })}
+            </div>
           </div>)}
           <div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>CREW</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:8,background:C.bg,borderRadius:10,padding:"8px 12px"}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={28}/><div><p style={{fontSize:13,fontWeight:600}}>{user.name||"You"}</p><p style={{fontSize:11,color:C.tx3}}>Organizer</p></div></div>{(tr.members||[]).map(function(m){return(<div key={m.id} style={{display:"flex",alignItems:"center",gap:8,background:C.bg,borderRadius:10,padding:"8px 12px"}}><Avi ini={m.ini} color={m.color} size={28}/><div><p style={{fontSize:13,fontWeight:600}}>{m.ini}</p><p style={{fontSize:11,color:C.tx3}}>Member</p></div></div>);})}</div></div>
           {(tr.status==="planning"||tr.status==="active")&&(<div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>WIZARD PROGRESS</p><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s2,i){var done=i<(tr.step||0);var act=i===(tr.step||0);return(<div key={i} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",background:act?C.gold:done?C.teal+"25":C.bg,color:act?C.bg:done?C.teal:C.tx3,border:act?"none":"1px solid "+C.border}}>{done?"Y":(i+1)}</div>);})}</div><p style={{fontSize:12,color:C.tx3,marginTop:6}}>Step {(tr.step||0)+1} of {WIZ.length}: {WIZ[tr.step||0]||""}</p></div>)}
@@ -6570,12 +6712,7 @@ export default function WanderPlan(){
             </>)}
             {tr.status==="saved"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(Math.max(0,Number(tr.step||0)||0));go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Start Planning</button>}
             {tr.status==="completed"&&<button style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:"transparent",color:C.tx2,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>View Itinerary</button>}
-<<<<<<< copilot/g-05-fix-delete-trip-confirmation
-            <button onClick={function(){handleDeleteTrip(tr,"dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
-=======
-            <button onClick={function(){if(deleteTripWithConfirmation(tr))go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
->>>>>>> main
-          </div>
+            <button onClick={function(){handleDeleteTrip(tr,"dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>          </div>
         </div>
       </div></Fade>
     </div>);
@@ -6611,7 +6748,10 @@ export default function WanderPlan(){
       var tid=String((tr&&tr.id)||currentTripId||"").trim();
       var fallbackDests=(Array.isArray(tr.dests)&&tr.dests.length)?tr.dests:String(tr.destNames||"").split("+").map(function(s){return String(s||"").trim();}).filter(Boolean);
       setCTID(tid);
-      setVT(tr);
+      setVT(function(prev){
+        var base=(prev&&typeof prev==="object")?prev:{};
+        return Object.assign({},base,tr,{step:stepIndex});
+      });
       setNT(function(prev){
         var base=(prev&&typeof prev==="object")?prev:{};
         var nextTrip=Object.assign({},base,tr,{step:stepIndex});
@@ -6619,13 +6759,14 @@ export default function WanderPlan(){
         if(!Array.isArray(nextTrip.members))nextTrip.members=Array.isArray(tr.members)?tr.members:[];
         return nextTrip;
       });
-      setWS(stepIndex);
+      updateLocalWizardStepState(stepIndex,tid);
+      persistWizardStepWithRetry(stepIndex,tid,1);
       go("wizard");
     }
     function submitCompanionCheckin(item,status){
       var activityId=String(item&&item.activity_id||"").trim();
       var normalizedStatus=normalizeCompanionCheckinStatus(status);
-      if(!(activityId&&today&&today.day_number))return;
+      if(!(activityId&&today))return;
       setCompanionActionLoad(true);
       setCompanionErr("");
       saveTripPlanningState({state:{companion_checkins:(function(){
@@ -7366,7 +7507,7 @@ export default function WanderPlan(){
 
   {sc==="analytics"&&(<div>
     <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:24}}>Analytics</h1></Fade>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,200px),1fr))",gap:14,marginBottom:24}}>{[{l:"Trips",v:trips.length,c:C.gold},{l:"Destinations",v:bucket.length,c:C.teal},{l:"Crew",v:crew.length,c:C.sky},{l:"Interests",v:Object.keys(user.interests||{}).length+"/8",c:C.coral}].map(function(s,i){return(<Fade key={i} delay={100+i*50}><div style={{background:C.surface,borderRadius:14,padding:"18px 20px",border:"1px solid "+C.border}}><p style={{fontSize:12,color:C.tx3,marginBottom:6}}>{s.l}</p><p style={{fontWeight:700,fontSize:28,color:s.c}}>{s.v}</p></div></Fade>);})}</div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,200px),1fr))",gap:14,marginBottom:24}}>{[{l:"Trips",v:trips.length,c:C.gold},{l:"Destinations",v:bucket.length,c:C.teal},{l:"Crew",v:crew.length,c:C.sky},{l:"Interests",v:countEnabledInterests(user.interests)+"/"+CATS.length,c:C.coral}].map(function(s,i){return(<Fade key={i} delay={100+i*50}><div style={{background:C.surface,borderRadius:14,padding:"18px 20px",border:"1px solid "+C.border}}><p style={{fontSize:12,color:C.tx3,marginBottom:6}}>{s.l}</p><p style={{fontWeight:700,fontSize:28,color:s.c}}>{s.v}</p></div></Fade>);})}</div>
     {bucket.length>0&&(<Fade delay={300}><div style={{background:C.surface,borderRadius:14,padding:20,border:"1px solid "+C.border}}><h3 style={{fontWeight:700,fontSize:16,marginBottom:14}}>Bucket List Costs</h3>{bucket.map(function(d){return(<div key={d.id} style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,color:C.tx2}}>{d.name}</span><span style={{fontSize:13,fontWeight:600,color:C.goldT}}>~${d.costPerDay||0}/day</span></div>);})}</div></Fade>)}
   </div>)}
 
@@ -8334,9 +8475,9 @@ export default function WanderPlan(){
 
     {wizStep===2&&(<div>
       {ab("Voting Agent",soloTripMode?"Solo trip detected. Voting is skipped here, so you can continue directly with your destination set.":"Each traveler votes thumbs up/down per destination. Continue unlocks only after all votes are in and at least one destination has majority.")}
-      {!soloTripMode&&(<div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}>
+      <div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}>
         <p style={{fontSize:12,color:C.tealL}}>Majority needed: {majorityNeeded} of {destVoteVoters.length}</p>
-      </div>)}
+      </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
         <p style={{fontSize:11,color:C.tx3}}>Debug panel helps compare organizer and crew runtime state on this step.</p>
         <button onClick={function(){setSVD(function(prev){return !prev;});}} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.border,background:showVoteDebug?C.goldDim:C.surface,color:showVoteDebug?C.goldT:C.tx2,fontSize:11,fontWeight:700,cursor:"pointer"}}>
@@ -8432,11 +8573,38 @@ export default function WanderPlan(){
       {ab("Interest Profiler","Your profile interests merged with the group. Green = strong consensus.")}
       {(function(){
         function setInterestForCurrentUser(catId,val){
-          var next=Object.assign({},user.interests||{});
-          next[catId]=val;
-          var nextUser=Object.assign({},user,{interests:next});
-          setUser(nextUser);
-          persistProfileNow(nextUser,currentTripId||tr.id);
+          var nextUserForPersist=null;
+          setUser(function(prev){
+            var nextUser=updateUserInterestSelection(prev,catId,val);
+            nextUserForPersist=nextUser;
+            return nextUser;
+          });
+          if(nextUserForPersist){
+            var myEmail=String(nextUserForPersist&&nextUserForPersist.email||"").trim().toLowerCase();
+            var tok=authToken;
+            function patchMembersInterest(members){
+              return (Array.isArray(members)?members:[]).map(function(m){
+                if(!isCurrentMemberRow(m,tok,myEmail))return m;
+                var profile=(m&&m.profile&&typeof m.profile==="object")?Object.assign({},m.profile):{};
+                profile.interests=(profile.interests&&typeof profile.interests==="object")
+                  ? Object.assign({},profile.interests)
+                  : {};
+                profile.interests[String(catId||"")]=!!val;
+                return Object.assign({},m,{profile:profile});
+              });
+            }
+            setNT(function(prev){
+              if(!prev)return prev;
+              return Object.assign({},prev,{members:patchMembersInterest(prev.members)});
+            });
+            setTrips(function(prev){
+              return (Array.isArray(prev)?prev:[]).map(function(trip){
+                if(!trip||String(trip.id||"")!==String((currentTripId||tr.id||"")).trim())return trip;
+                return Object.assign({},trip,{members:patchMembersInterest(trip.members)});
+              });
+            });
+          }
+          if(nextUserForPersist)persistProfileNow(nextUserForPersist,currentTripId||tr.id);
         }
         return CATS.map(function(cat,i){
           var sum=summarizeInterestConsensus(cat.id,user.interests,tm,tripJoined);
@@ -10867,8 +11035,5 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-<<<<<<< copilot/g-05-fix-delete-trip-confirmation
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
-=======
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
->>>>>>> main
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };=======
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, tripExpenseLineItems, tripExpenseLineItemsTotal, trimPoiErrorDetail, trimRouteErrorDetail, updateUserInterestSelection, voteKeyAliasesFor, wizardSyncIntervalMs };>>>>>>> main
