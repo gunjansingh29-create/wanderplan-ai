@@ -6075,6 +6075,30 @@ export default function WanderPlan(){
     setSigninLoad(false);
   }
 
+  function signOutUser(){
+    setAT("");
+    setPH(false);
+    setUser(emptyUserState());
+    setCrew([]);
+    setBucket([]);
+    setTrips([]);
+    setNT({name:"",dests:[],members:[],step:0});
+    setVT(null);
+    setCTID("");
+    setWSID("");
+    setTF("all");
+    setAuthMode("signin");
+    setSigninPass("");
+    setResetPass("");
+    setAE("");
+    setAI("");
+    setCM("");
+    setTIM("");
+    setTSM("");
+    setHist([]);
+    setSc("signup");
+  }
+
   function updateBucketItemLocal(newItem){
     setBucket(function(p){return upsertBucketItemList(p,newItem);});
   }
