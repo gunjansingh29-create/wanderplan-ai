@@ -99,6 +99,7 @@ import {
   trimPoiErrorDetail,
   trimRouteErrorDetail,
   tripDestinationNamesFromValues,
+  updateUserInterestSelection,
   wizardSyncIntervalMs,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
@@ -3727,5 +3728,24 @@ describe("WanderPlanLLMFlow Step 3 interest consensus", () => {
     expect(summary.yesCount).toBe(0);
     expect(summary.totalCount).toBe(0);
     expect(summary.pct).toBe(0);
+  });
+});
+
+describe("WanderPlanLLMFlow interest selection updates", () => {
+  test("updateUserInterestSelection toggles one category while preserving others", () => {
+    const base = {
+      name: "Tester",
+      email: "tester@example.com",
+      styles: [],
+      interests: { hiking: true, food: false },
+      budget: "moderate",
+      dietary: [],
+    };
+
+    const toNo = updateUserInterestSelection(base, "hiking", false);
+    expect(toNo.interests).toEqual({ hiking: false, food: false });
+
+    const backToYes = updateUserInterestSelection(toNo, "hiking", true);
+    expect(backToYes.interests).toEqual({ hiking: true, food: false });
   });
 });
