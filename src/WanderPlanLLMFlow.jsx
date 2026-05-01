@@ -1951,13 +1951,12 @@ function normalizeBucketLLMResult(parsed){
 function bucketQueryNeedsSpecificChildren(userMsg){
   var q=String(userMsg||"").trim().toLowerCase();
   if(!q)return false;
-  var hasPlaceNoun=/\b(cities|city|towns|town|places|destinations|spots|areas|regions|islands)\b/.test(q);
-  var hasListIntent=/\b(popular|top|best|tourist|must-see|recommend|recommended)\b/.test(q);
-  if(hasListIntent)return true;
-  if(!hasPlaceNoun)return false;
-  if(q.split(/\s+/).filter(Boolean).length>18)return false;
-  return /\b(in|within|around|across|for)\b/.test(q);
-}
+  var anchor=bucketQueryAnchorName(userMsg);
+  if(/\b(?:somewhere|anywhere|ideas?|suggestions?)\b/.test(q)&&anchor){
+    return true;
+  }
+  return /\b(cities|city|towns|town|places|destinations|spots|areas|regions|islands)\b/.test(q) ||
+    /\b(popular|top|best|tourist|must-see|recommend|recommended)\b/.test(q);}
 
 function bucketQueryAnchorName(userMsg){
   var raw=String(userMsg||"").trim().replace(/[?!.,]+$/g,"");
@@ -2045,14 +2044,35 @@ function bucketClarifyMessage(userMsg){
   return "Could you name specific cities, islands, or regions you want to explore?";
 }
 
-function summarizeActiveInterests(interests){
-  var keys=Object.keys((interests&&typeof interests==="object")?interests:{}).filter(function(key){
-    return interests[key]===true;
-  });
-  return keys.slice(0,3).join(", ");
-}
+const BUCKET_REGIONAL_CITY_FALLBACKS = {
+  "south america": [
+    { name: "Buenos Aires", country: "Argentina" },
+    { name: "Cartagena", country: "Colombia" },
+    { name: "Cusco", country: "Peru" },
+  ],
+};
+
+function bucketRegionalFallbackItems(userMsg){
+  var scope=bucketQueryAnchorName(userMsg);
+  if(!scope)return [];
+  var key=canonicalTripDestinationName(scope);
+  var seeded=BUCKET_REGIONAL_CITY_FALLBACKS[key];
+  if(!Array.isArray(seeded)||seeded.length===0)return [];
+  return seeded.map(function(it){
+    return {
+      name:String(it.name||"").trim(),
+      country:String(it.country||"").trim(),
+      bestMonths:[4,5,9,10],
+      costPerDay:150,
+      tags:["Culture","Food"],
+      bestTimeDesc:"Shoulder seasons are usually best for weather and crowds.",
+      costNote:"Estimated default until preferences refine this."
+    };
+  }).filter(function(it){return it.name;});}
 
 async function fallbackExtractDestinations(userMsg){
+  var regionFallback=bucketRegionalFallbackItems(userMsg);
+  if(regionFallback.length>0)return regionFallback;
   try{
     var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
     var arr=(r&&Array.isArray(r.destinations))?r.destinations:[];
@@ -2103,6 +2123,8 @@ async function askLLM(userMsg, budget, history) {
           var retryRefined=refineBucketItemsForQuery(userMsg, retryNormalized.items);
           if(retryRefined.length)return {type:"destinations",items:retryRefined};
         }
+        var regionFallback=bucketRegionalFallbackItems(userMsg);
+        if(regionFallback.length)return {type:"destinations",items:regionFallback};
         return {type:"clarify",message:bucketClarifyMessage(userMsg)};
       }
     }
@@ -2118,6 +2140,33 @@ async function askLLM(userMsg, budget, history) {
   var preferenceSeeds=bucketPreferenceSeedDestinations(userMsg,budget);
   if(preferenceSeeds.length)return {type:"destinations",items:preferenceSeeds};
   return {type: "clarify", message: bucketClarifyMessage(userMsg)};
+}
+
+function destinationTripKey(dest){
+  var nm=String(dest&&dest.name||"").trim().toLowerCase();
+  var ct=String(dest&&dest.country||"").trim().toLowerCase();
+  return nm+"|"+ct;
+}
+
+function upsertBucketItemList(list,newItem){
+  var incoming=(newItem&&typeof newItem==="object")?newItem:null;
+  if(!incoming)return Array.isArray(list)?list.slice():[];
+  var incomingId=String(incoming.id||"").trim();
+  var incomingDestKey=destinationTripKey(incoming);
+  var exists=false;
+  var out=(Array.isArray(list)?list:[]).map(function(item){
+    var itemId=String(item&&item.id||"").trim();
+    var sameId=!!incomingId&&itemId===incomingId;
+    var sameDestination=!!incomingDestKey&&destinationTripKey(item)===incomingDestKey;
+    if(!sameId&&!sameDestination)return item;
+    exists=true;
+    var merged=Object.assign({},item,incoming);
+    if(itemId)merged.id=itemId;
+    else if(incomingId)merged.id=incomingId;
+    return merged;
+  });
+  if(!exists)out.push(incoming);
+  return out;
 }
 
 function buildPoiRequestSignature(destinations, interests, budgetTier, dietary, groupPrefs, routePlanSignature){
@@ -5972,18 +6021,7 @@ export default function WanderPlan(){
   }
 
   function updateBucketItemLocal(newItem){
-    setBucket(function(p){
-      var key=(newItem.id||newItem.name||"").toString();
-      var exists=false;
-      var out=p.map(function(x){if((x.id||x.name||"").toString()===key){exists=true;return newItem;}return x;});
-      return exists?out:out.concat([newItem]);
-    });
-  }
-
-  function destinationTripKey(dest){
-    var nm=String(dest&&dest.name||"").trim().toLowerCase();
-    var ct=String(dest&&dest.country||"").trim().toLowerCase();
-    return nm+"|"+ct;
+    setBucket(function(p){return upsertBucketItemList(p,newItem);});
   }
 
   function applyTripDestinationValuesLocal(nextValues,tripIdOverride){
