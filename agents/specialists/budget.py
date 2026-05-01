@@ -58,6 +58,7 @@ class BudgetAgent(BaseAgent):
         user_msg = message.payload.get("user_message", "")
         entities = message.payload.get("entities", {})
         budget_amount = entities.get("budget_amount")
+        duration = entities.get("duration") or (trip.duration_days if hasattr(trip, "duration_days") else 1)
 
 
         # Example logic for budget calculation (replace with your actual logic)
