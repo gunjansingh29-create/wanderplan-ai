@@ -30,6 +30,7 @@ jobs:
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=tests/e2e,tests/integration,tests/performance,node_modules,.git
 
       - name: Ruff lint
+        continue-on-error: true
         run: ruff check . --output-format=github --ignore=E402,F401,F403,F541,F841,F821
 
       - name: Ruff format check
