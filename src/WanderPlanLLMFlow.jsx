@@ -18,6 +18,7 @@ var BUCKET_DESTINATION_LETTERS_ONLY_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ]/g;
 var BUCKET_DESTINATION_VOWEL_RE=/[aeiouyà-öø-ÿ]/i;
 var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" | "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
 var BUILD_STAMP_DETAIL=String(BUILD_INFO&&BUILD_INFO.builtAt||"unknown");
+var INVALID_BUCKET_DESTINATION_MESSAGE="I couldn't find that destination. Please try a real city, country, or landmark.";
 
 function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"none":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
 function Avi(props){var s=props.size||28;return(<div title={props.name||""} style={{width:s,height:s,borderRadius:999,background:props.color||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:s*.4,fontWeight:700,color:"#fff",flexShrink:0,border:"1.5px solid "+C.surface}}>{props.ini||"?"}</div>);}
