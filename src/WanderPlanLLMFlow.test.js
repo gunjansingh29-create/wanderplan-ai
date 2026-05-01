@@ -45,8 +45,7 @@ import {
   formatMoney,
   historyStateForScreen,
   inclusiveIsoDays,
-  isUuidLike,
-  itineraryRowsScore,
+  isSameBucketDestination,  itineraryRowsScore,
   isCurrentVoteVoter,
   isLikelyBucketDestinationName,
   makeVoteUserId,
@@ -4106,6 +4105,7 @@ import {
   mergeSharedFlightDates,
   mergeVoteRows,
   moveFlightRouteStop,
+  normalizeBucketDestinationItem,
   normalizeDestinationVoteState,
   normalizeDiningPlan,
   normalizePoiStateMap,
@@ -4339,26 +4339,79 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
         { name: "Osaka", country: "Japan" },
       ])
     ).toEqual([
-      { name: "Kyoto", country: "Japan" },
+      {
+        name: "Kyoto",
+        country: "Japan",
+        bestMonths: [3, 4, 5, 10, 11],
+        costPerDay: 120,
+        tags: ["Culture", "Food", "History"],
+        bestTimeDesc:
+          "Late Mar-May for cherry blossoms or Oct-Nov for autumn foliage.",
+        costNote:
+          "Typical spend is about $120-$190/day depending on season and stay type.",
+      },
       { name: "Osaka", country: "Japan" },
     ]);
   });
 
-  test("refineBucketItemsForQuery keeps one primary destination for long-form essay input", () => {
-    const essay = `I spent an unforgettable week in Prague wandering cobblestone streets, watching sunrise over the Vltava River, and crossing Charles Bridge before the crowds arrived. Every evening I returned to Old Town Square, listened to music near the Astronomical Clock, and admired the Gothic facades that glow at dusk. I toured Prague Castle, explored hidden courtyards, and kept finding cozy cafes tucked into side lanes. The city felt intimate, walkable, and full of history. Even after day trips and long walks, Prague remained the clear center of the journey and the place I want to revisit first.`;
+  test("normalizeBucketDestinationItem enriches Kyoto defaults and parses inline country", () => {
     expect(
-      refineBucketItemsForQuery(essay, [
-        { name: "Prague", country: "Czech Republic" },
-        { name: "Czech Republic", country: "" },
-        { name: "Charles Bridge", country: "" },
-        { name: "Vltava River", country: "" },
-        { name: "Prague Castle", country: "" },
-        { name: "Old Town Square", country: "" },
-        { name: "Astronomical Clock", country: "" },
-        { name: "Gothic", country: "" },
-      ])
-    ).toEqual([{ name: "Prague", country: "Czech Republic" }]);
+      normalizeBucketDestinationItem({
+        name: "Kyoto, Japan",
+        country: "",
+        bestMonths: [],
+        costPerDay: 0,
+        tags: [],
+        bestTimeDesc: "",
+        costNote: "",
+      })
+    ).toEqual({
+      name: "Kyoto",
+      country: "Japan",
+      bestMonths: [3, 4, 5, 10, 11],
+      costPerDay: 120,
+      tags: ["Culture", "Food", "History"],
+      bestTimeDesc:
+        "Late Mar-May for cherry blossoms or Oct-Nov for autumn foliage.",
+      costNote:
+        "Typical spend is about $120-$190/day depending on season and stay type.",
+    });
   });
+
+  test("isSameBucketDestination treats blank country as the same destination", () => {
+    expect(
+      isSameBucketDestination(
+        { name: "Kyoto", country: "Japan" },
+        { name: "Kyoto", country: "" }
+      )
+    ).toBe(true);
+    expect(
+      isSameBucketDestination(
+        { name: "Paris", country: "France" },
+        { name: "Paris", country: "United States" }
+      )
+    ).toBe(false);
+  });
+
+  test("refineBucketItemsForQuery deduplicates by destination name when country is missing", () => {
+    expect(
+      refineBucketItemsForQuery("Kyoto", [
+        { name: "Kyoto", country: "Japan" },
+        { name: "Kyoto, Japan", country: "" },
+      ])
+    ).toEqual([
+      {
+        name: "Kyoto",
+        country: "Japan",
+        bestMonths: [3, 4, 5, 10, 11],
+        costPerDay: 120,
+        tags: ["Culture", "Food", "History"],
+        bestTimeDesc:
+          "Late Mar-May for cherry blossoms or Oct-Nov for autumn foliage.",
+        costNote:
+          "Typical spend is about $120-$190/day depending on season and stay type.",
+      },
+    ]);  });
 
   test("bucketClarifyMessage nudges user toward specific places inside scope", () => {
     expect(bucketClarifyMessage("popular tourist cities in Japan")).toMatch(/specific cities, islands, or regions in Japan/i);

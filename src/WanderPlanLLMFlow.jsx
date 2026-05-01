@@ -1910,20 +1910,7 @@ function extractLlmTextContent(data){
 
 function normalizeBucketLLMResult(parsed){
   function toItem(row){
-    if(!row||typeof row!=="object")return null;
-    var name=String(row.name||row.destination||row.city||"").trim();
-    if(!name)return null;
-    if(!isPlausibleBucketDestinationName(name))return null;
-    return {
-      name:name,
-      country:String(row.country||"").trim(),
-      bestMonths:Array.isArray(row.bestMonths)?row.bestMonths:[],
-      costPerDay:Number(row.costPerDay||0)||0,
-      tags:Array.isArray(row.tags)?row.tags:[],
-      bestTimeDesc:String(row.bestTimeDesc||"").trim(),
-      costNote:String(row.costNote||"").trim()
-    };
-  }
+    return normalizeBucketDestinationItem(row);  }
 
   if(!parsed)return null;
   if(parsed.type==="clarify"){
@@ -2019,44 +2006,79 @@ function bucketQueryAnchorName(userMsg){
   return canonicalTripDestinationName(last);
 }
 
-function isLongFormBucketEssay(userMsg){
-  var text=String(userMsg||"").trim();
-  if(!text)return false;
-  var words=text.split(/\s+/).filter(Boolean);
-  return words.length>=60;
-}
+var BUCKET_DESTINATION_OVERRIDES={
+  kyoto:{
+    name:"Kyoto",
+    country:"Japan",
+    bestMonths:[3,4,5,10,11],
+    costPerDay:120,
+    tags:["Culture","Food","History"],
+    bestTimeDesc:"Late Mar-May for cherry blossoms or Oct-Nov for autumn foliage.",
+    costNote:"Typical spend is about $120-$190/day depending on season and stay type."
+  }
+};
 
-function countPhraseOccurrences(text, phrase){
-  var t=String(text||"");
-  var p=String(phrase||"").trim();
-  if(!t||!p)return 0;
-  var esc=p.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
-  var matches=t.match(new RegExp("\\b"+esc+"\\b","gi"));
-  return matches?matches.length:0;
-}
-
-function selectPrimaryBucketItem(userMsg, items){
-  var text=String(userMsg||"");
-  var normalizedText=text.toLowerCase();
-  var best=null;
-  var bestScore=-Infinity;
-  (Array.isArray(items)?items:[]).forEach(function(item){
-    var name=String(item&&item.name||"").trim();
-    if(!name)return;
-    var lower=name.toLowerCase();
-    var mentions=countPhraseOccurrences(text,name);
-    var intentMentions=countPhraseOccurrences(text,"to "+name)+countPhraseOccurrences(text,"in "+name)+countPhraseOccurrences(text,"visit "+name)+countPhraseOccurrences(text,"visiting "+name)+countPhraseOccurrences(text,"explore "+name)+countPhraseOccurrences(text,"trip to "+name)+countPhraseOccurrences(text,"travel to "+name);
-    var landmarkPenalty=/\b(bridge|river|castle|square|clock|monument|museum|cathedral|temple|church|palace|tower|fort|gothic|baroque|art nouveau)\b/i.test(lower)?5:0;
-    var firstIdx=normalizedText.indexOf(lower);
-    var positionBonus=firstIdx>=0?Math.max(0,5000-firstIdx):0;
-    var score=(intentMentions*100)+(mentions*20)+positionBonus-landmarkPenalty;
-    if(score>bestScore){
-      bestScore=score;
-      best=item;
+function splitBucketDestinationNameCountry(rawName, rawCountry){
+  var name=String(rawName||"").trim();
+  var country=String(rawCountry||"").trim();
+  if(name&&!country){
+    var commaParts=name.split(",").map(function(part){return String(part||"").trim();}).filter(Boolean);
+    if(commaParts.length>=2){
+      name=commaParts[0];
+      country=commaParts.slice(1).join(", ");
+    }else{
+      var paren=name.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+      if(paren){
+        name=String(paren[1]||"").trim();
+        country=String(paren[2]||"").trim();
+      }
     }
-  });
-  return best||((Array.isArray(items)&&items.length)?items[0]:null);
+  }
+  return {name:name,country:country};
 }
+
+function bucketDestinationOverrideForName(name){
+  var key=canonicalTripDestinationName(name);
+  if(!key)return null;
+  return BUCKET_DESTINATION_OVERRIDES[key]||null;
+}
+
+function normalizeBucketDestinationItem(row){
+  if(!row||typeof row!=="object")return null;
+  var parsed=splitBucketDestinationNameCountry(row.name||row.destination||row.city||"",row.country||"");
+  var name=String(parsed.name||"").trim();
+  if(!name)return null;
+  var override=bucketDestinationOverrideForName(name);
+  var bestMonths=Array.isArray(row.bestMonths)?row.bestMonths:[];
+  var tags=Array.isArray(row.tags)?row.tags:[];
+  var bestTimeDesc=String(row.bestTimeDesc||"").trim();
+  var costNote=String(row.costNote||"").trim();
+  var costPerDay=Number(row.costPerDay||0)||0;
+  var out={
+    name:String((override&&override.name)||name).trim(),
+    country:String(parsed.country||((override&&override.country)||"")).trim()
+  };
+  var resolvedBestMonths=bestMonths.length?bestMonths:((override&&Array.isArray(override.bestMonths))?override.bestMonths:[]);
+  var resolvedCostPerDay=costPerDay>0?costPerDay:Number((override&&override.costPerDay)||0)||0;
+  var resolvedTags=tags.length?tags:((override&&Array.isArray(override.tags))?override.tags:[]);
+  var resolvedBestTimeDesc=bestTimeDesc||String((override&&override.bestTimeDesc)||"").trim();
+  var resolvedCostNote=costNote||String((override&&override.costNote)||"").trim();
+  if(resolvedBestMonths.length)out.bestMonths=resolvedBestMonths;
+  if(resolvedCostPerDay>0)out.costPerDay=resolvedCostPerDay;
+  if(resolvedTags.length)out.tags=resolvedTags;
+  if(resolvedBestTimeDesc)out.bestTimeDesc=resolvedBestTimeDesc;
+  if(resolvedCostNote)out.costNote=resolvedCostNote;
+  return out;
+}
+
+function isSameBucketDestination(a,b){
+  var aName=canonicalTripDestinationName(a&&a.name||"");
+  var bName=canonicalTripDestinationName(b&&b.name||"");
+  if(!aName||!bName||aName!==bName)return false;
+  var aCountry=canonicalTripDestinationName(a&&a.country||"");
+  var bCountry=canonicalTripDestinationName(b&&b.country||"");
+  if(!aCountry||!bCountry)return true;
+  return aCountry===bCountry;}
 
 function refineBucketItemsForQuery(userMsg, items){
   var list=Array.isArray(items)?items:[];
@@ -2064,20 +2086,32 @@ function refineBucketItemsForQuery(userMsg, items){
   var needsSpecific=bucketQueryNeedsSpecificChildren(userMsg);
   var anchor=bucketQueryAnchorName(userMsg);
   var out=[];
-  var seen={};
   list.forEach(function(it){
-    var name=String(it&&it.name||"").trim();
+    var normalized=normalizeBucketDestinationItem(it);
+    if(!normalized)return;
+    var name=String(normalized.name||"").trim();
     if(!name)return;
-    var country=String(it&&it.country||"").trim();
+    var country=String(normalized.country||"").trim();
     var nameKey=canonicalTripDestinationName(name);
     var countryKey=canonicalTripDestinationName(country);
     if(needsSpecific&&anchor&&nameKey===anchor&&(!countryKey||countryKey===anchor)){
       return;
     }
-    var dedupeKey=nameKey+"|"+countryKey;
-    if(seen[dedupeKey])return;
-    seen[dedupeKey]=1;
-    out.push(it);
+    var duplicateIdx=-1;
+    for(var i=0;i<out.length;i++){
+      if(isSameBucketDestination(out[i], normalized)){
+        duplicateIdx=i;
+        break;
+      }
+    }
+    if(duplicateIdx>=0){
+      var existingCountry=String(out[duplicateIdx]&&out[duplicateIdx].country||"").trim();
+      if(!existingCountry&&country){
+        out[duplicateIdx]=Object.assign({},out[duplicateIdx],normalized);
+      }
+      return;
+    }
+    out.push(normalized);
   });
   if(!needsSpecific&&isLongFormBucketEssay(userMsg)&&out.length>1){
     var primary=selectPrimaryBucketItem(userMsg,out);
@@ -2135,9 +2169,7 @@ async function fallbackExtractDestinations(userMsg){
       var it=arr[i]||{};
       var nm=String(it.name||it.destination||it.city||"").trim();
       if(!nm)continue;
-      if(!isPlausibleBucketDestinationName(nm))continue;
-      out.push({
-        name:nm,
+      var normalized=normalizeBucketDestinationItem({        name:nm,
         country:String(it.country||"").trim(),
         bestMonths:[4,5,9,10],
         costPerDay:150,
@@ -2145,6 +2177,8 @@ async function fallbackExtractDestinations(userMsg){
         bestTimeDesc:"Shoulder seasons are usually best for weather and crowds.",
         costNote:"Estimated default until preferences refine this."
       });
+      if(!normalized)continue;
+      out.push(normalized);
     }
     return out;
   }catch(e){
@@ -6466,7 +6500,6 @@ export default function WanderPlan(){
     askLLM(msg,user.budget,blChat).then(function(res){
       if(res&&res.type==="destinations"&&Array.isArray(res.items)&&res.items.length){
         var proposed=[];
-        var proposedSeen={};
         for(var k=0;k<res.items.length;k++){
           var it0=res.items[k]||{};
           var n0=String(it0.name||"").trim();
