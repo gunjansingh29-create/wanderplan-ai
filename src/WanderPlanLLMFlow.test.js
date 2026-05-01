@@ -77,6 +77,7 @@ import {
   readVoteForVoter,
   receiptItemsTotal,
   refineBucketItemsForQuery,
+  resolveBucketKeywordDestinations,
   resolveAvailabilityDraftWindow,
   resolveBudgetTier,
   resolveTripBudgetTier,
