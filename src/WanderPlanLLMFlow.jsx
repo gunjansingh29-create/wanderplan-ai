@@ -435,6 +435,30 @@ function receiptItemsTotal(items){
   },0);
 }
 
+function tripExpenseLineItems(trip){
+  var sourceExpenses=(trip&&Array.isArray(trip.expenses)&&trip.expenses.length)?trip.expenses:(trip&&Array.isArray(trip.recent_expenses)?trip.recent_expenses:[]);
+  return sourceExpenses.map(function(item,idx){
+    var amount=Number(item&&item.amount||0)||0;
+    var merchant=String(item&&item.merchant||item&&item.name||"").trim();
+    var category=String(item&&item.category||"").trim();
+    var date=String(item&&item.expense_date||item&&item.date||"").trim();
+    return {
+      id:String(item&&item.id||("expense-"+idx)),
+      merchant:merchant||("Expense "+(idx+1)),
+      category:category||"misc",
+      expense_date:date,
+      amount:amount,
+      currency:String(item&&item.currency||trip&&trip.currency||"USD").trim().toUpperCase()||"USD"
+    };
+  }).filter(function(item){
+    return item.amount>0;
+  });
+}
+
+function tripExpenseLineItemsTotal(items){
+  return receiptItemsTotal(items);
+}
+
 function defaultExpenseSplitMemberIds(members,currentUserId){
   var out=[];
   (Array.isArray(members)?members:[]).forEach(function(member){
@@ -4443,7 +4467,10 @@ export default function WanderPlan(){
           dates:"",
           days:Number(t.duration_days||0)||0,
           budget:0,
-          spent:0
+          spent:0,
+          expenses:Array.isArray(t.expenses)?t.expenses:[],
+          recent_expenses:Array.isArray(t.recent_expenses)?t.recent_expenses:[],
+          currency:String(t&&t.expense_summary&&t.expense_summary.currency||"USD").trim().toUpperCase()||"USD"
         };
       });
       var planningMetaRows=await Promise.all((mapped||[]).map(async function(tripItem){
@@ -4498,7 +4525,10 @@ export default function WanderPlan(){
             dates:t.dates||p.dates||"",
             days:Math.max(0,Number(t.days||p.days)||0),
             budget:Number(p.budget||0)||0,
-            spent:Number(p.spent||0)||0
+            spent:Number(p.spent||0)||0,
+            expenses:(Array.isArray(t.expenses)&&t.expenses.length)?t.expenses:(Array.isArray(p.expenses)?p.expenses:[]),
+            recent_expenses:(Array.isArray(t.recent_expenses)&&t.recent_expenses.length)?t.recent_expenses:(Array.isArray(p.recent_expenses)?p.recent_expenses:[]),
+            currency:t.currency||p.currency||"USD"
           });
         });
         var syncedIds={};synced.forEach(function(t){syncedIds[t.id]=1;});
@@ -6519,6 +6549,12 @@ export default function WanderPlan(){
         days:7,
         budget:2800,
         spent:2610,
+        expenses:[
+          {id:"seed-expense-1",merchant:"Canava Seaside Suites",category:"accommodation",amount:1220,currency:"USD",expense_date:"2025-09-03"},
+          {id:"seed-expense-2",merchant:"Ammoudi Dining",category:"dining",amount:540,currency:"USD",expense_date:"2025-09-05"},
+          {id:"seed-expense-3",merchant:"Sunset Caldera Cruise",category:"activities",amount:430,currency:"USD",expense_date:"2025-09-06"},
+          {id:"seed-expense-4",merchant:"Island Transfers",category:"transport",amount:420,currency:"USD",expense_date:"2025-09-08"}
+        ],
         isSeed:true
       });
     }
@@ -6568,6 +6604,8 @@ export default function WanderPlan(){
   {sc==="trip_detail"&&viewTrip&&(function(){
     var tr=viewTrip;var st={active:{l:"Active",c:C.grn},planning:{l:"Planning",c:C.wrn},invited:{l:"Invited",c:C.sky},saved:{l:"Planning",c:C.wrn},completed:{l:"Completed",c:C.tx3}};var s=st[tr.status]||st.saved;
     var pct=tr.budget>0&&tr.spent>0?Math.round((tr.spent/tr.budget)*100):0;
+    var expenseItems=tripExpenseLineItems(tr);
+    var expenseItemsTotal=tripExpenseLineItemsTotal(expenseItems);
     return(<div style={{maxWidth:640}}>
       <Fade delay={50}><button onClick={function(){go("dash");}} style={{background:"none",border:"none",color:C.tx3,cursor:"pointer",fontSize:13,marginBottom:16,display:"flex",alignItems:"center",gap:4}}>Back to My Trips</button></Fade>
       <Fade delay={100}><div style={{background:C.surface,borderRadius:18,border:"1px solid "+C.border,overflow:"hidden",marginBottom:20}}>
@@ -6583,6 +6621,23 @@ export default function WanderPlan(){
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,color:C.tx2}}>Budget</span><span style={{fontSize:16,fontWeight:700,color:C.goldT}}>${tr.budget}</span></div>
             {tr.spent>0&&(<div><div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span style={{color:C.tx3}}>${tr.spent} spent</span><span style={{color:pct>90?C.red:pct>70?C.wrn:C.grn}}>{pct}% used</span></div><div style={{height:6,background:C.border,borderRadius:999}}><div style={{height:"100%",width:Math.min(pct,100)+"%",background:pct>90?C.red:pct>70?C.wrn:C.grn,borderRadius:999}}/></div></div>)}
             {tr.spent===0&&<p style={{fontSize:12,color:C.tx3}}>No spending recorded yet</p>}
+          </div>)}
+          {expenseItems.length>0&&(<div style={{background:C.bg,borderRadius:12,padding:"14px 16px",marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+              <p style={{fontSize:12,fontWeight:600,color:C.tx3}}>EXPENSE BREAKDOWN</p>
+              <p style={{fontSize:12,color:C.tx2}}>{formatMoney(expenseItemsTotal,expenseItems[0].currency||"USD")} total from receipts</p>
+            </div>
+            <div style={{display:"grid",gap:8}}>
+              {expenseItems.map(function(item){
+                return(<div key={item.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",border:"1px solid "+C.border,borderRadius:10,padding:"9px 10px",background:C.surface}}>
+                  <div>
+                    <p style={{fontSize:13,fontWeight:600}}>{item.merchant}</p>
+                    <p style={{fontSize:11,color:C.tx3,textTransform:"capitalize"}}>{item.category}{item.expense_date?(" · "+item.expense_date):""}</p>
+                  </div>
+                  <p style={{fontSize:13,fontWeight:700,color:C.goldT}}>{formatMoney(item.amount,item.currency)}</p>
+                </div>);
+              })}
+            </div>
           </div>)}
           <div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>CREW</p><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:8,background:C.bg,borderRadius:10,padding:"8px 12px"}}><Avi ini={user.name?user.name.charAt(0):"Y"} color={C.gold} size={28}/><div><p style={{fontSize:13,fontWeight:600}}>{user.name||"You"}</p><p style={{fontSize:11,color:C.tx3}}>Organizer</p></div></div>{(tr.members||[]).map(function(m){return(<div key={m.id} style={{display:"flex",alignItems:"center",gap:8,background:C.bg,borderRadius:10,padding:"8px 12px"}}><Avi ini={m.ini} color={m.color} size={28}/><div><p style={{fontSize:13,fontWeight:600}}>{m.ini}</p><p style={{fontSize:11,color:C.tx3}}>Member</p></div></div>);})}</div></div>
           {(tr.status==="planning"||tr.status==="active")&&(<div style={{marginBottom:16}}><p style={{fontSize:12,fontWeight:600,color:C.tx3,marginBottom:8}}>WIZARD PROGRESS</p><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{WIZ.map(function(s2,i){var done=i<(tr.step||0);var act=i===(tr.step||0);return(<div key={i} style={{width:28,height:28,borderRadius:7,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",background:act?C.gold:done?C.teal+"25":C.bg,color:act?C.bg:done?C.teal:C.tx3,border:act?"none":"1px solid "+C.border}}>{done?"Y":(i+1)}</div>);})}</div><p style={{fontSize:12,color:C.tx3,marginTop:6}}>Step {(tr.step||0)+1} of {WIZ.length}: {WIZ[tr.step||0]||""}</p></div>)}
@@ -10947,4 +11002,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
+<<<<<<< copilot/fix-no-expense-breakdown-completed-trip
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, tripExpenseLineItems, tripExpenseLineItemsTotal, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+=======
 export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, updateUserInterestSelection, voteKeyAliasesFor, wizardSyncIntervalMs };
+>>>>>>> main

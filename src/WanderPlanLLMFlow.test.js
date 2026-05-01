@@ -99,6 +99,8 @@ import {
   summarizePoiVotes,
   summarizeStayVotes,
   stayPreviewLink,
+  tripExpenseLineItems,
+  tripExpenseLineItemsTotal,
   trimPoiErrorDetail,
   trimRouteErrorDetail,
   tripDestinationNamesFromValues,
@@ -1676,6 +1678,25 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(companionCheckinMeta("done").label).toBe("Done");
   });
 
+  test("trip expense helpers normalize line items and reconcile totals", () => {
+    const lineItems = tripExpenseLineItems({
+      expenses: [
+        { merchant: "Hotel", amount: "1200", category: "accommodation", currency: "USD" },
+        { name: "Dinner", amount: 340, category: "dining", currency: "USD" },
+        { merchant: "Ignored", amount: 0 },
+      ],
+    });
+    expect(lineItems).toHaveLength(2);
+    expect(lineItems[0]).toEqual(
+      expect.objectContaining({
+        merchant: "Hotel",
+        amount: 1200,
+        category: "accommodation",
+      })
+    );
+    expect(tripExpenseLineItemsTotal(lineItems)).toBe(1540);
+  });
+
   test("resolveBudgetTier prefers trip member profile budget tier", () => {
     expect(
       resolveBudgetTier(
@@ -2416,6 +2437,68 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedUser.email).toBe("crew@test.com");
     expect(scopedBucket).toHaveLength(1);
     expect(scopedBucket[0].name).toBe("Kyoto");
+  });
+
+  test("completed Santorini trip detail shows expense line-item breakdown matching spent total", async () => {
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({
+          accessToken: "test-token:seed-user",
+          name: "Seed User",
+        });
+      }
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Seed User",
+            travel_styles: ["friends"],
+            interests: { food: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({ peers: [] });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({ trips: [] });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({ invites: [] });
+      }
+      return jsonResponse({});
+    });
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "seed@test.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => expect(screen.queryByText("Santorini Celebration")).not.toBeNull());
+    fireEvent.click(screen.getByText("Santorini Celebration"));
+
+    await waitFor(() => expect(screen.queryByText("EXPENSE BREAKDOWN")).not.toBeNull());
+    expect(screen.queryByText("Canava Seaside Suites")).not.toBeNull();
+    expect(screen.queryByText("Ammoudi Dining")).not.toBeNull();
+    expect(screen.queryByText("Sunset Caldera Cruise")).not.toBeNull();
+    expect(screen.queryByText("Island Transfers")).not.toBeNull();
+    expect(
+      screen.queryByText((text) => /2[,]?610\.00 total from receipts/.test(text))
+    ).not.toBeNull();
+    expect(screen.queryByText("$2610 spent")).not.toBeNull();
   });
 
   test("bucket send dedupes Kyoto when LLM omits country and uses fallback metadata", async () => {
