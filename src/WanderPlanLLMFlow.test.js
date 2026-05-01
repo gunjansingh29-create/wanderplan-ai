@@ -177,9 +177,21 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
   test("normalizePersonalBucketItems keeps backend ids on personal bucket entries", () => {
     expect(
       normalizePersonalBucketItems([
-        { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
+        { id: "bucket-1", destination: "Kyoto" },
       ])
-    ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+    ).toEqual([
+      {
+        id: "bucket-1",
+        destination: "Kyoto",
+        name: "Kyoto",
+        country: "",
+        bestMonths: [],
+        costPerDay: 0,
+        tags: [],
+        bestTimeDesc: "",
+        costNote: "",
+      },
+    ]);
   });
 
   test("shouldTreatBucketItemsAsSameDestination matches same city even when one side misses country", () => {
