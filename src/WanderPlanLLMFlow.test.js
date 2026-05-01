@@ -1936,6 +1936,23 @@ describe("WanderPlanLLMFlow vote identity helpers", () => {
     expect(summary.majorityWin).toBe(true);
   });
 
+  test("summarizeDestinationVotes counts solo 1 of 1 yes vote as complete majority", () => {
+    const voters = [{ id: "solo-user" }];
+    const summary = summarizeDestinationVotes(
+      {
+        "dest:kyoto": { "solo-user": "up" },
+      },
+      { name: "Kyoto", vote_key: "dest:kyoto" },
+      voters,
+      1
+    );
+    expect(summary.up).toBe(1);
+    expect(summary.down).toBe(0);
+    expect(summary.votedCount).toBe(1);
+    expect(summary.allVoted).toBe(true);
+    expect(summary.majorityWin).toBe(true);
+  });
+
   test("summarizeDestinationVotes treats split votes as complete but not majority", () => {
     const voters = [{ id: "user-a" }, { id: "user-b" }];
     const summary = summarizeDestinationVotes(
@@ -3277,7 +3294,7 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     window.localStorage.clear();
   });
 
-  test("allows direct destination entry without bucket list and skips destination voting for solo trips", async () => {
+  test("allows direct destination entry without bucket list and shows 1 of 1 majority guidance for solo trips", async () => {
     global.fetch = jest.fn((url, options) => {
       const method = String((options && options.method) || "GET").toUpperCase();
       const path = new URL(String(url), "https://example.test").pathname;
@@ -3355,7 +3372,7 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
         )
       ).not.toBeNull()
     );
-    expect(screen.queryByText(/Majority needed:/)).toBeNull();
+    expect(screen.queryByText("Majority needed: 1 of 1")).not.toBeNull();
   });
 
   test("persists step 1 destination removals for saved trips", async () => {
