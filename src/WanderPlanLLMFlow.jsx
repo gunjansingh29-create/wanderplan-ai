@@ -945,7 +945,8 @@ function wizardSyncIntervalMs(stepNum){
 }
 
 function normalizeWizardStepIndex(stepNum, orderVersion){
-  var step=Math.min(Math.max(0,Number(stepNum)||0),Math.max(WIZ.length-1,0));
+  var maxStep=Math.max(WIZ.length-1,0);
+  var step=Math.min(Math.max(0,Number(stepNum)||0),maxStep);
   var version=Math.max(0,Number(orderVersion)||0);
   if(version<2){
     if(step===9)step=12;
@@ -955,7 +956,7 @@ function normalizeWizardStepIndex(stepNum, orderVersion){
     else if(step===13)step=11;
   }
   if(version<3&&step>=5)step+=1;
-  return step;
+  return Math.min(Math.max(0,step),maxStep);
 }
 
 function inclusiveIsoDays(startIso, endIso){
