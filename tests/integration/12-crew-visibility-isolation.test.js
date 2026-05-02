@@ -216,3 +216,5 @@ describe('12 — Crew Visibility Isolation', () => {
     expect(bobEmailsAfterReinvite.has(SEED_USERS.eve.email)).toBe(true);
   });
 });
+
+// CI trigger
