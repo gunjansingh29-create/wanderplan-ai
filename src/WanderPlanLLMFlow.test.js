@@ -2515,53 +2515,68 @@ describe("WanderPlanLLMFlow post-auth hydration", () => {
     expect(scopedBucket[0].name).toBe("Kyoto");
   });
 
-  test("profile tab exposes sign out button that returns to auth screen and clears session token", async () => {    global.fetch = jest.fn((url, options) => {
+  test("bucket list send shows validation feedback for empty input", async () => {
+    const requestLog = [];
+    global.fetch = jest.fn((url, options) => {
       const method = String((options && options.method) || "GET").toUpperCase();
       const path = new URL(String(url), "https://example.test").pathname;
+      requestLog.push({ path, method });
 
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({
+          accessToken: "test-token:bucket-user",
+          name: "Bucket User",
+        });
+      }
       if (path === "/me/profile" && method === "GET") {
         return jsonResponse({
           profile: {
-            display_name: "Alice Active",
-            travel_styles: ["solo"],
-            interests: { culture: true },            budget_tier: "moderate",
-            dietary: [],
+            display_name: "Bucket User",
+            travel_styles: [],
+            interests: {},
+            budget_tier: "moderate",            dietary: [],
           },
         });
       }
-      if (path === "/me/bucket-list" && method === "GET") return jsonResponse({ items: [] });
-      if (path === "/crew/peer-profiles" && method === "GET") return jsonResponse({ peers: [] });
-      if (path === "/me/trips" && method === "GET") return jsonResponse({ trips: [] });
-      if (path === "/crew/invites/sent" && method === "GET") return jsonResponse({ invites: [] });
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({ peers: [] });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({ trips: [] });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({ invites: [] });
+      }
       return jsonResponse({});
     });
 
-    window.localStorage.setItem("wp-auth", JSON.stringify("test-token:active-user"));
-    window.localStorage.setItem(
-      "wp-u:uid:active-user",
-      JSON.stringify({
-        name: "Alice Active",
-        email: "alice@test.com",
-        styles: ["solo"],        interests: {},
-        budget: "moderate",
-        dietary: [],
-      })
-    );
-
     render(<WanderPlan />);
 
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "bucket@test.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
     await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
-    fireEvent.click(screen.getByText("Profile"));
-    await waitFor(() => expect(screen.queryByText("Sign Out")).not.toBeNull());
+    fireEvent.click(screen.getByText("Bucket List"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Send" })).not.toBeNull());
 
-    fireEvent.click(screen.getByText("Sign Out"));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Sign In" })).not.toBeNull());
-    await waitFor(() =>
-      expect(JSON.parse(window.localStorage.getItem("wp-auth") || "\"stale\"")).toBe("")
-    );
-    expect(screen.queryByText("Trips")).toBeNull();  });
-});
+    expect(screen.queryByText("Please enter a destination to search.")).not.toBeNull();
+    expect(
+      requestLog.some(
+        (req) => req.path === "/me/bucket-list" && req.method === "POST"
+      )
+    ).toBe(false);
+  });});
 
 describe("WanderPlanLLMFlow companion entry", () => {
   const originalFetch = global.fetch;

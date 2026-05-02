@@ -6748,9 +6748,14 @@ export default function WanderPlan(){
   }
 
   function sendBL(){
-    if(!blIn.trim()||blLoad||blInFlightRef.current)return;var msg=blIn.trim();setBLI("");
-    blInFlightRef.current=true;
-    setBC(function(p){return p.concat([{from:"user",text:msg}]);});setBLL(true);
+    if(blLoad)return;
+    if(!blIn.trim()){
+      setBM("Please enter a destination to search.");
+      setTimeout(function(){setBM("");},2200);
+      return;
+    }
+    setBM("");
+    var msg=blIn.trim();setBLI("");    setBC(function(p){return p.concat([{from:"user",text:msg}]);});setBLL(true);
     askLLM(msg,user.budget,blChat).then(function(res){
       if(res&&res.type==="destinations"&&Array.isArray(res.items)&&res.items.length){
         var proposed=[];
