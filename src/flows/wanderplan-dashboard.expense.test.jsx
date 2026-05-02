@@ -66,3 +66,5 @@ describe("Trip detail expense management", () => {
     expect(screen.queryByText("Boat Tour")).not.toBeInTheDocument();
   });
 });
+
+// CI trigger
