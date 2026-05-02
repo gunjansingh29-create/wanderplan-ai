@@ -3634,7 +3634,6 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     });
   });
 
-<<<<<<< copilot/fix-wizard-progress-step-counter
   test("caps completed wizard progress display at the final step", async () => {
     const tripId = "77777777-7777-4777-8777-777777777777";
     global.fetch = jest.fn((url, options) => {
@@ -3718,11 +3717,7 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     expect(screen.queryByText(/Step 17 of 16/)).toBeNull();
   });
 
-  test("persists the step 6 route plan before continuing", async () => {
-=======
-  test("Pick for Trip routes back to wizard step 1 for the active planning trip", async () => {
->>>>>>> main
-    const putBodies = [];
+  test("persists the step 6 route plan before continuing", async () => {    const putBodies = [];
     const tripId = "44444444-4444-4444-8444-444444444444";
 
     global.fetch = jest.fn((url, options) => {
@@ -6960,6 +6955,7 @@ describe("WanderPlanLLMFlow analytics stats", () => {
   });
 });
 
+=======
 describe("WanderPlanLLMFlow crew management", () => {
   const originalFetch = global.fetch;
 
@@ -7082,7 +7078,6 @@ describe("WanderPlanLLMFlow crew management", () => {
     ).not.toBeNull();
   });
 });
-
 describe("WanderPlanLLMFlow companion entry", () => {
   const originalFetch = global.fetch;
 
