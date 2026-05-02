@@ -366,7 +366,8 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      const candidates = Array.isArray(res?.destinations) ? res.destinations : [];
+      const llmUsed = !!res?.llm_used && String(res?.parse_source || "").toLowerCase() === "llm";
+      const candidates = llmUsed && Array.isArray(res?.destinations) ? res.destinations : [];
       const mapped = candidates
         .map((row) => {
           const name = typeof row === "string" ? row : row?.name;
@@ -389,14 +390,14 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
       });
       return {
         extracted: deduped,
-        llmUsed: !!res?.llm_used,
+        llmUsed,
         llmRawText: String(res?.llm_raw_text || ""),
         parseSource: String(res?.parse_source || ""),
         llmError: String(res?.llm_error || ""),
       };
     } catch {
       return {
-        extracted: extractDestinations(text),
+        extracted: [],
         llmUsed: false,
         llmRawText: "",
         parseSource: "frontend_fallback",
