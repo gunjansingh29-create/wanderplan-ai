@@ -7935,42 +7935,43 @@ export default function WanderPlan(){
     {newTrip.name&&newTrip.dests.length>0&&(<Fade delay={250}><button onClick={function(){
       var localTrip=Object.assign({},newTrip,{step:0,id:"trip"+Date.now(),status:"planning"});
       var destNames=tripDestinationNamesFromValues(newTrip.dests,bucket);
+      function startWizardForTrip(resolvedTripId){
+        var activeTripId=String(resolvedTripId||"").trim();
+        if(activeTripId&&destNames.length>0){
+          apiJson("/trips/"+activeTripId+"/destinations",{method:"PUT",body:{destinations:destNames,votes:{}}},authToken).catch(function(){});
+        }
+        if(activeTripId&&newTrip.members&&newTrip.members.length>0){
+          inviteSelectedMembersToTrip(activeTripId,newTrip.members.filter(function(m){return isTripInvitePending(m);}));
+        }
+        var trip=Object.assign({},localTrip,{id:activeTripId||localTrip.id,name:newTrip.name,dests:destNames.slice(),destNames:destNames.join(" + "),status:"planning"});
+        setCTID(activeTripId||"");
+        setTrips(function(p){return p.concat([trip]);});
+        setNT(trip);
+        setWS(0);go("wizard");
+      }
+      function createTripFallback(){
+        return apiJson("/trips",{method:"POST",body:{name:newTrip.name,duration_days:10,destination_hint:destNames[0]||""}},authToken).then(function(cr){
+          var createdTripId=(cr&&cr.trip&&cr.trip.id)||"";
+          startWizardForTrip(createdTripId);
+        }).catch(function(){
+          startWizardForTrip("");
+        });
+      }
       if(authToken){
         apiJson("/wizard/sessions",{method:"POST",body:{trip_name:newTrip.name,duration_days:10,initial_state:{selected_destinations:destNames}}},authToken).then(function(r){
-          if(r&&r.session){
-            setWSID(r.session.id||"");
-            setCTID(r.session.trip_id||"");
-            if(r.session.trip_id&&destNames.length>0){
-              apiJson("/trips/"+r.session.trip_id+"/destinations",{method:"PUT",body:{destinations:destNames,votes:{}}},authToken).catch(function(){});
-            }
-            if(r.session.trip_id&&newTrip.members&&newTrip.members.length>0){
-              inviteSelectedMembersToTrip(r.session.trip_id,newTrip.members.filter(function(m){return isTripInvitePending(m);}));
-            }
-            var trip=Object.assign({},localTrip,{id:r.session.trip_id||localTrip.id,name:newTrip.name,dests:destNames.slice(),destNames:destNames.join(" + "),status:"planning"});
-            setTrips(function(p){return p.concat([trip]);});
-            setNT(trip);
-            setWS(0);go("wizard");
+          if(!(r&&r.session))return createTripFallback();
+          setWSID(r.session.id||"");
+          var sessionTripId=String(r.session.trip_id||"").trim();
+          if(sessionTripId){
+            startWizardForTrip(sessionTripId);
+            return null;
           }
+          return createTripFallback();
         }).catch(function(){
-          apiJson("/trips",{method:"POST",body:{name:newTrip.name,duration_days:10,destination_hint:destNames[0]||""}},authToken).then(function(cr){
-            var createdTripId=(cr&&cr.trip&&cr.trip.id)||"";
-            if(createdTripId&&destNames.length>0){
-              apiJson("/trips/"+createdTripId+"/destinations",{method:"PUT",body:{destinations:destNames,votes:{}}},authToken).catch(function(){});
-            }
-            if(createdTripId&&newTrip.members&&newTrip.members.length>0){
-              inviteSelectedMembersToTrip(createdTripId,newTrip.members.filter(function(m){return isTripInvitePending(m);}));
-            }
-            var trip=Object.assign({},localTrip,{id:createdTripId||localTrip.id,name:newTrip.name,dests:destNames.slice(),destNames:destNames.join(" + "),status:"planning"});
-            setCTID(createdTripId||"");
-            setTrips(function(p){return p.concat([trip]);});
-            setNT(trip);
-            setWS(0);go("wizard");
-          }).catch(function(){
-            setTrips(function(p){return p.concat([localTrip]);});setNT(localTrip);setWS(0);go("wizard");
-          });
+          createTripFallback();
         });
       }else{
-        setTrips(function(p){return p.concat([localTrip]);});setNT(localTrip);setWS(0);go("wizard");
+        startWizardForTrip("");
       }
     }} style={{width:"100%",marginTop:14,fontSize:15,fontWeight:600,color:C.bg,padding:"14px",borderRadius:12,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Start Planning</button></Fade>)}
   </div>)}
