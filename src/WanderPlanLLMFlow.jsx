@@ -8874,12 +8874,21 @@ export default function WanderPlan(){
     {wizStep===1&&(<div>
       {ab("Trip Coordinator",tm.length>0?"Selected members are invited to this specific trip. Waiting for at least 1 acceptance before continuing.":"No trip members selected yet. Select crew members below, or continue solo.")}
       <div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
+        <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:8}}>INVITE NEW CREW BY EMAIL</p>
+        <div style={{display:"flex",gap:8}}>
+          <input value={invEmail} onChange={function(e){setIE(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){sendCrewInvite({selectForTrip:true});}}} placeholder="friend@email.com" style={{flex:1,padding:"10px 12px",borderRadius:9,background:C.surface,border:"1.5px solid "+C.border,fontSize:13,color:"#fff"}}/>
+          <button onClick={function(){sendCrewInvite({selectForTrip:true});}} style={{padding:"9px 14px",borderRadius:9,border:"none",background:C.gold,color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>Invite by Email</button>
+        </div>
+        {crewMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:8}}>{crewMsg}</p>}
+        {crewInviteLinkUI}
+      </div>
+      <div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8}}>
           <p style={{fontSize:12,fontWeight:700,color:C.tx3}}>SELECT FROM MY CREW ({step2CrewPool.length})</p>
           <button onClick={function(){refreshCrewFromBackend();}} style={{padding:"5px 10px",borderRadius:8,border:"1px solid "+C.border,background:C.surface,color:C.tx2,fontSize:11,fontWeight:600,cursor:"pointer"}}>Reload My Crew</button>
         </div>
         {pendingCrewCount>0&&(<p style={{fontSize:11,color:C.wrn,marginBottom:8}}>{pendingCrewCount} crew member{pendingCrewCount>1?"s":""} not yet registered - they must sign up before being invited to a trip.</p>)}
-        {step2CrewPool.length===0?(<p style={{fontSize:12,color:C.tx3}}>{pendingCrewCount>0?"No registered crew members yet. Waiting for pending invites to be accepted.":"No crew members available. Invite people in My Crew first."}</p>):(
+        {step2CrewPool.length===0?(<p style={{fontSize:12,color:C.tx3}}>{pendingCrewCount>0?"No registered crew members yet. Waiting for pending invites to be accepted.":"No crew members available. Invite people by email above or from My Crew first."}</p>):(
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
             {step2CrewPool.map(function(m){
               var inTrip=findTripMemberFor(m);
