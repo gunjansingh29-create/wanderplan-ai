@@ -19,6 +19,12 @@ const sh = {
   md:"0 4px 16px rgba(26,26,46,0.07),0 2px 6px rgba(26,26,46,0.03)",
   lg:"0 12px 40px rgba(26,26,46,0.1),0 4px 12px rgba(26,26,46,0.05)",
 };
+function nextDashboardExpenseId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `expense-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GLOBAL CSS
@@ -152,6 +158,20 @@ function writeJsonStorage(key, value) {
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+export function duplicateCrewInviteMessageForStatus(status) {
+  return String(status || "").trim().toLowerCase() === "joined"
+    ? "Already a member."
+    : "This person is already invited.";
+}
+
+export function findCrewMemberByEmail(members = [], email = "") {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return null;
+  return (
+    members.find((member) => normalizeEmail(member?.email) === normalizedEmail) || null
+  );
 }
 
 function defaultNameFromEmail(email) {
@@ -293,6 +313,16 @@ async function connectCrewMembers(ownerEmail, invitedEmail, ownerName = "Travele
   const links = readJsonStorage(LOCAL_CREW_LINKS_KEY);
   const ownerLinks = new Set(Array.isArray(links[owner]) ? links[owner].map(normalizeEmail) : []);
   const inviteeLinks = new Set(Array.isArray(links[invitee]) ? links[invitee].map(normalizeEmail) : []);
+  const isAlreadyLinked = ownerLinks.has(invitee) || inviteeLinks.has(owner);
+  if (isAlreadyLinked) {
+    const authUsers = readJsonStorage(LOCAL_AUTH_USERS_KEY);
+    const profilesByEmail = readJsonStorage(LOCAL_PROFILE_BY_EMAIL_KEY);
+    const hasAccount = Boolean(authUsers[invitee]) || Boolean(profilesByEmail[invitee]);
+    return {
+      ok: false,
+      error: duplicateCrewInviteMessageForStatus(hasAccount ? "Joined" : "Invited"),
+    };
+  }
   ownerLinks.add(invitee);
   inviteeLinks.add(owner);
   links[owner] = [...ownerLinks];
@@ -854,6 +884,66 @@ function BudgetTab({ trip }) {
   ];
   const totalSpent = categories.reduce((s,c)=>s+c.spent,0);
   const totalBudget = categories.reduce((s,c)=>s+c.allocated,0);
+  const expenseCategories = ["Transport", "Accommodation", "Food", "Activities"];
+  const [expenses, setExpenses] = useState([
+    { id:1, name:"Airport Shuttle", category:"Transport", amount:42 },
+    { id:2, name:"Hotel Maui", category:"Accommodation", amount:220 },
+    { id:3, name:"Sunset Dinner", category:"Food", amount:68 },
+    { id:4, name:"Boat Tour", category:"Activities", amount:95 },
+  ]);
+  const [expenseFilter, setExpenseFilter] = useState("All");
+  const [expenseDraft, setExpenseDraft] = useState({ name:"", category:"Transport", amount:"" });
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const runningExpenseTotal = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  const visibleExpenses =
+    expenseFilter === "All"
+      ? expenses
+      : expenses.filter((expense) => expense.category === expenseFilter);
+
+  const resetExpenseDraft = () => {
+    setExpenseDraft({ name:"", category:"Transport", amount:"" });
+    setEditingExpenseId(null);
+  };
+
+  const submitExpense = () => {
+    const name = String(expenseDraft.name || "").trim();
+    const amount = Number.parseFloat(expenseDraft.amount);
+    const category = expenseCategories.includes(expenseDraft.category) ? expenseDraft.category : "Transport";
+    if (!name || !Number.isFinite(amount) || amount <= 0) return;
+    const normalizedAmount = Number(amount.toFixed(2));
+
+    if (editingExpenseId !== null) {
+      setExpenses((prev) =>
+        prev.map((expense) =>
+          expense.id === editingExpenseId
+            ? { ...expense, name, category, amount: normalizedAmount }
+            : expense
+        )
+      );
+      resetExpenseDraft();
+      return;
+    }
+
+    setExpenses((prev) => [
+      ...prev,
+      { id: nextDashboardExpenseId(), name, category, amount: normalizedAmount },
+    ]);
+    resetExpenseDraft();
+  };
+
+  const editExpense = (expense) => {
+    setEditingExpenseId(expense.id);
+    setExpenseDraft({
+      name: expense.name,
+      category: expense.category,
+      amount: String(expense.amount),
+    });
+  };
+
+  const removeExpense = (expenseId) => {
+    setExpenses((prev) => prev.filter((expense) => expense.id !== expenseId));
+    if (editingExpenseId === expenseId) resetExpenseDraft();
+  };
 
   return (
     <div style={{ display:"flex",flexDirection:"column",gap:18 }}>
@@ -920,6 +1010,122 @@ function BudgetTab({ trip }) {
             </div>
           );
         })}
+      </div>
+
+      {/* Expense management */}
+      <div style={{ background:T.surface,borderRadius:16,padding:"20px 22px",border:`1px solid ${T.borderLight}` }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap" }}>
+          <div>
+            <h3 className="hd" style={{ fontWeight:700,fontSize:16 }}>Expense Management</h3>
+            <p style={{ fontSize:12.5,color:T.text3,marginTop:2 }}>
+              Running Total: <strong style={{ color:T.text }}>${runningExpenseTotal.toFixed(2)}</strong>
+            </p>
+          </div>
+          <label style={{ fontSize:12.5,color:T.text2,display:"flex",alignItems:"center",gap:8 }}>
+            Filter by category
+            <select
+              aria-label="Filter expenses by category"
+              value={expenseFilter}
+              onChange={(event) => setExpenseFilter(event.target.value)}
+              style={{ padding:"8px 10px",borderRadius:10,border:`1px solid ${T.border}`,background:T.bg,color:T.text,minHeight:36 }}
+            >
+              <option value="All">All</option>
+              {expenseCategories.map((category) => (
+                <option key={category} value={category}>{category}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div style={{ display:"flex",gap:8,flexWrap:"wrap",marginBottom:14 }}>
+          {expenseCategories.map((category) => (
+            <span key={category} className="hd" style={{ fontSize:11,fontWeight:600,padding:"4px 10px",borderRadius:999,background:T.borderLight,color:T.text2 }}>
+              {category}
+            </span>
+          ))}
+        </div>
+
+        <div style={{ display:"grid",gridTemplateColumns:"2fr 1fr 1fr auto",gap:8,marginBottom:14 }}>
+          <input
+            aria-label="Expense name"
+            value={expenseDraft.name}
+            onChange={(event) => setExpenseDraft((prev) => ({ ...prev, name: event.target.value }))}
+            placeholder="Expense name"
+            style={{ padding:"10px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.bg,minHeight:40 }}
+          />
+          <select
+            aria-label="Expense category"
+            value={expenseDraft.category}
+            onChange={(event) => setExpenseDraft((prev) => ({ ...prev, category: event.target.value }))}
+            style={{ padding:"10px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.bg,minHeight:40 }}
+          >
+            {expenseCategories.map((category) => (
+              <option key={category} value={category}>{category}</option>
+            ))}
+          </select>
+          <input
+            aria-label="Expense amount"
+            value={expenseDraft.amount}
+            onChange={(event) => setExpenseDraft((prev) => ({ ...prev, amount: event.target.value }))}
+            placeholder="0.00"
+            type="number"
+            min="0"
+            step="0.01"
+            style={{ padding:"10px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.bg,minHeight:40 }}
+          />
+          <div style={{ display:"flex",gap:8 }}>
+            <button
+              className="hd"
+              onClick={submitExpense}
+              style={{ padding:"10px 12px",borderRadius:10,border:"none",background:T.primary,color:"#fff",fontSize:12.5,fontWeight:700,cursor:"pointer",minHeight:40,whiteSpace:"nowrap" }}
+            >
+              {editingExpenseId !== null ? "Update Expense" : "Add Expense"}
+            </button>
+            {editingExpenseId !== null ? (
+              <button
+                className="hd"
+                onClick={resetExpenseDraft}
+                style={{ padding:"10px 12px",borderRadius:10,border:`1px solid ${T.border}`,background:T.surface,color:T.text2,fontSize:12.5,fontWeight:700,cursor:"pointer",minHeight:40,whiteSpace:"nowrap" }}
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+          {visibleExpenses.length === 0 ? (
+            <p style={{ fontSize:13,color:T.text3 }}>No expenses for this category.</p>
+          ) : (
+            visibleExpenses.map((expense) => (
+              <div key={expense.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"10px 12px",border:`1px solid ${T.borderLight}`,borderRadius:12 }}>
+                <div>
+                  <p className="hd" style={{ fontSize:13.5,fontWeight:600 }}>{expense.name}</p>
+                  <p style={{ fontSize:12,color:T.text3 }}>{expense.category}</p>
+                </div>
+                <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                  <span className="hd" style={{ fontSize:13.5,fontWeight:700 }}>${Number(expense.amount || 0).toFixed(2)}</span>
+                  <button
+                    className="hd"
+                    aria-label={`Edit ${expense.name} expense`}
+                    onClick={() => editExpense(expense)}
+                    style={{ padding:"6px 10px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface,color:T.text2,fontSize:12,fontWeight:700,cursor:"pointer" }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="hd"
+                    aria-label={`Delete ${expense.name} expense`}
+                    onClick={() => removeExpense(expense.id)}
+                    style={{ padding:"6px 10px",borderRadius:8,border:"none",background:T.errorBg,color:T.error,fontSize:12,fontWeight:700,cursor:"pointer" }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1213,6 +1419,15 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
 
   const submitInvite = async () => {
     setCopyFeedback("");
+    const existingMember = findCrewMemberByEmail(members, inviteEmail);
+    if (existingMember) {
+      setManualInviteLink("");
+      setInviteFeedback({
+        type: "error",
+        message: duplicateCrewInviteMessageForStatus(existingMember?.status),
+      });
+      return;
+    }
     const result = await onInviteMember(inviteEmail);
     if (result?.ok) {
       const link = result?.inviteLink || "";
@@ -1446,4 +1661,3 @@ function PromptsPage() {
     </div>
   );
 }
-

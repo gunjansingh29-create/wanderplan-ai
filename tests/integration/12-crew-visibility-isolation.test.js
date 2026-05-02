@@ -154,4 +154,67 @@ describe('12 — Crew Visibility Isolation', () => {
     const carolPeerEmails = new Set((carolPeers.body.peers || []).map(p => p.email));
     expect(carolPeerEmails.has(SEED_USERS.bob.email)).toBe(true);
   });
+
+  test('removing a crew member unlinks both sides and allows re-invite', async () => {
+    const inviteEve = await request(API_V1)
+      .post('/crew/invite-email')
+      .set('Authorization', `Bearer ${bobToken}`)
+      .send({
+        inviter_email: SEED_USERS.bob.email,
+        inviter_name: 'Bob Smith',
+        invitee_email: SEED_USERS.eve.email,
+      })
+      .expect(200);
+
+    await request(API_V1)
+      .post('/crew/invites/accept')
+      .set('Authorization', `Bearer ${eveToken}`)
+      .send({ invite_token: inviteEve.body.invite_token })
+      .expect(200);
+
+    await request(API_V1)
+      .delete('/crew/member')
+      .query({ email: SEED_USERS.eve.email })
+      .set('Authorization', `Bearer ${bobToken}`)
+      .expect(200);
+
+    const bobLinksAfterRemove = await request(API_V1)
+      .get('/crew/links')
+      .set('Authorization', `Bearer ${bobToken}`)
+      .expect(200);
+    const bobEmailsAfterRemove = new Set((bobLinksAfterRemove.body.links || []).map(x => x.email));
+    expect(bobEmailsAfterRemove.has(SEED_USERS.eve.email)).toBe(false);
+
+    const eveLinksAfterRemove = await request(API_V1)
+      .get('/crew/links')
+      .set('Authorization', `Bearer ${eveToken}`)
+      .expect(200);
+    const eveEmailsAfterRemove = new Set((eveLinksAfterRemove.body.links || []).map(x => x.email));
+    expect(eveEmailsAfterRemove.has(SEED_USERS.bob.email)).toBe(false);
+
+    const reInvite = await request(API_V1)
+      .post('/crew/invite-email')
+      .set('Authorization', `Bearer ${bobToken}`)
+      .send({
+        inviter_email: SEED_USERS.bob.email,
+        inviter_name: 'Bob Smith',
+        invitee_email: SEED_USERS.eve.email,
+      })
+      .expect(200);
+
+    await request(API_V1)
+      .post('/crew/invites/accept')
+      .set('Authorization', `Bearer ${eveToken}`)
+      .send({ invite_token: reInvite.body.invite_token })
+      .expect(200);
+
+    const bobLinksAfterReinvite = await request(API_V1)
+      .get('/crew/links')
+      .set('Authorization', `Bearer ${bobToken}`)
+      .expect(200);
+    const bobEmailsAfterReinvite = new Set((bobLinksAfterReinvite.body.links || []).map(x => x.email));
+    expect(bobEmailsAfterReinvite.has(SEED_USERS.eve.email)).toBe(true);
+  });
 });
+
+// CI trigger
