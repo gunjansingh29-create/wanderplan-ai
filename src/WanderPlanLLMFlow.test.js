@@ -3634,7 +3634,6 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     });
   });
 
-<<<<<<< copilot/fix-wizard-progress-step-counter
   test("caps completed wizard progress display at the final step", async () => {
     const tripId = "77777777-7777-4777-8777-777777777777";
     global.fetch = jest.fn((url, options) => {
@@ -3718,11 +3717,7 @@ describe("WanderPlanLLMFlow solo trip setup", () => {
     expect(screen.queryByText(/Step 17 of 16/)).toBeNull();
   });
 
-  test("persists the step 6 route plan before continuing", async () => {
-=======
-  test("Pick for Trip routes back to wizard step 1 for the active planning trip", async () => {
->>>>>>> main
-    const putBodies = [];
+  test("persists the step 6 route plan before continuing", async () => {    const putBodies = [];
     const tripId = "44444444-4444-4444-8444-444444444444";
 
     global.fetch = jest.fn((url, options) => {
@@ -6960,6 +6955,129 @@ describe("WanderPlanLLMFlow analytics stats", () => {
   });
 });
 
+=======
+describe("WanderPlanLLMFlow crew management", () => {
+  const originalFetch = global.fetch;
+
+  function jsonResponse(body) {
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    window.localStorage.clear();
+  });
+
+  test("removes a joined crew member and allows re-invite from My Crew", async () => {
+    let hasLinkedCrewMember = true;
+
+    global.fetch = jest.fn((url, options) => {
+      const method = String((options && options.method) || "GET").toUpperCase();
+      const path = new URL(String(url), "https://example.test").pathname;
+
+      if (path === "/auth/login" && method === "POST") {
+        return jsonResponse({
+          accessToken: "test-token:crew-owner",
+          name: "Crew Owner",
+        });
+      }
+      if (path === "/me/profile" && method === "GET") {
+        return jsonResponse({
+          profile: {
+            display_name: "Crew Owner",
+            travel_styles: ["friends"],
+            interests: { food: true },
+            budget_tier: "moderate",
+            dietary: [],
+          },
+        });
+      }
+      if (path === "/me/bucket-list" && method === "GET") {
+        return jsonResponse({ items: [] });
+      }
+      if (path === "/me/trips" && method === "GET") {
+        return jsonResponse({ trips: [] });
+      }
+      if (path === "/crew/peer-profiles" && method === "GET") {
+        return jsonResponse({
+          peers: hasLinkedCrewMember
+            ? [
+                {
+                  peer_user_id: "friend-user-id",
+                  email: "friend@test.com",
+                  name: "Friend",
+                  profile: {
+                    display_name: "Friend",
+                    travel_styles: ["friends"],
+                    interests: {},
+                    budget_tier: "moderate",
+                    dietary: [],
+                  },
+                },
+              ]
+            : [],
+        });
+      }
+      if (path === "/crew/invites/sent" && method === "GET") {
+        return jsonResponse({ invites: [] });
+      }
+      if (path === "/crew/member" && method === "DELETE") {
+        hasLinkedCrewMember = false;
+        return jsonResponse({ ok: true });
+      }
+      if (path === "/crew/invite-email" && method === "POST") {
+        hasLinkedCrewMember = true;
+        return jsonResponse({ ok: true, email_sent: true });
+      }
+      return jsonResponse({});
+    });
+
+    render(<WanderPlan />);
+
+    fireEvent.click(await screen.findByText("Start your bucket list"));
+    fireEvent.change(await screen.findByPlaceholderText("Email"), {
+      target: { value: "owner@test.com" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Password"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => expect(screen.queryByText("Trips")).not.toBeNull());
+
+    fireEvent.click(screen.getByText("Crew"));
+    await waitFor(() =>
+      expect(screen.queryByText("1 joined, 0 pending")).not.toBeNull()
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove friend@test.com" })
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("0 joined, 0 pending")).not.toBeNull()
+    );
+    expect(screen.queryByText("friend@test.com")).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText("Email to invite"), {
+      target: { value: "friend@test.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Invite" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("friend@test.com")).not.toBeNull()
+    );
+    expect(
+      screen.queryByRole("button", { name: "Remove friend@test.com" })
+    ).not.toBeNull();
+  });
+});
 describe("WanderPlanLLMFlow companion entry", () => {
   const originalFetch = global.fetch;
 
