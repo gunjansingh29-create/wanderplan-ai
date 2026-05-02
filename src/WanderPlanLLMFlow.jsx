@@ -8945,6 +8945,10 @@ export default function WanderPlan(){
         poiRows.forEach(function(_,i){
           if(hasAnyCrewYesForIdx(i))acceptedIdx.push(i);
         });
+        if(acceptedIdx.length===0){
+          setCSM("Please select at least one activity before approving.");
+          return;
+        }
         setPV(function(prev){
           var next=normalizePoiStateMap(prev,poiRows,poiOptionPool);
           acceptedIdx.forEach(function(idx){
