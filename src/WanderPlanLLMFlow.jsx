@@ -1690,6 +1690,7 @@ async function callLLM(sysPrompt, userMsg, maxTok) {
 }
 
 var ROUTE_LLM_TIMEOUT_MS = 70000;
+var ROUTE_PLAN_BUILD_MAX_WAIT_MS = 5000;
 
 function buildRoutePlanSignature(destinations, interests, budgetTier, dietary, styles, groupPrefs){
   var rows=(Array.isArray(destinations)?destinations:[]).map(function(dest){
@@ -1792,6 +1793,45 @@ function normalizeRoutePlan(parsed, destinations){
     seasonNotes:(Array.isArray(parsed.seasonNotes||parsed.season_notes)?(parsed.seasonNotes||parsed.season_notes):[]).map(function(note){return String(note||"").trim();}).filter(Boolean).slice(0,6),
     bookingNotes:(Array.isArray(parsed.bookingNotes||parsed.booking_notes)?(parsed.bookingNotes||parsed.booking_notes):[]).map(function(note){return String(note||"").trim();}).filter(Boolean).slice(0,6),
     packingNotes:(Array.isArray(parsed.packingNotes||parsed.packing_notes)?(parsed.packingNotes||parsed.packing_notes):[]).map(function(note){return String(note||"").trim();}).filter(Boolean).slice(0,6)
+  };
+}
+
+function buildFallbackRoutePlan(destinations){
+  var requested=(Array.isArray(destinations)?destinations:[]).map(function(dest){
+    return {
+      name:String(dest&&dest.name||dest||"").trim(),
+      country:String(dest&&dest.country||"").trim()
+    };
+  }).filter(function(dest){return dest.name;});
+  if(requested.length===0)return null;
+  var route=requested.map(function(dest){return dest.name;});
+  var first=requested[0];
+  var last=requested[requested.length-1];
+  return {
+    startingCity:first.name,
+    endingCity:last.name,
+    summary:"A quick route draft based on your selected destinations.",
+    totalDays:requested.length,
+    phases:[{
+      title:"Core route",
+      route:route,
+      days:requested.length,
+      notes:"Ordered to keep planning moving while a refined route is generated."
+    }],
+    destinations:requested.map(function(dest){
+      return {
+        destination:dest.name,
+        country:dest.country,
+        days:1,
+        nearbySites:[],
+        reason:"",
+        bestTime:"",
+        travelNote:""
+      };
+    }),
+    seasonNotes:[],
+    bookingNotes:[],
+    packingNotes:[]
   };
 }
 
@@ -8740,28 +8780,27 @@ export default function WanderPlan(){
       var signature=buildRoutePlanSignature(rawDests,user.interests||{},activeBudget,user.dietary,user.styles||[],wizardPoiGroupPrefs);
       setRPL(true);
       setRPE("");
-      askRoutePlan(rawDests,user.interests||{},activeBudget,user.dietary,user.styles||[],wizardPoiGroupPrefs).then(function(plan){
-        if(!(plan&&Array.isArray(plan.destinations)&&plan.destinations.length)){
-          setRPL(false);
+      withAsyncTimeout(function(){
+        return askRoutePlan(rawDests,user.interests||{},activeBudget,user.dietary,user.styles||[],wizardPoiGroupPrefs);
+      },ROUTE_PLAN_BUILD_MAX_WAIT_MS,null).then(function(plan){
+        var nextPlan=(plan&&Array.isArray(plan.destinations)&&plan.destinations.length)?plan:buildFallbackRoutePlan(rawDests);
+        if(!(nextPlan&&Array.isArray(nextPlan.destinations)&&nextPlan.destinations.length)){
           setRPD(false);
           setRPE("Could not build a route plan yet. Try again in a moment.");
-          return;
+          return null;
         }
-        setRoutePlan(plan);
+        setRoutePlan(nextPlan);
         setRPS(signature);
         setRPD(true);
-        applyRoutePlanDurations(plan);
-        setRPL(false);
-        persistRoutePlanState(plan,signature).then(function(){
-          setRPL(false);
+        applyRoutePlanDurations(nextPlan);
+        return persistRoutePlanState(nextPlan,signature).then(function(){
           if(shouldAdvance)adv();
-        }).catch(function(){
-          setRPL(false);
         });
       }).catch(function(e){
-        setRPL(false);
         setRPD(false);
         setRPE(String(e&&e.message||"Could not build a route plan"));
+      }).finally(function(){
+        setRPL(false);
       });
     }
 
