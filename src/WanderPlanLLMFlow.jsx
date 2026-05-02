@@ -2150,6 +2150,87 @@ function refineBucketItemsForQuery(userMsg, items){
   return out;
 }
 
+function buildBucketSuggestionAdditions(proposedItems, existingBucket){
+  var existingByName={};
+  var existingExact={};
+  (Array.isArray(existingBucket)?existingBucket:[]).forEach(function(row){
+    var exName=String(row&&row.name||"").trim();
+    if(!exName)return;
+    var exNameKey=canonicalTripDestinationName(exName);
+    if(!exNameKey)return;
+    var exCountry=String(row&&row.country||"").trim();
+    var exCountryKey=canonicalTripDestinationName(exCountry);
+    var exKey=exNameKey+"|"+exCountryKey;
+    existingExact[exKey]=true;
+    if(!existingByName[exNameKey]){
+      existingByName[exNameKey]={
+        countries:{},
+        best:null
+      };
+    }
+    existingByName[exNameKey].countries[exCountryKey]=true;
+    if(!existingByName[exNameKey].best){
+      existingByName[exNameKey].best=row;
+    }
+  });
+
+  function normalizeItem(raw){
+    var source=raw||{};
+    var name=String(source.name||"").trim();
+    if(!name)return null;
+    var nameKey=canonicalTripDestinationName(name);
+    if(!nameKey)return null;
+    var existingInfo=existingByName[nameKey]||null;
+    var bestExisting=(existingInfo&&existingInfo.best)||null;
+    var country=String(source.country||"").trim()||String(bestExisting&&bestExisting.country||"").trim();
+    return {
+      name:name,
+      country:country,
+      bestMonths:Array.isArray(source.bestMonths)&&source.bestMonths.length?source.bestMonths:(Array.isArray(bestExisting&&bestExisting.bestMonths)?bestExisting.bestMonths:[]),
+      costPerDay:Number(source.costPerDay||0)||Number(bestExisting&&bestExisting.costPerDay||0)||0,
+      tags:Array.isArray(source.tags)&&source.tags.length?source.tags:(Array.isArray(bestExisting&&bestExisting.tags)?bestExisting.tags:[]),
+      bestTimeDesc:String(source.bestTimeDesc||"").trim()||String(bestExisting&&bestExisting.bestTimeDesc||"").trim(),
+      costNote:String(source.costNote||"").trim()||String(bestExisting&&bestExisting.costNote||"").trim()
+    };
+  }
+
+  var proposed=[];
+  var proposedSeen={};
+  (Array.isArray(proposedItems)?proposedItems:[]).forEach(function(raw){
+    var item=normalizeItem(raw);
+    if(!item)return;
+    var nameKey=canonicalTripDestinationName(item.name);
+    var countryKey=canonicalTripDestinationName(item.country);
+    var proposedKey=nameKey+"|"+countryKey;
+    if(proposedSeen[proposedKey])return;
+    proposedSeen[proposedKey]=true;
+    proposed.push(item);
+  });
+
+  var toAdd=[];
+  proposed.forEach(function(item){
+    var nameKey=canonicalTripDestinationName(item.name);
+    var countryKey=canonicalTripDestinationName(item.country);
+    var exactKey=nameKey+"|"+countryKey;
+    var existingInfo=existingByName[nameKey]||null;
+    var hasExistingName=!!existingInfo;
+    var hasCountrylessExisting=!!(existingInfo&&existingInfo.countries&&existingInfo.countries[""]);
+    var hasExactMatch=!!existingExact[exactKey];
+    var isCountrylessMatchOfExisting=!countryKey&&hasExistingName;
+    var hasCountryButMatchesCountrylessEntry=!!countryKey&&hasCountrylessExisting;
+    var isDuplicate=hasExactMatch||isCountrylessMatchOfExisting||hasCountryButMatchesCountrylessEntry;
+    if(isDuplicate)return;
+    toAdd.push(item);
+    existingExact[exactKey]=true;
+    if(!existingByName[nameKey]){
+      existingByName[nameKey]={countries:{},best:item};
+    }
+    existingByName[nameKey].countries[countryKey]=true;
+  });
+
+  return {proposed:proposed,toAdd:toAdd};
+}
+
 function bucketClarifyMessage(userMsg){
   var anchor=bucketQueryAnchorName(userMsg);
   if(anchor){

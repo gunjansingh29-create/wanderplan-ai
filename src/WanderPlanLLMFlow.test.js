@@ -7,6 +7,7 @@ import {
   addTripDestinationValue,
   buildTransitItem,
   buildCurrentVoteActor,
+  buildBucketSuggestionAdditions,
   buildDestinationFallbackPois,
   buildDurationPlanSignature,
   buildFallbackItinerary,
