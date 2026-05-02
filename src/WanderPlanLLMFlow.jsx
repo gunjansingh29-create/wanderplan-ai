@@ -1706,7 +1706,6 @@ function parseJsonLoose(txt){
 async function callLLM(sysPrompt, userMsg, maxTok) {
   try {
     var data = await llmReq({
-      model: "claude-sonnet-4-20250514",
       max_tokens: maxTok || 1000,
       messages: [{role: "user", content: sysPrompt + "\n\n---\n\n" + userMsg}]
     });
@@ -1979,7 +1978,6 @@ Rules:
     try{
       var data=await withAsyncTimeout(function(){
         return llmReq({
-          model:"claude-sonnet-4-20250514",
           max_tokens:maxTokens||2200,
           system:systemPrompt,
           messages:[{role:"user",content:userPrompt}]
@@ -2400,7 +2398,7 @@ async function askLLM(userMsg, budget, history) {
   if (history) { for (var i = 0; i < history.length; i++) { var m = history[i]; if (m.from === "user") msgs.push({role:"user",content:m.text}); else if (m.from === "agent" && !m.dest) msgs.push({role:"assistant",content:m.text}); } }
   msgs.push({role: "user", content: userMsg});
   try {
-    var data = await llmReq({model: "claude-sonnet-4-20250514", max_tokens: 500, messages: msgs, system: sys});
+    var data = await llmReq({max_tokens: 500, messages: msgs, system: sys});
     var txt = ""; if (data.content) { for (var j = 0; j < data.content.length; j++) { if (data.content[j].type === "text") txt += data.content[j].text; } }
     var parsed=parseJsonLoose(txt);
     var normalized=normalizeBucketLLMResult(parsed);
@@ -2410,7 +2408,7 @@ async function askLLM(userMsg, budget, history) {
       if(conceptRefined.length)return {type:"destinations",items:conceptRefined};
       if(bucketQueryNeedsSpecificChildren(userMsg)){
         var retrySys=sys+"\nAdditional rule: if the user asks for cities/places in a country or larger area, NEVER return just that parent country/area. Return 4-8 specific city, island, or region-level destinations inside it.";
-        var retryData=await llmReq({model:"claude-sonnet-4-20250514",max_tokens:700,messages:msgs,system:retrySys});
+        var retryData=await llmReq({max_tokens:700,messages:msgs,system:retrySys});
         var retryTxt=""; if(retryData&&retryData.content){ for(var rj=0;rj<retryData.content.length;rj++){ if(retryData.content[rj].type==="text")retryTxt+=retryData.content[rj].text; } }
         var retryParsed=parseJsonLoose(retryTxt);
         var retryNormalized=normalizeBucketLLMResult(retryParsed);
@@ -2782,7 +2780,6 @@ Return 4-5 items. ONLY JSON array.`;
   var msg = "Find additional activities for " + destName + (country ? ", " + country : "");
   try{
     var data=await llmReq({
-      model: "claude-sonnet-4-20250514",
       max_tokens: 800,
       system: sys,
       messages: [{role: "user", content: msg}]
