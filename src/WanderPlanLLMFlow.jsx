@@ -5626,7 +5626,6 @@ export default function WanderPlan(){
   }
   function consensusStageKeyForStep(stepNum){
     var map={
-      2:"vote_destinations",
       3:"interests",
       4:"health",
       6:"activities",
