@@ -35,3 +35,5 @@ describe("wanderplan dashboard crew invite duplicate guards", () => {
     expect(findCrewMemberByEmail(members, " ")).toBeNull();
   });
 });
+
+// CI trigger
