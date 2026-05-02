@@ -3302,6 +3302,66 @@ async def crew_sent_invites(user_id: str = Depends(get_current_user_id)):
     }
 
 
+@app.delete("/crew/member")
+async def crew_remove_member(email: str, user_id: str = Depends(get_current_user_id)):
+    normalized_email = (email or "").strip().lower()
+    if "@" not in normalized_email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    def _row_count(command_tag: str) -> int:
+        try:
+            return int(str(command_tag or "").split()[-1])
+        except (ValueError, IndexError, AttributeError, TypeError):
+            return 0
+
+    async with db_pool.acquire() as conn:
+        peer = await conn.fetchrow(
+            "SELECT id FROM users WHERE LOWER(email) = $1",
+            normalized_email,
+        )
+
+        links_removed = 0
+        if peer:
+            peer_user_id = str(peer["id"] or "")
+            if peer_user_id:
+                removed_a = await conn.execute(
+                    """
+                    DELETE FROM crew_links
+                    WHERE user_id = $1 AND peer_user_id = $2
+                    """,
+                    user_id,
+                    peer_user_id,
+                )
+                removed_b = await conn.execute(
+                    """
+                    DELETE FROM crew_links
+                    WHERE user_id = $1 AND peer_user_id = $2
+                    """,
+                    peer_user_id,
+                    user_id,
+                )
+                links_removed = _row_count(removed_a) + _row_count(removed_b)
+
+        invites_removed = await conn.execute(
+            """
+            DELETE FROM crew_invites
+            WHERE inviter_user_id = $1
+              AND LOWER(invitee_email) = $2
+            """,
+            user_id,
+            normalized_email,
+        )
+
+    return {
+        "ok": True,
+        "email": normalized_email,
+        "links_removed": links_removed,
+        "invites_removed": _row_count(invites_removed),
+    }
+
+
 @app.get("/crew/links")
 async def crew_links(user_id: str = Depends(get_current_user_id)):
     if db_pool is None:

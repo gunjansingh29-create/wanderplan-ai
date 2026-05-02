@@ -4333,6 +4333,7 @@ export default function WanderPlan(){
   var[crewMsg,setCM]=useState("");
   var[crewInviteLink,setCIL]=useState("");
   var[crewInviteCopyMsg,setCICM]=useState("");
+  var[crewRemovingEmail,setCRE]=useState("");
   var[tripInviteMsg,setTIM]=useState("");
   var[tripShareMsg,setTSM]=useState("");
   var[tripInviteLinks,setTIL]=useState({});
@@ -6565,6 +6566,40 @@ export default function WanderPlan(){
     }
   }
 
+  async function removeCrewMember(member){
+    var m=member||{};
+    var email=String(m.email||"").trim().toLowerCase();
+    if(!email)return;
+    if(!authToken){setCM("Sign in required to remove crew members.");return;}
+    setCRE(email);
+    setCM("Removing "+email+"...");
+    try{
+      var removeQuery=new URLSearchParams({email:email}).toString();
+      await apiJson("/crew/member?"+removeQuery,{method:"DELETE"},authToken);
+      setCrew(function(prev){
+        return (Array.isArray(prev)?prev:[]).filter(function(item){
+          return String(item&&item.email||"").trim().toLowerCase()!==email;
+        });
+      });
+      setNT(function(prev){
+        var members=Array.isArray(prev&&prev.members)?prev.members:[];
+        var nextMembers=members.filter(function(item){
+          var itemEmail=String(item&&item.email||"").trim().toLowerCase();
+          if(itemEmail)return itemEmail!==email;
+          return item.id!==m.id;
+        });
+        if(nextMembers.length===members.length)return prev;
+        return Object.assign({},prev,{members:nextMembers});
+      });
+      setCM("Removed "+email+" from crew.");
+      setTimeout(function(){refreshCrewFromBackend();},600);
+    }catch(e){
+      setCM("Could not remove member: "+String(e&&e.message||"error"));
+    }finally{
+      setCRE("");
+    }
+  }
+
   async function inviteSelectedMembersToTrip(tripId,members){
     var tripIdStr=String(tripId||"").trim();
     if(!authToken||!tripIdStr||!Array.isArray(members)||members.length===0)return;
@@ -7807,7 +7842,7 @@ export default function WanderPlan(){
         <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:C.goldT,background:C.goldDim}}>account holder</span>
       </div>
     </Fade>
-    <div style={{display:"flex",flexDirection:"column",gap:7}}>{crew.map(function(m,i){var sc2=m.status==="accepted"?C.grn:(m.status==="pending"||m.status==="invited")?C.wrn:m.status==="link_only"?C.sky:C.red;var sb=m.status==="accepted"?C.grnBg:(m.status==="pending"||m.status==="invited")?C.wrnBg:m.status==="link_only"?"rgba(77,168,218,0.15)":C.redBg;var rel=crewRelationLabel(m.relation);return(<Fade key={m.id} delay={150+i*50}><div style={{background:C.surface,borderRadius:12,padding:"13px 16px",border:"1px solid "+C.border,display:"flex",alignItems:"center",gap:12}}><Avi ini={m.ini} color={m.color} size={36} name={m.name}/><div style={{flex:1}}><div style={{fontSize:14,fontWeight:600}}>{m.name}</div><div style={{fontSize:11,color:C.tx3}}>{m.email}</div></div><span style={{fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:20,color:C.sky,background:"rgba(77,168,218,0.15)"}}>{rel}</span><span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:sc2,background:sb}}>{m.status==="invited"?"pending":m.status}</span></div></Fade>);})}</div>
+    <div style={{display:"flex",flexDirection:"column",gap:7}}>{crew.map(function(m,i){var sc2=m.status==="accepted"?C.grn:(m.status==="pending"||m.status==="invited")?C.wrn:m.status==="link_only"?C.sky:C.red;var sb=m.status==="accepted"?C.grnBg:(m.status==="pending"||m.status==="invited")?C.wrnBg:m.status==="link_only"?"rgba(77,168,218,0.15)":C.redBg;var rel=crewRelationLabel(m.relation);var memberEmail=String(m.email||"").trim().toLowerCase();var removing=crewRemovingEmail===memberEmail;return(<Fade key={m.id} delay={150+i*50}><div style={{background:C.surface,borderRadius:12,padding:"13px 16px",border:"1px solid "+C.border,display:"flex",alignItems:"center",gap:12}}><Avi ini={m.ini} color={m.color} size={36} name={m.name}/><div style={{flex:1}}><div style={{fontSize:14,fontWeight:600}}>{m.name}</div><div style={{fontSize:11,color:C.tx3}}>{m.email}</div></div><span style={{fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:20,color:C.sky,background:"rgba(77,168,218,0.15)"}}>{rel}</span><span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:sc2,background:sb}}>{m.status==="invited"?"pending":m.status}</span><button onClick={function(){removeCrewMember(m);}} disabled={removing||!memberEmail} title="Remove member" aria-label={"Remove "+(m.email||m.name||"member")} style={{padding:"6px 10px",borderRadius:8,border:"1px solid "+C.red+"40",background:C.redBg,color:C.red,fontSize:11,fontWeight:700,cursor:removing?"default":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6,whiteSpace:"nowrap",opacity:removing?0.7:1}}><TrashIcon size={12} color={C.red}/>{removing?"Removing...":"Remove"}</button></div></Fade>);})}</div>
   </div>)}
 
   {sc==="bucket"&&(<div>
