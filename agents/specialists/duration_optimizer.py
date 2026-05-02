@@ -13,6 +13,7 @@ Balances depth of experience against time and cost constraints.
 
 
 from agents.base_agent import AgentConfig, BaseAgent
+from models.trip_context import TripContext
 from schemas.messages import AgentID, AgentMessage, PlanningStage
 
 SYSTEM_PROMPT = """\
