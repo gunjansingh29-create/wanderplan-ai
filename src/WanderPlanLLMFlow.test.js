@@ -3201,3 +3201,5 @@ describe("WanderPlanLLMFlow Step 3 interest consensus", () => {
     expect(summary.pct).toBe(0);
   });
 });
+
+// CI trigger
