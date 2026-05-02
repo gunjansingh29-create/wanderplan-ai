@@ -9,8 +9,15 @@ var BUDGETS=[{id:"budget",l:"Budget",r:"$50-120/day"},{id:"moderate",l:"Mid-rang
 var STYLES=[{id:"solo",l:"Solo"},{id:"couple",l:"Couple"},{id:"friends",l:"Friends"},{id:"family",l:"Family"}];
 var WIZ=["Destinations","Invite Crew","Vote","Interests","Health","Route Planner","Activities","POI Voting","Budget","Duration","Stays","Dining","Itinerary","Availability","Flights","Confirm"];
 var WIZARD_ORDER_VERSION=3;
+var MAX_BUCKET_DESTINATION_NAME_LENGTH=80;
+var MAX_CONSECUTIVE_CONSONANTS_IN_DESTINATION_NAME=6;
+var BUCKET_DESTINATION_DIGIT_RUN_RE=/\d{3,}/;
+var BUCKET_DESTINATION_ALLOWED_CHARS_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ .'\-()]/;
+var BUCKET_DESTINATION_LETTERS_ONLY_RE=/[^A-Za-zÀ-ÖØ-öø-ÿ]/g;
+var BUCKET_DESTINATION_VOWEL_RE=/[aeiouyà-öø-ÿ]/i;
 var BUILD_STAMP=("Build "+String(BUILD_INFO&&BUILD_INFO.sha||"unknown")+" | "+String(BUILD_INFO&&BUILD_INFO.branch||"unknown")).trim();
 var BUILD_STAMP_DETAIL=String(BUILD_INFO&&BUILD_INFO.builtAt||"unknown");
+var INVALID_BUCKET_DESTINATION_MESSAGE="I couldn't find that destination. Please try a real city, country, or landmark.";
 
 function Fade(props){var d=props.delay||0;var mt=useRef(null);var[v,setV]=useState(false);useEffect(function(){mt.current=setTimeout(function(){setV(true);},Math.max(d,10));return function(){clearTimeout(mt.current);};},[]);return(<div style={Object.assign({opacity:v?1:0,transform:v?"none":"translateY(14px)",transition:"all .6s cubic-bezier(.16,1,.3,1)"},props.style||{})}>{props.children}</div>);}
 function Avi(props){var s=props.size||28;return(<div title={props.name||""} style={{width:s,height:s,borderRadius:999,background:props.color||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:s*.4,fontWeight:700,color:"#fff",flexShrink:0,border:"1.5px solid "+C.surface}}>{props.ini||"?"}</div>);}
@@ -37,6 +44,19 @@ async function sv(k,v){
 
 function emptyUserState(){
   return {name:"",email:"",styles:[],interests:{},budget:"moderate",dietary:[]};
+}
+
+function countEnabledInterests(interestsObj){
+  var safeInterests=(interestsObj&&typeof interestsObj==="object")?interestsObj:{};
+  return Object.keys(safeInterests).filter(function(interestKey){
+    var interestValue=safeInterests[interestKey];
+    if(interestValue===true||interestValue===1||interestValue==="1")return true;
+    if(typeof interestValue==="string"){
+      var normalized=interestValue.trim().toLowerCase();
+      return normalized==="y"||normalized==="yes"||normalized==="true"||normalized==="1";
+    }
+    return false;
+  }).length;
 }
 
 function accountCacheKey(baseKey,token,email){
@@ -80,7 +100,70 @@ function mergeProfileIntoUser(baseUser,profile,emailHint,nameHint){
 
 function normalizePersonalBucketItems(items){
   return (Array.isArray(items)?items:[]).map(function(it){
-    return Object.assign({id:it.id},it);
+    if(!it||typeof it!=="object")return null;
+    var name=normalizeTripDestinationValue(it.name||it.destination||it.city||"");
+    if(!isValidBucketDestinationName(name))return null;
+    return Object.assign({id:it.id},it,{name:name});
+  }).filter(Boolean);
+}
+
+var BLOCKED_BUCKET_DESTINATION_NAMES={
+  "skiing":1,
+  "beach":1,
+  "beaches":1,
+  "northern lights":1,
+  "street market":1,
+  "street markets":1,
+  "mountain view":1,
+  "mountain views":1,
+  "south america":1,
+  "north america":1,
+  "central america":1,
+  "latin america":1,
+  "middle east":1,
+  "europe":1,
+  "asia":1,
+  "africa":1,
+  "oceania":1,
+  "antarctica":1
+};
+
+function isValidBucketDestinationName(value){
+  var normalized=canonicalTripDestinationName(value);
+  if(!normalized)return false;
+  return !BLOCKED_BUCKET_DESTINATION_NAMES[normalized];
+}
+
+function chooseBucketStringValue(primary,fallback){
+  var p=String(primary||"").trim();
+  if(p)return p;
+  return String(fallback||"").trim();
+}
+
+function chooseBucketArrayValue(primary,fallback){
+  var p=Array.isArray(primary)?primary.filter(Boolean):[];
+  if(p.length>0)return p;
+  return Array.isArray(fallback)?fallback.filter(Boolean):[];
+}
+
+function chooseBucketNumberValue(primary,fallback){
+  var p=Number(primary||0)||0;
+  if(p>0)return p;
+  return Number(fallback||0)||0;
+}
+
+function mergeBucketItemDetails(primary,fallback){
+  var basePrimary=(primary&&typeof primary==="object")?primary:{};
+  var baseFallback=(fallback&&typeof fallback==="object")?fallback:{};
+  return Object.assign({},baseFallback,basePrimary,{
+    id:chooseBucketStringValue(basePrimary.id,baseFallback.id),
+    name:chooseBucketStringValue(basePrimary.name,baseFallback.name),
+    country:chooseBucketStringValue(basePrimary.country,baseFallback.country),
+    bestMonths:chooseBucketArrayValue(basePrimary.bestMonths,baseFallback.bestMonths),
+    costPerDay:chooseBucketNumberValue(basePrimary.costPerDay,baseFallback.costPerDay),
+    tags:chooseBucketArrayValue(basePrimary.tags,baseFallback.tags),
+    bestTimeDesc:chooseBucketStringValue(basePrimary.bestTimeDesc,baseFallback.bestTimeDesc),
+    costNote:chooseBucketStringValue(basePrimary.costNote,baseFallback.costNote)
   });
 }
 
@@ -130,6 +213,32 @@ function canonicalTripDestinationName(value){
     .trim()
     .toLowerCase();
 }
+
+function dedupeBucketSuggestionsForExisting(proposedItems, bucketItems){
+  var existingByName = {};
+  (Array.isArray(bucketItems)?bucketItems:[]).forEach(function(item){
+    var key = canonicalTripDestinationName(item&&item.name);
+    if(key)existingByName[key] = String(item&&item.name||"").trim()||String(item&&item.destination||"").trim()||"Destination";
+  });
+  var seen = Object.assign({},existingByName);
+  var duplicateMap = {};
+  var toAdd = [];
+  (Array.isArray(proposedItems)?proposedItems:[]).forEach(function(it){
+    var nm = String(it&&it.name||"").trim();
+    if(!nm)return;
+    var key = canonicalTripDestinationName(nm);
+    if(!key)return;
+    if(seen[key]){
+      if(!duplicateMap[key])duplicateMap[key] = seen[key];
+      return;
+    }
+    seen[key] = nm;
+    toAdd.push(it);
+  });
+  return {
+    toAdd:toAdd,
+    duplicateNames:Object.keys(duplicateMap).map(function(key){return duplicateMap[key];})
+  };}
 
 function activeTripTravelerCount(members,tripJoinedMap){
   var count=1;
@@ -215,6 +324,83 @@ function iniFromName(name){
   if(parts.length===0)return"?";
   if(parts.length===1)return parts[0].substring(0,2).toUpperCase();
   return (parts[0].charAt(0)+parts[1].charAt(0)).toUpperCase();
+}
+
+function normalizeCrewStatus(status){
+  var st=String(status||"").trim().toLowerCase();
+  if(st==="accepted"||st==="pending"||st==="invited"||st==="declined"||st==="link_only")return st;
+  if(st==="joined"||st==="active")return "accepted";
+  return "pending";
+}
+
+function normalizeCrewRelation(relation){
+  var rel=String(relation||"").trim().toLowerCase();
+  if(rel==="invitee"||rel==="inviter"||rel==="owner"||rel==="self"||rel==="crew")return rel;
+  return "crew";
+}
+
+function crewStatusRank(status){
+  var st=normalizeCrewStatus(status);
+  if(st==="accepted")return 4;
+  if(st==="pending"||st==="invited")return 3;
+  if(st==="link_only")return 2;
+  if(st==="declined")return 1;
+  return 0;
+}
+
+function defaultCrewNameFromEmail(email){
+  var local=String(email||"").trim().toLowerCase().split("@")[0]||"";
+  if(!local)return "Member";
+  return local
+    .split(/[._\-]+/)
+    .filter(Boolean)
+    .map(function(token){return token.charAt(0).toUpperCase()+token.slice(1);})
+    .join(" ");
+}
+
+function sanitizeCrewMembers(rows){
+  var list=Array.isArray(rows)?rows:[];
+  var out=[];
+  var emailToIdx={};
+  list.forEach(function(item){
+    var src=(item&&typeof item==="object")?item:{};
+    var profile=(src.profile&&typeof src.profile==="object")?src.profile:{};
+    var email=String(src.email||src.invitee_email||profile.email||"").trim().toLowerCase();
+    if(!email)return;
+    var name=String(src.name||profile.display_name||"").trim()||defaultCrewNameFromEmail(email);
+    var existingIdx=emailToIdx[email];
+    var existingColor=(existingIdx!==undefined&&out[existingIdx]&&out[existingIdx].color)?out[existingIdx].color:"";
+    var candidate={
+      id:String(src.id||src.peer_user_id||("m-"+email)).trim()||("m-"+email),
+      name:name,
+      ini:String(src.ini||"").trim()||iniFromName(name),
+      color:src.color||existingColor||CREW_COLORS[(existingIdx!==undefined?existingIdx:out.length)%CREW_COLORS.length],
+      status:normalizeCrewStatus(src.status||src.crew_status),
+      email:email,
+      profile:profile,
+      relation:normalizeCrewRelation(src.relation)
+    };
+    if(existingIdx===undefined){
+      emailToIdx[email]=out.length;
+      out.push(candidate);
+      return;
+    }
+    var current=out[existingIdx]||{};
+    var merged=Object.assign({},current);
+    if(crewStatusRank(candidate.status)>crewStatusRank(current.status)){
+      merged.id=candidate.id||merged.id;
+      merged.name=candidate.name||merged.name;
+      merged.ini=candidate.ini||merged.ini;
+      merged.status=candidate.status;
+      merged.relation=candidate.relation||merged.relation;
+      merged.profile=(candidate.profile&&Object.keys(candidate.profile).length)?candidate.profile:merged.profile;
+    }
+    if(!merged.name&&candidate.name)merged.name=candidate.name;
+    if(!merged.ini&&candidate.ini)merged.ini=candidate.ini;
+    merged.color=current.color||candidate.color;
+    out[existingIdx]=merged;
+  });
+  return out;
 }
 
 function readJoinTripIdFromUrl(){
@@ -303,6 +489,30 @@ function receiptItemsTotal(items){
   return (Array.isArray(items)?items:[]).reduce(function(sum,item){
     return sum+(Number(item&&item.amount||0)||0);
   },0);
+}
+
+function tripExpenseLineItems(trip){
+  var sourceExpenses=(trip&&Array.isArray(trip.expenses)&&trip.expenses.length)?trip.expenses:(trip&&Array.isArray(trip.recent_expenses)?trip.recent_expenses:[]);
+  return sourceExpenses.map(function(item,idx){
+    var amount=Number(item&&item.amount||0)||0;
+    var merchant=String(item&&item.merchant||item&&item.name||"").trim();
+    var category=String(item&&item.category||"").trim();
+    var date=String(item&&item.expense_date||item&&item.date||"").trim();
+    return {
+      id:String(item&&item.id||("expense-"+idx)),
+      merchant:merchant||("Expense "+(idx+1)),
+      category:category||"misc",
+      expense_date:date,
+      amount:amount,
+      currency:String(item&&item.currency||trip&&trip.currency||"USD").trim().toUpperCase()||"USD"
+    };
+  }).filter(function(item){
+    return item.amount>0;
+  });
+}
+
+function tripExpenseLineItemsTotal(items){
+  return receiptItemsTotal(items);
 }
 
 function defaultExpenseSplitMemberIds(members,currentUserId){
@@ -409,6 +619,18 @@ function buildWhatsAppShareUrl(text){
   return "https://wa.me/?text="+encodeURIComponent(msg);
 }
 
+var SPA_HISTORY_SCREEN_KEY="wanderplan_screen";
+
+function historyStateForScreen(screen){
+  return {[SPA_HISTORY_SCREEN_KEY]:String(screen||"").trim()||"landing"};
+}
+
+function screenFromHistoryState(state){
+  if(!state||typeof state!=="object")return "";
+  var screen=String(state[SPA_HISTORY_SCREEN_KEY]||"").trim();
+  return screen;
+}
+
 function companionReadinessCopy(reason){
   var key=String(reason||"").trim().toLowerCase();
   if(key==="locked_dates_and_itinerary_required"){
@@ -506,7 +728,7 @@ function mapTripMemberStatus(rawStatus){
 
 function isUuidLike(value){
   var v=String(value||"").trim();
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 }
 
 function userIdFromToken(token){
@@ -1379,6 +1601,15 @@ function summarizeInterestConsensus(catId,myInterests,members,tripJoinedMap){
   return {yesCount:yesCount,totalCount:totalCount,pct:pct,myValue:my};
 }
 
+function updateUserInterestSelection(userState, catId, selected){
+  var base=Object.assign(emptyUserState(),userState||{});
+  var nextInterests=(base.interests&&typeof base.interests==="object")
+    ? Object.assign({},base.interests)
+    : {};
+  nextInterests[String(catId||"")]=!!selected;
+  return Object.assign({},base,{interests:nextInterests});
+}
+
 function isCurrentMemberRow(member, token, myEmail){
   var mid=String(member&&member.user_id||member&&member.id||"").trim();
   var tokUid=userIdFromToken(token||"");
@@ -1730,19 +1961,7 @@ function extractLlmTextContent(data){
 
 function normalizeBucketLLMResult(parsed){
   function toItem(row){
-    if(!row||typeof row!=="object")return null;
-    var name=String(row.name||row.destination||row.city||"").trim();
-    if(!name)return null;
-    return {
-      name:name,
-      country:String(row.country||"").trim(),
-      bestMonths:Array.isArray(row.bestMonths)?row.bestMonths:[],
-      costPerDay:Number(row.costPerDay||0)||0,
-      tags:Array.isArray(row.tags)?row.tags:[],
-      bestTimeDesc:String(row.bestTimeDesc||"").trim(),
-      costNote:String(row.costNote||"").trim()
-    };
-  }
+    return normalizeBucketDestinationItem(row);  }
 
   if(!parsed)return null;
   if(parsed.type==="clarify"){
@@ -1768,12 +1987,65 @@ function normalizeBucketLLMResult(parsed){
   return fallbackOne?{type:"destinations",items:[fallbackOne]}:null;
 }
 
+function bucketConceptDestinationsForQuery(userMsg){
+  var q=String(userMsg||"").trim().toLowerCase();
+  if(!q)return [];
+  if(/\b(northern lights|aurora borealis|aurora)\b/.test(q)){
+    return [
+      {
+        name:"Reykjavik",
+        country:"Iceland",
+        bestMonths:[10,11,12,1,2,3],
+        costPerDay:260,
+        tags:["Nature","Photography","Adventure"],
+        bestTimeDesc:"October to March brings long nights and strong aurora visibility.",
+        costNote:"Expect winter-season pricing, with shoulder discounts in Oct-Nov and Mar."
+      },
+      {
+        name:"Tromso",
+        country:"Norway",
+        bestMonths:[10,11,12,1,2,3],
+        costPerDay:280,
+        tags:["Nature","Photography","Adventure"],
+        bestTimeDesc:"Late September to March offers peak Northern Lights viewing windows.",
+        costNote:"Norway is premium in winter; plan ahead for tours and stays."
+      },
+      {
+        name:"Fairbanks",
+        country:"United States",
+        bestMonths:[9,10,11,12,1,2,3],
+        costPerDay:220,
+        tags:["Nature","Photography","Adventure"],
+        bestTimeDesc:"September through March has clear, dark skies and frequent aurora activity.",
+        costNote:"Shoulder winter months can be cheaper than peak holiday weeks."
+      }
+    ];
+  }
+  return [];
+}
+
+function maybeResolveBucketConceptDestinations(userMsg, items){
+  var conceptItems=bucketConceptDestinationsForQuery(userMsg);
+  var list=Array.isArray(items)?items:[];
+  if(!conceptItems.length)return list;
+  if(!list.length)return conceptItems;
+  var hasConcrete=list.some(function(it){
+    var name=String(it&&it.name||"").trim();
+    if(!name)return false;
+    return !/\b(northern lights|aurora borealis|aurora)\b/i.test(name);
+  });
+  return hasConcrete?list:conceptItems;
+}
+
 function bucketQueryNeedsSpecificChildren(userMsg){
   var q=String(userMsg||"").trim().toLowerCase();
   if(!q)return false;
+  var anchor=bucketQueryAnchorName(userMsg);
+  if(/\b(?:somewhere|anywhere|ideas?|suggestions?)\b/.test(q)&&anchor){
+    return true;
+  }
   return /\b(cities|city|towns|town|places|destinations|spots|areas|regions|islands)\b/.test(q) ||
-    /\b(popular|top|best|tourist|must-see|recommend|recommended)\b/.test(q);
-}
+    /\b(popular|top|best|tourist|must-see|recommend|recommended)\b/.test(q);}
 
 function bucketQueryAnchorName(userMsg){
   var raw=String(userMsg||"").trim().replace(/[?!.,]+$/g,"");
@@ -1785,28 +2057,199 @@ function bucketQueryAnchorName(userMsg){
   return canonicalTripDestinationName(last);
 }
 
+var BUCKET_DESTINATION_OVERRIDES={
+  kyoto:{
+    name:"Kyoto",
+    country:"Japan",
+    bestMonths:[3,4,5,10,11],
+    costPerDay:120,
+    tags:["Culture","Food","History"],
+    bestTimeDesc:"Late Mar-May for cherry blossoms or Oct-Nov for autumn foliage.",
+    costNote:"Typical spend is about $120-$190/day depending on season and stay type."
+  }
+};
+
+function splitBucketDestinationNameCountry(rawName, rawCountry){
+  var name=String(rawName||"").trim();
+  var country=String(rawCountry||"").trim();
+  if(name&&!country){
+    var commaParts=name.split(",").map(function(part){return String(part||"").trim();}).filter(Boolean);
+    if(commaParts.length>=2){
+      name=commaParts[0];
+      country=commaParts.slice(1).join(", ");
+    }else{
+      var paren=name.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+      if(paren){
+        name=String(paren[1]||"").trim();
+        country=String(paren[2]||"").trim();
+      }
+    }
+  }
+  return {name:name,country:country};
+}
+
+function bucketDestinationOverrideForName(name){
+  var key=canonicalTripDestinationName(name);
+  if(!key)return null;
+  return BUCKET_DESTINATION_OVERRIDES[key]||null;
+}
+
+function normalizeBucketDestinationItem(row){
+  if(!row||typeof row!=="object")return null;
+  var parsed=splitBucketDestinationNameCountry(row.name||row.destination||row.city||"",row.country||"");
+  var name=String(parsed.name||"").trim();
+  if(!name)return null;
+  var override=bucketDestinationOverrideForName(name);
+  var bestMonths=Array.isArray(row.bestMonths)?row.bestMonths:[];
+  var tags=Array.isArray(row.tags)?row.tags:[];
+  var bestTimeDesc=String(row.bestTimeDesc||"").trim();
+  var costNote=String(row.costNote||"").trim();
+  var costPerDay=Number(row.costPerDay||0)||0;
+  var out={
+    name:String((override&&override.name)||name).trim(),
+    country:String(parsed.country||((override&&override.country)||"")).trim()
+  };
+  var resolvedBestMonths=bestMonths.length?bestMonths:((override&&Array.isArray(override.bestMonths))?override.bestMonths:[]);
+  var resolvedCostPerDay=costPerDay>0?costPerDay:Number((override&&override.costPerDay)||0)||0;
+  var resolvedTags=tags.length?tags:((override&&Array.isArray(override.tags))?override.tags:[]);
+  var resolvedBestTimeDesc=bestTimeDesc||String((override&&override.bestTimeDesc)||"").trim();
+  var resolvedCostNote=costNote||String((override&&override.costNote)||"").trim();
+  if(resolvedBestMonths.length)out.bestMonths=resolvedBestMonths;
+  if(resolvedCostPerDay>0)out.costPerDay=resolvedCostPerDay;
+  if(resolvedTags.length)out.tags=resolvedTags;
+  if(resolvedBestTimeDesc)out.bestTimeDesc=resolvedBestTimeDesc;
+  if(resolvedCostNote)out.costNote=resolvedCostNote;
+  return out;
+}
+
+function isSameBucketDestination(a,b){
+  var aName=canonicalTripDestinationName(a&&a.name||"");
+  var bName=canonicalTripDestinationName(b&&b.name||"");
+  if(!aName||!bName||aName!==bName)return false;
+  var aCountry=canonicalTripDestinationName(a&&a.country||"");
+  var bCountry=canonicalTripDestinationName(b&&b.country||"");
+  if(!aCountry||!bCountry)return true;
+  return aCountry===bCountry;}
+
 function refineBucketItemsForQuery(userMsg, items){
   var list=Array.isArray(items)?items:[];
   if(!list.length)return [];
   var needsSpecific=bucketQueryNeedsSpecificChildren(userMsg);
   var anchor=bucketQueryAnchorName(userMsg);
   var out=[];
-  var seen={};
   list.forEach(function(it){
-    var name=String(it&&it.name||"").trim();
+    var normalized=normalizeBucketDestinationItem(it);
+    if(!normalized)return;
+    var name=String(normalized.name||"").trim();
     if(!name)return;
-    var country=String(it&&it.country||"").trim();
+    var country=String(normalized.country||"").trim();
     var nameKey=canonicalTripDestinationName(name);
     var countryKey=canonicalTripDestinationName(country);
     if(needsSpecific&&anchor&&nameKey===anchor&&(!countryKey||countryKey===anchor)){
       return;
     }
-    var dedupeKey=nameKey+"|"+countryKey;
-    if(seen[dedupeKey])return;
-    seen[dedupeKey]=1;
-    out.push(it);
+    var duplicateIdx=-1;
+    for(var i=0;i<out.length;i++){
+      if(isSameBucketDestination(out[i], normalized)){
+        duplicateIdx=i;
+        break;
+      }
+    }
+    if(duplicateIdx>=0){
+      var existingCountry=String(out[duplicateIdx]&&out[duplicateIdx].country||"").trim();
+      if(!existingCountry&&country){
+        out[duplicateIdx]=Object.assign({},out[duplicateIdx],normalized);
+      }
+      return;
+    }
+    out.push(normalized);
   });
+  if(!needsSpecific&&isLongFormBucketEssay(userMsg)&&out.length>1){
+    var primary=selectPrimaryBucketItem(userMsg,out);
+    return primary?[primary]:[];
+  }
   return out;
+}
+
+function buildBucketSuggestionAdditions(proposedItems, existingBucket){
+  var existingByName={};
+  var existingExact={};
+  (Array.isArray(existingBucket)?existingBucket:[]).forEach(function(row){
+    var exName=String(row&&row.name||"").trim();
+    if(!exName)return;
+    var exNameKey=canonicalTripDestinationName(exName);
+    if(!exNameKey)return;
+    var exCountry=String(row&&row.country||"").trim();
+    var exCountryKey=canonicalTripDestinationName(exCountry);
+    var exKey=exNameKey+"|"+exCountryKey;
+    existingExact[exKey]=true;
+    if(!existingByName[exNameKey]){
+      existingByName[exNameKey]={
+        countries:{},
+        best:null
+      };
+    }
+    existingByName[exNameKey].countries[exCountryKey]=true;
+    if(!existingByName[exNameKey].best){
+      existingByName[exNameKey].best=row;
+    }
+  });
+
+  function normalizeItem(raw){
+    var source=raw||{};
+    var name=String(source.name||"").trim();
+    if(!name)return null;
+    var nameKey=canonicalTripDestinationName(name);
+    if(!nameKey)return null;
+    var existingInfo=existingByName[nameKey]||null;
+    var bestExisting=(existingInfo&&existingInfo.best)||null;
+    var country=String(source.country||"").trim()||String(bestExisting&&bestExisting.country||"").trim();
+    return {
+      name:name,
+      country:country,
+      bestMonths:Array.isArray(source.bestMonths)&&source.bestMonths.length?source.bestMonths:(Array.isArray(bestExisting&&bestExisting.bestMonths)?bestExisting.bestMonths:[]),
+      costPerDay:Number(source.costPerDay||0)||Number(bestExisting&&bestExisting.costPerDay||0)||0,
+      tags:Array.isArray(source.tags)&&source.tags.length?source.tags:(Array.isArray(bestExisting&&bestExisting.tags)?bestExisting.tags:[]),
+      bestTimeDesc:String(source.bestTimeDesc||"").trim()||String(bestExisting&&bestExisting.bestTimeDesc||"").trim(),
+      costNote:String(source.costNote||"").trim()||String(bestExisting&&bestExisting.costNote||"").trim()
+    };
+  }
+
+  var proposed=[];
+  var proposedSeen={};
+  (Array.isArray(proposedItems)?proposedItems:[]).forEach(function(raw){
+    var item=normalizeItem(raw);
+    if(!item)return;
+    var nameKey=canonicalTripDestinationName(item.name);
+    var countryKey=canonicalTripDestinationName(item.country);
+    var proposedKey=nameKey+"|"+countryKey;
+    if(proposedSeen[proposedKey])return;
+    proposedSeen[proposedKey]=true;
+    proposed.push(item);
+  });
+
+  var toAdd=[];
+  proposed.forEach(function(item){
+    var nameKey=canonicalTripDestinationName(item.name);
+    var countryKey=canonicalTripDestinationName(item.country);
+    var exactKey=nameKey+"|"+countryKey;
+    var existingInfo=existingByName[nameKey]||null;
+    var hasExistingName=!!existingInfo;
+    var hasCountrylessExisting=!!(existingInfo&&existingInfo.countries&&existingInfo.countries[""]);
+    var hasExactMatch=!!existingExact[exactKey];
+    var isCountrylessMatchOfExisting=!countryKey&&hasExistingName;
+    var hasCountryButMatchesCountrylessEntry=!!countryKey&&hasCountrylessExisting;
+    var isDuplicate=hasExactMatch||isCountrylessMatchOfExisting||hasCountryButMatchesCountrylessEntry;
+    if(isDuplicate)return;
+    toAdd.push(item);
+    existingExact[exactKey]=true;
+    if(!existingByName[nameKey]){
+      existingByName[nameKey]={countries:{},best:item};
+    }
+    existingByName[nameKey].countries[countryKey]=true;
+  });
+
+  return {proposed:proposed,toAdd:toAdd};
 }
 
 function bucketClarifyMessage(userMsg){
@@ -1818,8 +2261,38 @@ function bucketClarifyMessage(userMsg){
   return "Could you name specific cities, islands, or regions you want to explore?";
 }
 
+const BUCKET_REGIONAL_CITY_FALLBACKS = {
+  "south america": [
+    { name: "Buenos Aires", country: "Argentina" },
+    { name: "Cartagena", country: "Colombia" },
+    { name: "Cusco", country: "Peru" },
+  ],
+};
+
+function bucketRegionalFallbackItems(userMsg){
+  var scope=bucketQueryAnchorName(userMsg);
+  if(!scope)return [];
+  var key=canonicalTripDestinationName(scope);
+  var seeded=BUCKET_REGIONAL_CITY_FALLBACKS[key];
+  if(!Array.isArray(seeded)||seeded.length===0)return [];
+  return seeded.map(function(it){
+    return {
+      name:String(it.name||"").trim(),
+      country:String(it.country||"").trim(),
+      bestMonths:[4,5,9,10],
+      costPerDay:150,
+      tags:["Culture","Food"],
+      bestTimeDesc:"Shoulder seasons are usually best for weather and crowds.",
+      costNote:"Estimated default until preferences refine this."
+    };
+  }).filter(function(it){return it.name;});}
+
 async function fallbackExtractDestinations(userMsg){
+  var regionFallback=bucketRegionalFallbackItems(userMsg);
+  if(regionFallback.length>0)return regionFallback;
   try{
+    var conceptResolved=bucketConceptDestinationsForQuery(userMsg);
+    if(conceptResolved.length)return conceptResolved;
     var r=await apiJson("/nlp/extract-destinations",{method:"POST",body:{text:userMsg}});
     var arr=(r&&Array.isArray(r.destinations))?r.destinations:[];
     if(!arr.length)return [];
@@ -1828,8 +2301,7 @@ async function fallbackExtractDestinations(userMsg){
       var it=arr[i]||{};
       var nm=String(it.name||it.destination||it.city||"").trim();
       if(!nm)continue;
-      out.push({
-        name:nm,
+      var normalized=normalizeBucketDestinationItem({        name:nm,
         country:String(it.country||"").trim(),
         bestMonths:[4,5,9,10],
         costPerDay:150,
@@ -1837,14 +2309,18 @@ async function fallbackExtractDestinations(userMsg){
         bestTimeDesc:"Shoulder seasons are usually best for weather and crowds.",
         costNote:"Estimated default until preferences refine this."
       });
+      if(!normalized)continue;
+      out.push(normalized);
     }
     return out;
   }catch(e){
-    return [];
+    return buildBucketFallbackDestinations(userMsg,[]);
   }
 }
 
 async function askLLM(userMsg, budget, history) {
+  var keywordDestinations=resolveBucketKeywordDestinations(userMsg,budget);
+  if(keywordDestinations.length)return {type:"destinations",items:keywordDestinations};
   var bd = {budget:"$50-120/day budget",moderate:"$120-250/day mid-range",premium:"$250-400/day premium",luxury:"$400+/day luxury"};
   var sys = "You are WanderPlan Bucket List Agent. User may mention one or many dream destinations. Respond with ONLY valid JSON.\n\nFor one or more places return: {\"type\":\"destinations\",\"items\":[{\"name\":\"Place\",\"country\":\"Country\",\"bestMonths\":[3,4,5],\"costPerDay\":150,\"tags\":[\"Culture\",\"Food\"],\"bestTimeDesc\":\"Mar-May for cherry blossoms\",\"costNote\":\"Based on " + (bd[budget] || bd.moderate) + "\"}]}\n\nIf too vague: {\"type\":\"clarify\",\"message\":\"Your question\"}\n\nRules:\n- return specific cities, islands, or regions travelers actually plan around\n- do not return generic placeholders like \"Europe trip\" or \"beach destination\"\n- do not duplicate the same place with slightly different wording\n- include realistic bestMonths and costPerDay ranges, not zeros\n- prefer destinations that fit the stated budget when possible\n- if the user names multiple places, include each distinct place once\n\ntags from: Beach,Culture,Food,Adventure,Nature,Nightlife,History,Wellness,Photography,Shopping,Wine,Hiking. ONLY JSON.";
   var msgs = [];
@@ -1857,7 +2333,8 @@ async function askLLM(userMsg, budget, history) {
     var normalized=normalizeBucketLLMResult(parsed);
     if(normalized&&normalized.type==="destinations"){
       var refined=refineBucketItemsForQuery(userMsg, normalized.items);
-      if(refined.length)return {type:"destinations",items:refined};
+      var conceptRefined=maybeResolveBucketConceptDestinations(userMsg, refined);
+      if(conceptRefined.length)return {type:"destinations",items:conceptRefined};
       if(bucketQueryNeedsSpecificChildren(userMsg)){
         var retrySys=sys+"\nAdditional rule: if the user asks for cities/places in a country or larger area, NEVER return just that parent country/area. Return 4-8 specific city, island, or region-level destinations inside it.";
         var retryData=await llmReq({model:"claude-sonnet-4-20250514",max_tokens:700,messages:msgs,system:retrySys});
@@ -1866,17 +2343,53 @@ async function askLLM(userMsg, budget, history) {
         var retryNormalized=normalizeBucketLLMResult(retryParsed);
         if(retryNormalized&&retryNormalized.type==="destinations"){
           var retryRefined=refineBucketItemsForQuery(userMsg, retryNormalized.items);
-          if(retryRefined.length)return {type:"destinations",items:retryRefined};
+          var retryConceptRefined=maybeResolveBucketConceptDestinations(userMsg, retryRefined);
+          if(retryConceptRefined.length)return {type:"destinations",items:retryConceptRefined};
         }
+        var regionFallback=bucketRegionalFallbackItems(userMsg);
+        if(regionFallback.length)return {type:"destinations",items:regionFallback};
         return {type:"clarify",message:bucketClarifyMessage(userMsg)};
       }
+    }
+    if(normalized&&normalized.type==="clarify"){
+      var clarifySeeds=bucketPreferenceSeedDestinations(userMsg,budget);
+      if(clarifySeeds.length)return {type:"destinations",items:clarifySeeds};
     }
     if(normalized)return normalized;
   } catch (e) {}
   var fb=await fallbackExtractDestinations(userMsg);
   var refinedFallback=refineBucketItemsForQuery(userMsg, fb);
   if(refinedFallback.length)return {type:"destinations",items:refinedFallback};
+  var preferenceSeeds=bucketPreferenceSeedDestinations(userMsg,budget);
+  if(preferenceSeeds.length)return {type:"destinations",items:preferenceSeeds};
   return {type: "clarify", message: bucketClarifyMessage(userMsg)};
+}
+
+function destinationTripKey(dest){
+  var nm=String(dest&&dest.name||"").trim().toLowerCase();
+  var ct=String(dest&&dest.country||"").trim().toLowerCase();
+  return nm+"|"+ct;
+}
+
+function upsertBucketItemList(list,newItem){
+  var incoming=(newItem&&typeof newItem==="object")?newItem:null;
+  if(!incoming)return Array.isArray(list)?list.slice():[];
+  var incomingId=String(incoming.id||"").trim();
+  var incomingDestKey=destinationTripKey(incoming);
+  var exists=false;
+  var out=(Array.isArray(list)?list:[]).map(function(item){
+    var itemId=String(item&&item.id||"").trim();
+    var sameId=!!incomingId&&itemId===incomingId;
+    var sameDestination=!!incomingDestKey&&destinationTripKey(item)===incomingDestKey;
+    if(!sameId&&!sameDestination)return item;
+    exists=true;
+    var merged=Object.assign({},item,incoming);
+    if(itemId)merged.id=itemId;
+    else if(incomingId)merged.id=incomingId;
+    return merged;
+  });
+  if(!exists)out.push(incoming);
+  return out;
 }
 
 function buildPoiRequestSignature(destinations, interests, budgetTier, dietary, groupPrefs, routePlanSignature){
@@ -3810,6 +4323,7 @@ export default function WanderPlan(){
   var[rememberCreds,setRememberCreds]=useState(false);
   var[signinLoad,setSigninLoad]=useState(false);
   var[vpW,setVpW]=useState(typeof window!=="undefined"&&window.innerWidth?window.innerWidth:1024);
+  var[mobileNavOpen,setMobileNavOpen]=useState(false);
   var[profileHydrated,setPH]=useState(false);
   var[authErr,setAE]=useState("");
   var[authInfo,setAI]=useState("");
@@ -3836,6 +4350,7 @@ export default function WanderPlan(){
   var[destinationMsg,setDSM]=useState("");
   var[tripFilter,setTF]=useState("all");
   var[viewTrip,setVT]=useState(null);
+  var[deletedSeedTripIds,setDeletedSeedTripIds]=useState({});
   var[wizStep,setWS]=useState(0);
   var[profileDebug,setProfileDebug]=useState({lastGet:null,lastPut:null,lastPutResult:null,tripProfiles:null});
   var[blChat,setBC]=useState([{from:"agent",text:"Tell me a place you dream of visiting! Be as vague or specific as you like."}]);
@@ -3844,6 +4359,7 @@ export default function WanderPlan(){
   var[bucketMsg,setBM]=useState("");
   var[invEmail,setIE]=useState("");
   var chatRef=useRef(null);
+  var blInFlightRef=useRef(false);
   var inviteAcceptSeenRef=useRef({});
   var tripInviteAttemptRef=useRef({});
   var tripInviteInFlightRef=useRef(false);
@@ -3856,6 +4372,8 @@ export default function WanderPlan(){
   var mealDraftSaveTimerRef=useRef(null);
   var pendingWizardStepPersistRef=useRef(null);
   var wizardStepPersistRetryRef=useRef(null);
+  var historyBootstrappedRef=useRef(false);
+  var restoringFromBrowserHistoryRef=useRef(false);
   // Wizard interaction states
   var[destMemberVotes,setDMV]=useState({});
   var[tripJoined,setTJ]=useState({});
@@ -3925,6 +4443,8 @@ export default function WanderPlan(){
   var[companionData,setCompanionData]=useState(null);
   var[companionLoad,setCompanionLoad]=useState(false);
   var[companionErr,setCompanionErr]=useState("");
+  var[companionRefreshLoad,setCompanionRefreshLoad]=useState(false);
+  var[companionRefreshStamp,setCompanionRefreshStamp]=useState("");
   var[companionActionLoad,setCompanionActionLoad]=useState(false);
   var[receiptText,setReceiptText]=useState("");
   var[receiptImage,setReceiptImage]=useState({name:"",mediaType:"",base64:""});
@@ -4025,12 +4545,11 @@ export default function WanderPlan(){
     if(savedCreds&&savedCreds.remember){
       setRememberCreds(true);
       setUser(function(p){return Object.assign({},p,{email:savedCreds.email||p.email});});
-      if(savedCreds.password)setSigninPass(savedCreds.password);
     }
     var tok=await ld("wp-auth","");if(tok)setAT(tok);
     var accountEmail=String(savedCreds&&savedCreds.email||"").trim().toLowerCase();
     var u=await ldAccount("wp-u",tok,accountEmail,null);if(u)setUser(Object.assign(emptyUserState(),u));
-    var c=await ldAccount("wp-c",tok,accountEmail,null);if(c)setCrew(c);
+    var c=await ldAccount("wp-c",tok,accountEmail,null);if(c)setCrew(sanitizeCrewMembers(c));
     var b=await ldAccount("wp-b",tok,accountEmail,null);if(b)setBucket(b);
     var t=await ldAccount("wp-t",tok,accountEmail,null);if(t)setTrips(t);
     var ch=await ld("wp-ch",null);if(ch&&ch.length>1)setBC(ch);
@@ -4040,19 +4559,45 @@ export default function WanderPlan(){
         await acceptPendingInvite(tok,inviteTokenInUrl,inviteActionInUrl);
       }catch(e){}
       try{
-        await hydrateSignedInSession(tok,{baseUser:u||Object.assign(emptyUserState(),{email:accountEmail})});
+        await hydrateSignedInSession(tok,{baseUser:u||Object.assign(emptyUserState(),{email:accountEmail}),cachedTrips:t});
       }catch(e){}
       setSc("dash");
     }
   })();},[]);
   useEffect(function(){if(loaded)svAccount("wp-u",authToken,user.email,user);},[user,loaded,authToken]);
   useEffect(function(){if(loaded){if(rememberCreds)sv("wp-auth",authToken||"");else sv("wp-auth","");}},[authToken,loaded,rememberCreds]);
-  useEffect(function(){if(loaded)svAccount("wp-c",authToken,user.email,crew);},[crew,loaded,authToken,user.email]);
+  useEffect(function(){if(loaded)svAccount("wp-c",authToken,user.email,sanitizeCrewMembers(crew));},[crew,loaded,authToken,user.email]);
   useEffect(function(){if(loaded)svAccount("wp-b",authToken,user.email,bucket);},[bucket,loaded,authToken,user.email]);
   useEffect(function(){if(loaded)svAccount("wp-t",authToken,user.email,trips);},[trips,loaded,authToken,user.email]);
   useEffect(function(){if(loaded&&blChat.length>1)sv("wp-ch",blChat);},[blChat,loaded]);
-  useEffect(function(){if(chatRef.current)chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
+  useEffect(function(){if(chatRef.current&&typeof chatRef.current.scrollIntoView==="function")chatRef.current.scrollIntoView({behavior:"smooth"});},[blChat]);
   useEffect(function(){if(sc==="new_trip"){setTIM("");setTIL({});}},[sc]);
+  useEffect(function(){
+    if(typeof window==="undefined")return;
+    function onPopState(ev){
+      var nextScreen=screenFromHistoryState(ev&&ev.state);
+      if(!nextScreen)return;
+      restoringFromBrowserHistoryRef.current=true;
+      setSc(nextScreen);
+    }
+    window.addEventListener("popstate",onPopState);
+    return function(){window.removeEventListener("popstate",onPopState);};
+  },[]);
+  useEffect(function(){
+    if(typeof window==="undefined")return;
+    var nextState=historyStateForScreen(sc);
+    if(!historyBootstrappedRef.current){
+      window.history.replaceState(nextState,"",window.location.href);
+      historyBootstrappedRef.current=true;
+      restoringFromBrowserHistoryRef.current=false;
+      return;
+    }
+    if(restoringFromBrowserHistoryRef.current){
+      restoringFromBrowserHistoryRef.current=false;
+      return;
+    }
+    window.history.pushState(nextState,"",window.location.href);
+  },[sc]);
   useEffect(function(){
     if(typeof window==="undefined")return;
     function onResize(){
@@ -4072,7 +4617,22 @@ export default function WanderPlan(){
     return function(){clearTimeout(t);};
   },[user,authToken,loaded,profileHydrated,currentTripId,newTrip,viewTrip&&viewTrip.id]);
 
-  function go(s){setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}
+  function go(s){setMobileNavOpen(false);setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}  function deleteTripWithConfirmation(trip){
+    if(!trip)return false;
+    if(typeof window!=="undefined"&&typeof window.confirm==="function"){
+      var ok=window.confirm("Are you sure you want to delete this trip? This cannot be undone.");
+      if(!ok)return false;
+    }
+    var tripId=String(trip.id||"").trim();
+    if(!tripId)return false;
+    setTrips(function(p){return p.filter(function(x){return String(x&&x.id||"").trim()!==tripId;});});
+    if(trip.isSeed){
+      setDeletedSeedTripIds(function(prev){var next=Object.assign({},prev);next[tripId]=true;return next;});
+    }
+    setVT(function(prev){return String(prev&&prev.id||"").trim()===tripId?null:prev;});
+    setCTID(function(prev){return String(prev||"").trim()===tripId?"":prev;});
+    return true;
+  }
   function back(){if(!hist.length)return;setFade(true);setTimeout(function(){setSc(hist[hist.length-1]);setHist(function(h){return h.slice(0,-1);});setFade(false);},200);}
   function upU(k,v){setUser(function(p){var n=Object.assign({},p);n[k]=v;return n;});}
   function mergeCrewFromPeers(peers){
@@ -4222,7 +4782,10 @@ export default function WanderPlan(){
           dates:"",
           days:Number(t.duration_days||0)||0,
           budget:0,
-          spent:0
+          spent:0,
+          expenses:Array.isArray(t.expenses)?t.expenses:[],
+          recent_expenses:Array.isArray(t.recent_expenses)?t.recent_expenses:[],
+          currency:String(t&&t.expense_summary&&t.expense_summary.currency||"USD").trim().toUpperCase()||"USD"
         };
       });
       var planningMetaRows=await Promise.all((mapped||[]).map(async function(tripItem){
@@ -4277,7 +4840,10 @@ export default function WanderPlan(){
             dates:t.dates||p.dates||"",
             days:Math.max(0,Number(t.days||p.days)||0),
             budget:Number(p.budget||0)||0,
-            spent:Number(p.spent||0)||0
+            spent:Number(p.spent||0)||0,
+            expenses:(Array.isArray(t.expenses)&&t.expenses.length)?t.expenses:(Array.isArray(p.expenses)?p.expenses:[]),
+            recent_expenses:(Array.isArray(t.recent_expenses)&&t.recent_expenses.length)?t.recent_expenses:(Array.isArray(p.recent_expenses)?p.recent_expenses:[]),
+            currency:t.currency||p.currency||"USD"
           });
         });
         var syncedIds={};synced.forEach(function(t){syncedIds[t.id]=1;});
@@ -4355,7 +4921,7 @@ export default function WanderPlan(){
     setUser(seededUser);
     setBucket([]);
     setCrew([]);
-    setTrips([]);
+    setTrips(Array.isArray(o.cachedTrips)?o.cachedTrips:[]);
     try{
       var prof=await apiJson("/me/profile",{method:"GET"},token);
       if(prof&&prof.profile){
@@ -5027,13 +5593,17 @@ export default function WanderPlan(){
   function refreshCompanionNow(tid,silent){
     var tripId=String(tid||resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
     if(!(loaded&&authToken&&tripId&&isUuidLike(tripId)))return Promise.resolve(null);
+    if(!silent)setCompanionRefreshLoad(true);
     if(!silent){
       setCompanionLoad(true);
       setCompanionErr("");
     }
-    return apiJson("/trips/"+tripId+"/companion",{method:"GET"},authToken).then(function(res){
+    return apiJson("/trips/"+tripId+"/companion?refresh_ts="+Date.now(),{method:"GET",cache:"no-store"},authToken).then(function(res){
       setCompanionData((res&&res.companion)||null);
-      if(!silent)setCompanionLoad(false);
+      if(!silent){
+        setCompanionLoad(false);
+        setCompanionRefreshStamp(new Date().toISOString());
+      }
       refreshCurrentTripSharedState(authToken,tripId).catch(function(){});
       return (res&&res.companion)||null;
     }).catch(function(e){
@@ -5042,6 +5612,8 @@ export default function WanderPlan(){
         setCompanionErr(String(e&&e.message||"Could not load live companion"));
       }
       throw e;
+    }).finally(function(){
+      if(!silent)setCompanionRefreshLoad(false);
     });
   }
   function parseReceiptForTrip(tripId,payload){
@@ -5086,7 +5658,6 @@ export default function WanderPlan(){
   }
   function consensusStageKeyForStep(stepNum){
     var map={
-      2:"vote_destinations",
       3:"interests",
       4:"health",
       6:"activities",
@@ -5617,7 +6188,9 @@ export default function WanderPlan(){
     setAI("");
     setSigninLoad(true);
     var email=(user.email||"").trim().toLowerCase();
+    var isValidEmail=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     if(!email||!signinPass){setAE("Enter email and password.");setSigninLoad(false);return;}
+    if(!isValidEmail){setAE("Please enter a valid email address.");setSigninLoad(false);return;}
     try{
       var reg=await apiJson("/auth/login",{method:"POST",body:{email:email,password:signinPass}});
       if(reg&&reg.accessToken){
@@ -5687,19 +6260,32 @@ export default function WanderPlan(){
     setSigninLoad(false);
   }
 
-  function updateBucketItemLocal(newItem){
-    setBucket(function(p){
-      var key=(newItem.id||newItem.name||"").toString();
-      var exists=false;
-      var out=p.map(function(x){if((x.id||x.name||"").toString()===key){exists=true;return newItem;}return x;});
-      return exists?out:out.concat([newItem]);
-    });
+  function signOutUser(){
+    setAT("");
+    setPH(false);
+    setUser(emptyUserState());
+    setCrew([]);
+    setBucket([]);
+    setTrips([]);
+    setNT({name:"",dests:[],members:[],step:0});
+    setVT(null);
+    setCTID("");
+    setWSID("");
+    setTF("all");
+    setAuthMode("signin");
+    setSigninPass("");
+    setResetPass("");
+    setAE("");
+    setAI("");
+    setCM("");
+    setTIM("");
+    setTSM("");
+    setHist([]);
+    setSc("signup");
   }
 
-  function destinationTripKey(dest){
-    var nm=String(dest&&dest.name||"").trim().toLowerCase();
-    var ct=String(dest&&dest.country||"").trim().toLowerCase();
-    return nm+"|"+ct;
+  function updateBucketItemLocal(newItem){
+    setBucket(function(p){return upsertBucketItemList(p,newItem);});
   }
 
   function applyTripDestinationValuesLocal(nextValues,tripIdOverride){
@@ -5770,6 +6356,21 @@ export default function WanderPlan(){
     });
   }
 
+  function mergePersistedBucketItem(item, fallback){
+    var resolved=item||{};
+    var base=fallback||{};
+    return Object.assign({},resolved,{
+      id:resolved.id||base.id,
+      name:resolved.name||base.name,
+      country:resolved.country||base.country,
+      bestMonths:resolved.bestMonths||base.bestMonths,
+      costPerDay:resolved.costPerDay||base.costPerDay,
+      tags:resolved.tags||base.tags,
+      bestTimeDesc:resolved.bestTimeDesc||base.bestTimeDesc,
+      costNote:resolved.costNote||base.costNote
+    });
+  }
+
   function searchDestinationsForTrip(){
     var msg=String(newTripDestInput||"").trim();
     if(!msg||tripDestSearchLoad)return;
@@ -5834,6 +6435,13 @@ export default function WanderPlan(){
     var picked=normalizeTripDestinationValue(dest&&dest.name);
     if(!picked)return;
     addDestinationToNewTrip(picked);
+    var activeTripId=String(resolveWizardTripId(currentTripId,newTrip,viewTrip)||"").trim();
+    if(activeTripId&&isUuidLike(activeTripId)){
+      setCTID(activeTripId);
+      setWS(0);
+      go("wizard");
+      return;
+    }
     setCM("Destination selected for your next trip. Continue in Plan a New Trip.");
     go("new_trip");
   }
@@ -6038,22 +6646,25 @@ export default function WanderPlan(){
   }
 
   function sendBL(){
-    if(!blIn.trim()||blLoad)return;var msg=blIn.trim();setBLI("");
+    if(!blIn.trim()||blLoad||blInFlightRef.current)return;var msg=blIn.trim();setBLI("");
+    blInFlightRef.current=true;
     setBC(function(p){return p.concat([{from:"user",text:msg}]);});setBLL(true);
     askLLM(msg,user.budget,blChat).then(function(res){
-      setBLL(false);
       if(res&&res.type==="destinations"&&Array.isArray(res.items)&&res.items.length){
         var proposed=[];
-        var proposedSeen={};
         for(var k=0;k<res.items.length;k++){
           var it0=res.items[k]||{};
           var n0=String(it0.name||"").trim();
           if(!n0)continue;
+          var existingMatch0=bucket.find(function(savedItem){
+            return shouldTreatBucketItemsAsSameDestination(savedItem,{name:n0,country:it0.country});
+          })||null;
           var c0=String(it0.country||"").trim();
+          if(!c0&&existingMatch0)c0=String(existingMatch0.country||"").trim();
           var pKey=n0.toLowerCase()+"|"+c0.toLowerCase();
           if(proposedSeen[pKey])continue;
           proposedSeen[pKey]=true;
-          proposed.push({
+          var normalizedItem0={
             name:n0,
             country:c0,
             bestMonths:Array.isArray(it0.bestMonths)?it0.bestMonths:[],
@@ -6061,42 +6672,45 @@ export default function WanderPlan(){
             tags:Array.isArray(it0.tags)?it0.tags:[],
             bestTimeDesc:String(it0.bestTimeDesc||""),
             costNote:String(it0.costNote||"")
-          });
+          };
+          proposed.push(existingMatch0?mergeBucketItemDetails(existingMatch0,normalizedItem0):normalizedItem0);
         }
-        var existing={};
-        bucket.forEach(function(b){
-          var key=(String(b.name||"").trim().toLowerCase()+"|"+String(b.country||"").trim().toLowerCase());
-          if(key!=="|")existing[key]=true;
-        });
-        var toAdd=[];
-        for(var i=0;i<proposed.length;i++){
-          var it=proposed[i]||{};
-          var nm=String(it.name||"").trim();
-          if(!nm)continue;
-          var ct=String(it.country||"").trim();
-          var key=(nm.toLowerCase()+"|"+ct.toLowerCase());
-          if(existing[key])continue;
-          existing[key]=true;
-          toAdd.push({
-            id:"d"+Date.now()+"-"+i,
+        var split=dedupeBucketSuggestionsForExisting(proposed,bucket);
+        var duplicateNames=split.duplicateNames;
+        var toAdd=split.toAdd.map(function(it,i){
+          var nm=String(it&&it.name||"").trim();
+          var ct=String(it&&it.country||"").trim();
+          return {            id:"d"+Date.now()+"-"+i,
             name:nm,
             country:ct,
-            bestMonths:Array.isArray(it.bestMonths)?it.bestMonths:[],
-            costPerDay:Number(it.costPerDay||0)||0,
-            tags:Array.isArray(it.tags)?it.tags:[],
-            bestTimeDesc:String(it.bestTimeDesc||""),
-            costNote:String(it.costNote||"")
-          });
-        }
+            bestMonths:Array.isArray(it&&it.bestMonths)?it.bestMonths:[],
+            costPerDay:Number(it&&it.costPerDay||0)||0,
+            tags:Array.isArray(it&&it.tags)?it.tags:[],
+            bestTimeDesc:String(it&&it.bestTimeDesc||""),
+            costNote:String(it&&it.costNote||"")
+          };
+        });
         if(!toAdd.length){
-          setBC(function(p){return p.concat([{from:"agent",text:"Those places are already in your bucket list. Pick destinations from Bucket List cards when you start planning a trip.",suggestions:proposed}]);});
+          var duplicateMsg=duplicateNames.length===1
+            ? (duplicateNames[0]+" is already in your bucket list.")
+            : (duplicateNames.join(", ")+" are already in your bucket list.");
+          setBC(function(p){return p.concat([{from:"agent",text:duplicateMsg+" Pick destinations from Bucket List cards when you start planning a trip.",suggestions:proposed}]);});
           return;
         }
 
+        var names=toAdd.map(function(d){return d.name;}).join(", ");
+        var interestCue=summarizeActiveInterests(user&&user.interests);
+        var responseText="Added "+names+" to your bucket list. Destinations become part of planning only after you pick them in Plan a New Trip.";
+        if(interestCue){
+          responseText+=" Matched with your interests: "+interestCue+".";
+        }
+        setBC(function(p){return p.concat([{from:"agent",text:responseText,suggestions:proposed}]);});
+        toAdd.forEach(function(d){
+          updateBucketItemLocal(d);
+        });
+
         function persistAt(idx){
           if(idx>=toAdd.length){
-            var names=toAdd.map(function(d){return d.name;}).join(", ");
-            setBC(function(p){return p.concat([{from:"agent",text:"Added "+names+" to your bucket list. Destinations become part of planning only after you pick them in Plan a New Trip.",suggestions:proposed}]);});
             return;
           }
           var d=toAdd[idx];
@@ -6106,14 +6720,12 @@ export default function WanderPlan(){
               cost_per_day:d.costPerDay||0,best_time_desc:d.bestTimeDesc||"",cost_note:d.costNote||""
             }},authToken).then(function(saved){
               var item=(saved&&saved.item)?saved.item:d;
-              updateBucketItemLocal(Object.assign({},item,{id:item.id||d.id,name:item.name||d.name,country:item.country||d.country,bestMonths:item.bestMonths||d.bestMonths,costPerDay:item.costPerDay||d.costPerDay,tags:item.tags||d.tags,bestTimeDesc:item.bestTimeDesc||d.bestTimeDesc,costNote:item.costNote||d.costNote}));
+              updateBucketItemLocal(mergePersistedBucketItem(item,d));
               persistAt(idx+1);
             }).catch(function(){
-              updateBucketItemLocal(d);
               persistAt(idx+1);
             });
           }else{
-            updateBucketItemLocal(d);
             persistAt(idx+1);
           }
         }
@@ -6121,6 +6733,11 @@ export default function WanderPlan(){
       }else{
         setBC(function(p){return p.concat([{from:"agent",text:(res&&res.message)||"Tell me more?"}]);});
       }
+    }).catch(function(){
+      setBC(function(p){return p.concat([{from:"agent",text:"I ran into an issue processing that request. Please try again."}]);});
+    }).finally(function(){
+      blInFlightRef.current=false;
+      setBLL(false);
     });
   }
 
@@ -6252,7 +6869,7 @@ export default function WanderPlan(){
         isSeed:true
       });
     }
-    var displayTrips=trips.concat(seedTrips);
+    var displayTrips=trips.concat(seedTrips).filter(function(t){return !deletedSeedTripIds[String(t&&t.id||"").trim()];});
     var filtered=displayTrips.filter(function(t){return matchesTripFilter(t,tripFilter);});
     return(<div>
       <Fade delay={50}><h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>My Trips</h1><p style={{fontSize:14,color:C.tx2,marginBottom:20}}>{displayTrips.length} trip{displayTrips.length!==1?"s":""} total</p></Fade>
@@ -6269,7 +6886,7 @@ export default function WanderPlan(){
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {tr.status==="active"&&<div style={{width:6,height:6,borderRadius:999,background:C.grn,animation:"pulse 1.5s infinite"}}/>}
                   <span style={{fontSize:11,fontWeight:600,padding:"3px 10px",borderRadius:20,color:st.c,background:st.bg,whiteSpace:"nowrap"}}>{st.l}</span>
-                  {!tr.isSeed&&<button onClick={function(e){e.stopPropagation();setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>}
+                  {!tr.isSeed&&<button onClick={function(e){e.stopPropagation();deleteTripWithConfirmation(tr);}} title="Delete trip" aria-label="Delete trip" style={{width:24,height:24,borderRadius:6,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><TrashIcon size={12} color={C.red}/></button>}
                 </div>
               </div>
               <p style={{fontSize:13,color:C.tx2,marginBottom:10}}>{tr.destNames||"No destinations"}</p>
@@ -6452,7 +7069,7 @@ export default function WanderPlan(){
             </>)}
             {tr.status==="saved"&&<button onClick={function(){setCTID(tr.id||"");setNT(tr);setWS(Math.max(0,Number(tr.step||0)||0));go("wizard");}} style={{flex:1,padding:"12px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",color:C.bg,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>Start Planning</button>}
             {tr.status==="completed"&&<button style={{flex:1,padding:"12px",borderRadius:12,border:"1px solid "+C.border,background:"transparent",color:C.tx2,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46}}>View Itinerary</button>}
-            <button onClick={function(){setTrips(function(p){return p.filter(function(x){return x.id!==tr.id;});});go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
+            <button onClick={function(){if(deleteTripWithConfirmation(tr))go("dash");}} title="Delete trip" aria-label="Delete trip" style={{padding:"12px 14px",borderRadius:12,border:"1px solid "+C.red+"30",background:C.redBg,color:C.red,fontSize:14,fontWeight:600,cursor:"pointer",minHeight:46,display:"flex",alignItems:"center",justifyContent:"center"}}><TrashIcon size={16} color={C.red}/></button>
           </div>
         </div>
       </div></Fade>
@@ -6684,8 +7301,9 @@ export default function WanderPlan(){
               <h1 style={{fontSize:26,fontWeight:700,marginBottom:4}}>Live Companion</h1>
               <p style={{fontSize:14,color:C.tx2}}>{tripTitle}</p>
             </div>
-            <button onClick={function(){refreshCompanionNow(String((tr&&tr.id)||currentTripId||""),false).catch(function(){});}} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
+            <button disabled={companionRefreshLoad} onClick={function(){refreshCompanionNow(String((tr&&tr.id)||currentTripId||""),false).catch(function(){});}} style={{padding:"8px 12px",borderRadius:10,border:"1px solid "+C.border,background:C.bg,color:C.tx2,fontSize:12,fontWeight:600,cursor:companionRefreshLoad?"default":"pointer",opacity:companionRefreshLoad?0.7:1}}>{companionRefreshLoad?"Refreshing...":"Refresh"}</button>
           </div>
+          {companionRefreshStamp&&<p role="status" aria-live="polite" style={{fontSize:11,color:C.tx3,marginBottom:10}}>Updated just now</p>}
           <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(3,1fr)",gap:12}}>
             {[{l:"Trip Window",v:formatCompanionWindow(lockedWindow)},{l:"Destinations",v:(Array.isArray(tr.dests)?tr.dests.join(" + "):(tr.destNames||""))||"TBD"},{l:"Travelers",v:String(members.length||1)+" active"}].map(function(item){return(<div key={item.l} style={{background:C.bg,borderRadius:12,padding:"12px 14px"}}><p style={{fontSize:11,color:C.tx3,marginBottom:4}}>{item.l}</p><p style={{fontSize:14,fontWeight:600}}>{item.v}</p></div>);})}
           </div>
@@ -8310,11 +8928,38 @@ export default function WanderPlan(){
       {ab("Interest Profiler","Your profile interests merged with the group. Green = strong consensus.")}
       {(function(){
         function setInterestForCurrentUser(catId,val){
-          var next=Object.assign({},user.interests||{});
-          next[catId]=val;
-          var nextUser=Object.assign({},user,{interests:next});
-          setUser(nextUser);
-          persistProfileNow(nextUser,currentTripId||tr.id);
+          var nextUserForPersist=null;
+          setUser(function(prev){
+            var nextUser=updateUserInterestSelection(prev,catId,val);
+            nextUserForPersist=nextUser;
+            return nextUser;
+          });
+          if(nextUserForPersist){
+            var myEmail=String(nextUserForPersist&&nextUserForPersist.email||"").trim().toLowerCase();
+            var tok=authToken;
+            function patchMembersInterest(members){
+              return (Array.isArray(members)?members:[]).map(function(m){
+                if(!isCurrentMemberRow(m,tok,myEmail))return m;
+                var profile=(m&&m.profile&&typeof m.profile==="object")?Object.assign({},m.profile):{};
+                profile.interests=(profile.interests&&typeof profile.interests==="object")
+                  ? Object.assign({},profile.interests)
+                  : {};
+                profile.interests[String(catId||"")]=!!val;
+                return Object.assign({},m,{profile:profile});
+              });
+            }
+            setNT(function(prev){
+              if(!prev)return prev;
+              return Object.assign({},prev,{members:patchMembersInterest(prev.members)});
+            });
+            setTrips(function(prev){
+              return (Array.isArray(prev)?prev:[]).map(function(trip){
+                if(!trip||String(trip.id||"")!==String((currentTripId||tr.id||"")).trim())return trip;
+                return Object.assign({},trip,{members:patchMembersInterest(trip.members)});
+              });
+            });
+          }
+          if(nextUserForPersist)persistProfileNow(nextUserForPersist,currentTripId||tr.id);
         }
         return CATS.map(function(cat,i){
           var sum=summarizeInterestConsensus(cat.id,user.interests,tm,tripJoined);
@@ -8511,6 +9156,10 @@ export default function WanderPlan(){
         poiRows.forEach(function(_,i){
           if(hasAnyCrewYesForIdx(i))acceptedIdx.push(i);
         });
+        if(acceptedIdx.length===0){
+          setCSM("Please select at least one activity before approving.");
+          return;
+        }
         setPV(function(prev){
           var next=normalizePoiStateMap(prev,poiRows,poiOptionPool);
           acceptedIdx.forEach(function(idx){
