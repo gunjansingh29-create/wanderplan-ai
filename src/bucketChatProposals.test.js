@@ -26,7 +26,7 @@ describe("bucket chat proposal normalization", () => {
           bestMonths: [10, 11, 12],
         },
       ],
-      []
+      [{ name: "Punta Arenas", country: "" }]
     );
 
     expect(proposals).toEqual([
