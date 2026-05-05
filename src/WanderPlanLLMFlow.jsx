@@ -4745,11 +4745,17 @@ export default function WanderPlan(){
 
   useEffect(function(){
     if(!loaded||!authToken||!profileHydrated)return;
+    if(profilePersistTimerRef.current){
+      clearTimeout(profilePersistTimerRef.current);
+      profilePersistTimerRef.current=null;
+    }
+    var newTripId=String(newTrip&&newTrip.id||"").trim();
+    var viewTripId=String(viewTrip&&viewTrip.id||"").trim();
+    var activeTripId=String(currentTripId||newTripId||viewTripId||"").trim();
     var nextProfileSig=profilePayloadSignatureFor(user);
-    if(!shouldPersistProfile(lastProfilePersistSigRef.current,user))return;
-    if(profilePersistTimerRef.current)clearTimeout(profilePersistTimerRef.current);
+    if(nextProfileSig===String(lastProfilePersistSigRef.current||""))return;
     profilePersistTimerRef.current=setTimeout(function(){
-      var activeTripId=String(resolveWizardTripId(currentTripId,newTrip,viewTrip)||String(viewTrip&&viewTrip.id||"")).trim();
+      profilePersistTimerRef.current=null;
       persistProfileNow(user,activeTripId).then(function(res){
         if(res)lastProfilePersistSigRef.current=nextProfileSig;
       }).catch(function(){});
