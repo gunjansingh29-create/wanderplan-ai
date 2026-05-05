@@ -989,10 +989,8 @@ function buildCurrentVoteActor(token,userState,tripId){
   };
 }
 
-function wizardSyncIntervalMs(stepNum){
-  var step=Number(stepNum||0);
-  if(step===1||step===2||step===3||step===5||step===6||step===7||step===10||step===11||step===12||step===13||step===14)return 1200;
-  return 3000;
+function wizardSyncIntervalMs(){
+  return 30000;
 }
 
 function normalizeWizardStepIndex(stepNum, orderVersion){
@@ -5843,13 +5841,13 @@ export default function WanderPlan(){
   useEffect(function(){
     if(!loaded||!authToken||(sc!=="crew"&&sc!=="new_trip"&&sc!=="dash"&&sc!=="wizard"))return;
     refreshCrewFromBackend();
-    var t=setInterval(function(){refreshCrewFromBackend();},5000);
+    var t=setInterval(function(){refreshCrewFromBackend();},30000);
     return function(){clearInterval(t);};
   },[loaded,authToken,sc]);
   useEffect(function(){
     if(!loaded||!authToken||!(sc==="dash"||sc==="wizard"||sc==="trip_detail"||sc==="companion"))return;
     refreshTripsFromBackend();
-    var t=setInterval(function(){refreshTripsFromBackend();},7000);
+    var t=setInterval(function(){refreshTripsFromBackend();},30000);
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,user.email]);
   useEffect(function(){
@@ -5860,7 +5858,7 @@ export default function WanderPlan(){
     var t=setInterval(function(){
       if(!alive)return;
       refreshCompanionNow(tid,true).catch(function(){});
-    },4000);
+    },30000);
     return function(){alive=false;clearInterval(t);};
   },[loaded,authToken,sc,viewTrip&&viewTrip.id,currentTripId]);
   useEffect(function(){
@@ -5916,7 +5914,7 @@ export default function WanderPlan(){
       });
     }
     run();
-    var t=setInterval(run,1500);
+    var t=setInterval(run,30000);
     return function(){clearInterval(t);};
   },[loaded,authToken,sc,wizStep,currentTripId,newTrip&&newTrip.id,viewTrip&&viewTrip.id,flightDates.depart,flightDates.ret]);
   useEffect(function(){

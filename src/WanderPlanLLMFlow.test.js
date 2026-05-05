@@ -662,18 +662,18 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(shouldSkipPoiAutoGenerate(false, [{ name: "Fushimi Inari" }])).toBe(false);
   });
 
-  test("wizardSyncIntervalMs uses fast polling for collaborative steps", () => {
-    expect(wizardSyncIntervalMs(1)).toBe(1200);
-    expect(wizardSyncIntervalMs(2)).toBe(1200);
-    expect(wizardSyncIntervalMs(3)).toBe(1200);
-    expect(wizardSyncIntervalMs(5)).toBe(1200);
-    expect(wizardSyncIntervalMs(6)).toBe(1200);
-    expect(wizardSyncIntervalMs(9)).toBe(3000);
-    expect(wizardSyncIntervalMs(10)).toBe(1200);
-    expect(wizardSyncIntervalMs(11)).toBe(1200);
-    expect(wizardSyncIntervalMs(12)).toBe(1200);
-    expect(wizardSyncIntervalMs(13)).toBe(1200);
-    expect(wizardSyncIntervalMs(4)).toBe(3000);
+  test("wizardSyncIntervalMs returns network-idle-friendly interval for all steps", () => {
+    expect(wizardSyncIntervalMs(1)).toBe(30000);
+    expect(wizardSyncIntervalMs(2)).toBe(30000);
+    expect(wizardSyncIntervalMs(3)).toBe(30000);
+    expect(wizardSyncIntervalMs(5)).toBe(30000);
+    expect(wizardSyncIntervalMs(6)).toBe(30000);
+    expect(wizardSyncIntervalMs(9)).toBe(30000);
+    expect(wizardSyncIntervalMs(10)).toBe(30000);
+    expect(wizardSyncIntervalMs(11)).toBe(30000);
+    expect(wizardSyncIntervalMs(12)).toBe(30000);
+    expect(wizardSyncIntervalMs(13)).toBe(30000);
+    expect(wizardSyncIntervalMs(4)).toBe(30000);
   });
 
   test("availability helpers require exact trip-length windows", () => {
@@ -4858,18 +4858,18 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
     expect(shouldSkipPoiAutoGenerate(false, [{ name: "Fushimi Inari" }])).toBe(false);
   });
 
-  test("wizardSyncIntervalMs uses fast polling for collaborative steps", () => {
-    expect(wizardSyncIntervalMs(1)).toBe(1200);
-    expect(wizardSyncIntervalMs(2)).toBe(1200);
-    expect(wizardSyncIntervalMs(3)).toBe(1200);
-    expect(wizardSyncIntervalMs(5)).toBe(1200);
-    expect(wizardSyncIntervalMs(6)).toBe(1200);
-    expect(wizardSyncIntervalMs(9)).toBe(3000);
-    expect(wizardSyncIntervalMs(10)).toBe(1200);
-    expect(wizardSyncIntervalMs(11)).toBe(1200);
-    expect(wizardSyncIntervalMs(12)).toBe(1200);
-    expect(wizardSyncIntervalMs(13)).toBe(1200);
-    expect(wizardSyncIntervalMs(4)).toBe(3000);
+  test("wizardSyncIntervalMs returns network-idle-friendly interval for all steps", () => {
+    expect(wizardSyncIntervalMs(1)).toBe(30000);
+    expect(wizardSyncIntervalMs(2)).toBe(30000);
+    expect(wizardSyncIntervalMs(3)).toBe(30000);
+    expect(wizardSyncIntervalMs(5)).toBe(30000);
+    expect(wizardSyncIntervalMs(6)).toBe(30000);
+    expect(wizardSyncIntervalMs(9)).toBe(30000);
+    expect(wizardSyncIntervalMs(10)).toBe(30000);
+    expect(wizardSyncIntervalMs(11)).toBe(30000);
+    expect(wizardSyncIntervalMs(12)).toBe(30000);
+    expect(wizardSyncIntervalMs(13)).toBe(30000);
+    expect(wizardSyncIntervalMs(4)).toBe(30000);
   });
 
   test("availability helpers require exact trip-length windows", () => {

@@ -1950,7 +1950,7 @@ export default function TripWizard({
     }
 
     syncConsensus();
-    const interval = setInterval(syncConsensus, 3000);
+    const interval = setInterval(syncConsensus, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
@@ -1973,7 +1973,7 @@ export default function TripWizard({
         setPoiApproved(prev => ({ ...prev, ...mine }));
       } catch { /* ignore */ }
     }
-    const interval = setInterval(syncPoiShortlist, 5000);
+    const interval = setInterval(syncPoiShortlist, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
@@ -1999,7 +1999,7 @@ export default function TripWizard({
         setPoiVoteSelections(mine);
       } catch { /* ignore */ }
     }
-    const interval = setInterval(syncPoiVotes, 5000);
+    const interval = setInterval(syncPoiVotes, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
