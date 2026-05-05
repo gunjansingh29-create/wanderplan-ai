@@ -142,6 +142,11 @@ class CrewInviteEmailRequest(BaseModel):
     invitee_email: str
 
 
+class CrewInviteSmsRequest(BaseModel):
+    tripId: str
+    phone: str
+
+
 class UpdateMemberRequest(BaseModel):
     status: str
 
@@ -2774,6 +2779,17 @@ async def _bootstrap_schema(conn: asyncpg.Connection) -> None:
     await conn.execute("ALTER TABLE pois ADD COLUMN IF NOT EXISTS failure_reason TEXT")
     await conn.execute("ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS paid_by_user_id UUID REFERENCES users(id)")
     await conn.execute("ALTER TABLE trip_expenses ADD COLUMN IF NOT EXISTS split_with_user_ids UUID[] DEFAULT '{}'::uuid[]")
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sms_invites (
+          sms_token TEXT PRIMARY KEY,
+          trip_id UUID NOT NULL,
+          inviter_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          phone TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
 
 
 @app.on_event("startup")
@@ -3112,7 +3128,126 @@ async def crew_invite_email(request: CrewInviteEmailRequest, authorization: str 
     }
 
 
-async def _crew_respond_to_invite(token: str, action: str, user_id: str) -> dict[str, Any]:
+def _send_sms_via_twilio(to_phone: str, body: str) -> None:
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+    from_number = os.getenv("TWILIO_FROM_NUMBER", "").strip()
+    if not account_sid or not auth_token or not from_number:
+        raise RuntimeError("Twilio is not configured (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER)")
+    payload = urlencode({"To": to_phone, "From": from_number, "Body": body})
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
+    req = urllib_request.Request(
+        url,
+        data=payload.encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    import base64 as _b64
+    credentials = _b64.b64encode(f"{account_sid}:{auth_token}".encode()).decode()
+    req.add_header("Authorization", f"Basic {credentials}")
+    urllib_request.urlopen(req, timeout=15)
+
+
+@app.post("/crew/invite-sms")
+async def crew_invite_sms(request: CrewInviteSmsRequest, authorization: str | None = Header(default=None)):
+    trip_id = (request.tripId or "").strip()
+    phone = re.sub(r"[^\d+]", "", (request.phone or "").strip())
+    if not trip_id:
+        raise HTTPException(status_code=400, detail="tripId is required")
+    if not phone or len(phone) < 7:
+        raise HTTPException(status_code=400, detail="Valid phone number is required")
+    # Normalise: if digits-only and 10 digits assume US, prepend +1
+    if re.fullmatch(r"\d{10}", phone):
+        phone = "+1" + phone
+    elif re.fullmatch(r"\d{11}", phone) and phone.startswith("1"):
+        phone = "+" + phone
+
+    authed_user_id = ""
+    if authorization:
+        try:
+            authed_user_id = _parse_user_id_from_token(authorization)
+        except HTTPException:
+            authed_user_id = ""
+
+    sms_token = str(uuid4())
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+    trip_link = f"{frontend_base}/?sms_token={quote_plus(sms_token)}"
+
+    if db_pool is not None:
+        async with db_pool.acquire() as conn:
+            trip = await conn.fetchrow("SELECT id FROM trips WHERE id = $1", trip_id)
+            if not trip:
+                raise HTTPException(status_code=404, detail="Trip not found")
+            await conn.execute(
+                "INSERT INTO sms_invites (sms_token, trip_id, inviter_user_id, phone) VALUES ($1, $2, $3, $4)",
+                sms_token,
+                trip_id,
+                authed_user_id or None,
+                phone,
+            )
+
+    sms_sent = False
+    sms_error = ""
+    try:
+        await asyncio.to_thread(
+            _send_sms_via_twilio,
+            phone,
+            f"You're invited to a WanderPlan trip! View the full itinerary here: {trip_link}",
+        )
+        sms_sent = True
+    except Exception as exc:
+        sms_error = str(exc)
+
+    return {
+        "ok": True,
+        "sms_token": sms_token,
+        "sms_sent": sms_sent,
+        "sms_error": sms_error or None,
+        "trip_link": trip_link,
+    }
+
+
+@app.get("/trips/guest")
+async def get_trip_guest(sms_token: str):
+    sms_token = (sms_token or "").strip()
+    if not sms_token:
+        raise HTTPException(status_code=400, detail="sms_token is required")
+    if db_pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    async with db_pool.acquire() as conn:
+        invite = await conn.fetchrow(
+            "SELECT trip_id FROM sms_invites WHERE sms_token = $1",
+            sms_token,
+        )
+        if not invite:
+            raise HTTPException(status_code=404, detail="Invite not found")
+        trip_id = str(invite["trip_id"])
+        trip = await conn.fetchrow(
+            "SELECT id, owner_id, name, status, duration_days FROM trips WHERE id = $1",
+            trip_id,
+        )
+        if not trip:
+            raise HTTPException(status_code=404, detail="Trip not found")
+        destinations = await conn.fetch(
+            "SELECT name, country FROM trip_destinations WHERE trip_id = $1 ORDER BY created_at",
+            trip_id,
+        )
+
+    return {
+        "trip": {
+            "id": str(trip["id"]),
+            "name": trip["name"],
+            "status": trip["status"],
+            "duration_days": trip["duration_days"],
+            "destinations": [
+                {"name": str(d["name"] or ""), "country": str(d["country"] or "")}
+                for d in destinations
+            ],
+        }
+    }
+
+
+
     token = (token or "").strip()
     action = (action or "accept").strip().lower()
     if action in {"accepted"}:
