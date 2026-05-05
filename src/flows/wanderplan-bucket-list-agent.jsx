@@ -339,6 +339,7 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
   const [memberInputs, setMemberInputs] = useState({});
   const [chatHistories, setChatHistories] = useState({});
   const [currentInput, setCurrentInput] = useState("");
+  const [inputError, setInputError] = useState("");
   const [uniqueDestinations, setUniqueDestinations] = useState([]);
   const [votes, setVotes] = useState({});  // { destKey: { memberId: "up"|"down" } }
   const [topN, setTopN] = useState(3);
@@ -425,7 +426,11 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
   // ── HANDLE USER INPUT ────────────────────────────────────────────────
   // Handle user input
   const handleSubmit = async () => {
-    if (!currentInput.trim()) return;
+    if (!currentInput.trim()) {
+      setInputError("Please enter a destination to search.");
+      return;
+    }
+    setInputError("");
     const text = currentInput.trim();
     setCurrentInput("");
 
@@ -814,17 +819,24 @@ export default function BucketListAgent({ tripSession = null, onTripSaved = () =
               </div>
 
               {/* Input bar */}
-              <div style={{ borderTop:`1px solid ${T.borderLight}`,padding:14,display:"flex",gap:10 }}>
-                <input ref={inputRef} value={currentInput} onChange={e => setCurrentInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
-                  placeholder="Type destinations… e.g. Tokyo, Paris, Bali"
-                  style={{ flex:1,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${T.border}`,
-                    fontSize:15,color:T.text,background:T.bg,minHeight:46 }}/>
-                <button onClick={handleSubmit} style={{ width:46,height:46,borderRadius:12,border:"none",
-                  background:T.primary,color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
-                  boxShadow:`0 2px 8px ${T.primary}30` }}>
-                  <Ic n="send" s={18} c="#fff"/>
-                </button>
+              <div style={{ borderTop:`1px solid ${T.borderLight}`,padding:14 }}>
+                <div style={{ display:"flex",gap:10 }}>
+                  <input ref={inputRef} value={currentInput} onChange={e => { setCurrentInput(e.target.value); if (inputError) setInputError(""); }}
+                    onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
+                    placeholder="Type destinations… e.g. Tokyo, Paris, Bali"
+                    style={{ flex:1,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${T.border}`,
+                      fontSize:15,color:T.text,background:T.bg,minHeight:46 }}/>
+                  <button aria-label="Send" onClick={handleSubmit} style={{ width:46,height:46,borderRadius:12,border:"none",
+                    background:T.primary,color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+                    boxShadow:`0 2px 8px ${T.primary}30` }}>
+                    <Ic n="send" s={18} c="#fff"/>
+                  </button>
+                </div>
+                {inputError && (
+                  <p role="alert" style={{ marginTop:8,fontSize:12,color:T.error }}>
+                    {inputError}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1345,6 +1357,5 @@ function DestinationCard({ dest, index, expanded }) {
     </div>
   );
 }
-
 
 
