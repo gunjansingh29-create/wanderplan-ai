@@ -1918,7 +1918,7 @@ export default function TripWizard({
     }
 
     syncConsensus();
-    const interval = setInterval(syncConsensus, 3000);
+    const interval = setInterval(syncConsensus, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
