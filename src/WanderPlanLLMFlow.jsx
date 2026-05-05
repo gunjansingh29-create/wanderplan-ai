@@ -8530,30 +8530,32 @@ export default function WanderPlan(){
       if(aliasCode)return aliasCode;
       return String(fallbackCode||"").trim().toUpperCase();
     }
-    function currentLockedFlightWindow(){
+    function currentLockedFlightWindow(datesOverride){
       var raw=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
       if(raw)return raw;
-      if(flightDates.depart&&flightDates.ret)return {start:String(flightDates.depart||"").slice(0,10),end:String(flightDates.ret||"").slice(0,10)};
+      var dates=(datesOverride&&typeof datesOverride==="object")?datesOverride:flightDates;
+      if(dates.depart&&dates.ret)return {start:String(dates.depart||"").slice(0,10),end:String(dates.ret||"").slice(0,10)};
       return null;
     }
-    function normalizedFlightRoutePlan(planOverride){
+    function normalizedFlightRoutePlan(planOverride, datesOverride){
       var savedPlan=(planOverride!==undefined?planOverride:flightLegInputs);
       return buildFlightRoutePlan(
         routePlanDestinationOrder(flightPlannerDests,savedPlan),
         effectiveDurPerDest,
-        currentLockedFlightWindow(),
+        currentLockedFlightWindow(datesOverride),
         savedPlan
       );
     }
-    function displayedRoundTripRoutePlan(planOverride){
-      var normalized=normalizedFlightRoutePlan(planOverride);
-      var finalDate=(currentLockedFlightWindow()&&String(currentLockedFlightWindow().end||"").slice(0,10))||String(flightDates.ret||"").slice(0,10);
+    function displayedRoundTripRoutePlan(planOverride, datesOverride){
+      var normalized=normalizedFlightRoutePlan(planOverride,datesOverride);
+      var finalWindow=currentLockedFlightWindow(datesOverride);
+      var finalDate=(finalWindow&&String(finalWindow.end||"").slice(0,10))||String(((datesOverride&&typeof datesOverride==="object")?datesOverride:flightDates).ret||"").slice(0,10);
       return roundTripFlightRoutePlan(normalized,finalDate);
     }
     function persistFlightRoute(nextDates,nextPlan){
-      var normalizedPlan=normalizedFlightRoutePlan(nextPlan);
       var nextFlightDates=Object.assign({},flightDates||{},nextDates||{});
-      var locked=currentLockedFlightWindow();
+      var normalizedPlan=normalizedFlightRoutePlan(nextPlan,nextFlightDates);
+      var locked=currentLockedFlightWindow(nextFlightDates);
       if(locked&&locked.start)nextFlightDates.depart=String(locked.start||"").slice(0,10);
       if(locked&&locked.end)nextFlightDates.ret=String(locked.end||"").slice(0,10);
       setFD(nextFlightDates);
@@ -8569,9 +8571,9 @@ export default function WanderPlan(){
       }}).catch(function(){});
       return {plan:normalizedPlan,dates:nextFlightDates};
     }
-    async function buildFlightSegments(routePlan,originInput,finalAirportInput){
+    async function buildFlightSegments(routePlan,originInput,finalAirportInput,datesOverride){
       var segments=[];
-      var plan=displayedRoundTripRoutePlan(routePlan);
+      var plan=displayedRoundTripRoutePlan(routePlan,datesOverride);
       if(plan.length===0)throw new Error("Add at least one destination before searching flights.");
       var originCode=await resolveAirportCode(originInput,"");
       if(!originCode||originCode.length!==3)throw new Error("Could not match the starting city to an airport.");
@@ -8597,7 +8599,8 @@ export default function WanderPlan(){
       if(!finalCode||finalCode.length!==3){
         throw new Error((finalInput?('Could not match "'+finalInput+'" to an airport for the final return leg.'):("Enter a final return city or airport.")));
       }
-      var finalDate=(currentLockedFlightWindow()&&String(currentLockedFlightWindow().end||"").slice(0,10))||String(flightDates.ret||"").slice(0,10);
+      var finalWindow=currentLockedFlightWindow(datesOverride);
+      var finalDate=(finalWindow&&String(finalWindow.end||"").slice(0,10))||String(((datesOverride&&typeof datesOverride==="object")?datesOverride:flightDates).ret||"").slice(0,10);
       if(finalCode!==prevCode){
         if(!finalDate)throw new Error("Enter the final return date.");
         segments.push({from_airport:prevCode,to_airport:finalCode,depart_date:finalDate});
@@ -8610,8 +8613,13 @@ export default function WanderPlan(){
       setFBL([]);
       var originInput=String(flightDates.origin||"").trim();
       var finalAirportInput=String(flightDates.final_airport||flightDates.origin||"").trim();
-      var departDate=String(flightDates.depart||"").slice(0,10);
-      var returnDate=String(flightDates.ret||"").slice(0,10);
+      var routePlan=normalizedFlightRoutePlan();
+      var searchDates=Object.assign({},flightDates||{});
+      if((!searchDates.depart||!searchDates.ret)&&routePlan[0]&&routePlan[0].travel_date){
+        searchDates=resolveManualFlightDateEdit(searchDates,"depart",routePlan[0].travel_date,requiredFlightTripDays);
+      }
+      var departDate=String(searchDates.depart||"").slice(0,10);
+      var returnDate=String(searchDates.ret||"").slice(0,10);
       if(!(authToken&&currentTripId)){setFErr("Sign in and create/save the trip first.");return;}
       if(originInput.length<2){setFErr("Enter your starting city or airport.");return;}
       if(finalAirportInput.length<2){setFErr("Enter your final return city or airport.");return;}
@@ -8622,12 +8630,15 @@ export default function WanderPlan(){
       setFLegs([]);
       setFSel({});
       try{
-        var routePlan=normalizedFlightRoutePlan();
+        routePlan=normalizedFlightRoutePlan(routePlan,searchDates);
+        if(departDate!==String(flightDates.depart||"").slice(0,10)||returnDate!==String(flightDates.ret||"").slice(0,10)){
+          persistFlightRoute(searchDates,routePlan);
+        }
         var origin=await resolveAirportCode(originInput,"");
         var firstArrival=await resolveAirportCode(String((routePlan[0]&&routePlan[0].airport)||"",),"");
         if(!origin||origin.length!==3){setFLoad(false);setFDone(false);setFErr("Could not match the starting city to an airport.");return;}
         if(!firstArrival||firstArrival.length!==3){setFLoad(false);setFDone(false);setFErr("Could not match the first destination city to an airport.");return;}
-        var segments=await buildFlightSegments(routePlan,originInput,finalAirportInput);
+        var segments=await buildFlightSegments(routePlan,originInput,finalAirportInput,searchDates);
         var r=await apiJson("/trips/"+currentTripId+"/flights/search",{method:"POST",body:{
           origin:origin,
           destination:firstArrival,
@@ -10140,7 +10151,13 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
           row[key]=val;
           if(key==="travel_date")row.manual_date=!!String(val||"").slice(0,10);
           arr[idx]=row;
-          if(commit)persistFlightRoute(flightDates,arr);
+          if(commit){
+            var nextDates=flightDates;
+            if(key==="travel_date"&&idx===0&&String(val||"").slice(0,10)){
+              nextDates=resolveManualFlightDateEdit(flightDates,"depart",val,requiredFlightTripDays);
+            }
+            persistFlightRoute(nextDates,arr);
+          }
           return arr;
         });
       }
