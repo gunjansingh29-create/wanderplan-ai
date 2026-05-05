@@ -1660,7 +1660,7 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
       ) : (
         <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
           {members.map((m,i) => (
-            <div key={`${m.phone || m.email}-${i}`} style={{ background:T.surface,borderRadius:14,padding:"16px 20px",border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,display:"flex",alignItems:"center",gap:14,animation:`fadeUp .35s ease-out ${i*.05}s both` }}>
+            <div key={m.phone || m.email || String(i)} style={{ background:T.surface,borderRadius:14,padding:"16px 20px",border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,display:"flex",alignItems:"center",gap:14,animation:`fadeUp .35s ease-out ${i*.05}s both` }}>
               <div style={{ width:44,height:44,borderRadius:999,background:`linear-gradient(135deg,${T.primary},${T.accent})`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:15,fontWeight:700 }} className="hd">{m.initials}</div>
               <div style={{ flex:1 }}>
                 <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
