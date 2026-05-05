@@ -2145,8 +2145,10 @@ function bucketQueryShouldSuggestDestinations(userMsg){
   var q=String(userMsg||"").trim().toLowerCase();
   if(!q)return false;
   if(bucketQueryNeedsSpecificChildren(userMsg))return true;
+  var hasTheme=/\b(culture|cultural|heritage|history|historic|food|cuisine|wildlife|nature|beach|beaches|hiking|wine|nightlife|wellness|photography|shopping|adventure|architecture|art|music|cities|city)\b/.test(q);
+  if(hasTheme&&bucketQueryAnchorName(userMsg))return true;
   if(/\b(experience|explore|discover|see|visit|watch|learn|immerse|try|taste)\b/.test(q)&&
-    /\b(culture|cultural|heritage|history|historic|food|cuisine|wildlife|nature|beach|hiking|wine|nightlife|wellness|photography|shopping|adventure|architecture|art|music)\b/.test(q)){
+    hasTheme){
     return true;
   }
   if(/\b(chinese|japanese|korean|thai|vietnamese|indian|mexican|peruvian|italian|french|spanish|greek|moroccan|egyptian|turkish)\b/.test(q)&&
@@ -2154,6 +2156,68 @@ function bucketQueryShouldSuggestDestinations(userMsg){
     return true;
   }
   return false;
+}
+
+function bucketFollowupPreference(userMsg){
+  var q=String(userMsg||"").trim().toLowerCase().replace(/[?!.,]+$/g,"");
+  if(!q)return "";
+  var map={
+    culture:"culture",
+    cultural:"culture",
+    heritage:"heritage",
+    history:"history",
+    historic:"history",
+    food:"food",
+    cuisine:"food",
+    nature:"nature",
+    wildlife:"wildlife",
+    beach:"beaches",
+    beaches:"beaches",
+    hiking:"hiking",
+    adventure:"adventure",
+    cities:"cities",
+    city:"cities",
+    nightlife:"nightlife",
+    wellness:"wellness",
+    photography:"photography",
+    shopping:"shopping",
+    wine:"wine",
+    art:"art",
+    music:"music"
+  };
+  if(map[q])return map[q];
+  var m=q.match(/^(culture|cultural|heritage|history|historic|food|cuisine|nature|wildlife|beach|beaches|hiking|adventure|cities|city|nightlife|wellness|photography|shopping|wine|art|music)\s+(places|spots|destinations|cities|areas|regions)?$/);
+  return m?map[m[1]]||m[1]:"";
+}
+
+function bucketContextAnchorFromHistory(history){
+  var list=Array.isArray(history)?history:[];
+  for(var i=list.length-1;i>=0;i--){
+    var row=list[i]||{};
+    if(row.from!=="user")continue;
+    var text=String(row.text||"").trim();
+    if(!text)continue;
+    var anchor=bucketQueryAnchorName(text);
+    if(anchor)return anchor;
+  }
+  for(var j=list.length-1;j>=0;j--){
+    var agentRow=list[j]||{};
+    if(agentRow.from!=="agent")continue;
+    var agentText=String(agentRow.text||"").trim();
+    if(!agentText)continue;
+    var m=agentText.match(/\b(?:places|ideas|destinations|spots|regions|cities)\s+in\s+([A-Za-z][A-Za-z .'\-()]{2,}?)(?:\s+should|\?|\.|,|$)/i);
+    if(m&&m[1])return canonicalTripDestinationName(m[1]);
+  }
+  return "";
+}
+
+function bucketResolveContextualQuery(userMsg, history){
+  var msg=String(userMsg||"").trim();
+  var pref=bucketFollowupPreference(msg);
+  if(!pref)return msg;
+  var anchor=bucketContextAnchorFromHistory(history);
+  if(!anchor)return msg;
+  return pref+" in "+anchor;
 }
 
 function bucketQueryAnchorName(userMsg){
@@ -2430,11 +2494,12 @@ async function fallbackExtractDestinations(userMsg){
 
 async function askLLM(userMsg, budget, history) {
   var bd = {budget:"$50-120/day budget",moderate:"$120-250/day mid-range",premium:"$250-400/day premium",luxury:"$400+/day luxury"};
-  var shouldSuggest=bucketQueryShouldSuggestDestinations(userMsg);
+  var effectiveUserMsg=bucketResolveContextualQuery(userMsg,history);
+  var shouldSuggest=bucketQueryShouldSuggestDestinations(effectiveUserMsg)||effectiveUserMsg!==String(userMsg||"").trim();
   var sys = "You are WanderPlan Bucket List Agent. User may mention one or many dream destinations. Respond with ONLY valid JSON.\n\nFor one or more places return: {\"type\":\"destinations\",\"items\":[{\"name\":\"Place\",\"country\":\"Country\",\"bestMonths\":[3,4,5],\"costPerDay\":150,\"tags\":[\"Culture\",\"Food\"],\"bestTimeDesc\":\"Mar-May for cherry blossoms\",\"costNote\":\"Based on " + (bd[budget] || bd.moderate) + "\"}]}\n\nIf too vague and there is no travel intent: {\"type\":\"clarify\",\"message\":\"Your question\"}\n\nRules:\n- return specific cities, islands, or regions travelers actually plan around\n- if the user describes an experience, theme, culture, cuisine, wildlife, nature, or activity, infer 4-8 suitable specific destinations instead of asking for clarification\n- do not return generic placeholders like \"Europe trip\" or \"beach destination\"\n- do not duplicate the same place with slightly different wording\n- include realistic bestMonths and costPerDay ranges, not zeros\n- prefer destinations that fit the stated budget when possible\n- if the user names multiple places, include each distinct place once\n\ntags from: Beach,Culture,Food,Adventure,Nature,Nightlife,History,Wellness,Photography,Shopping,Wine,Hiking. ONLY JSON.";
   var msgs = [];
   if (history) { for (var i = 0; i < history.length; i++) { var m = history[i]; if (m.from === "user") msgs.push({role:"user",content:m.text}); else if (m.from === "agent" && !m.dest) msgs.push({role:"assistant",content:m.text}); } }
-  msgs.push({role: "user", content: userMsg});
+  msgs.push({role: "user", content: effectiveUserMsg});
   async function requestDestinationsWithSystem(systemPrompt,maxTokens){
     var data = await llmReq({max_tokens: maxTokens||700, messages: msgs, system: systemPrompt});
     var txt = ""; if (data&&data.content) { for (var j = 0; j < data.content.length; j++) { if (data.content[j].type === "text") txt += data.content[j].text; } }
@@ -2445,8 +2510,8 @@ async function askLLM(userMsg, budget, history) {
     var retrySys=sys+"\nAdditional rule: this user has travel intent. Do NOT return clarify. Recommend 4-8 concrete city, island, neighborhood, or region-level destinations that match the experience/theme, with realistic metadata.";
     var retryNormalized=await requestDestinationsWithSystem(retrySys,800);
     if(retryNormalized&&retryNormalized.type==="destinations"){
-      var retryRefined=refineBucketItemsForQuery(userMsg, retryNormalized.items);
-      var retryConceptRefined=maybeResolveBucketConceptDestinations(userMsg, retryRefined);
+      var retryRefined=refineBucketItemsForQuery(effectiveUserMsg, retryNormalized.items);
+      var retryConceptRefined=maybeResolveBucketConceptDestinations(effectiveUserMsg, retryRefined);
       if(retryConceptRefined.length)return {type:"destinations",items:retryConceptRefined};
     }
     return null;
@@ -2454,23 +2519,23 @@ async function askLLM(userMsg, budget, history) {
   try {
     var normalized=await requestDestinationsWithSystem(sys,600);
     if(normalized&&normalized.type==="destinations"){
-      var refined=refineBucketItemsForQuery(userMsg, normalized.items);
-      var conceptRefined=maybeResolveBucketConceptDestinations(userMsg, refined);
+      var refined=refineBucketItemsForQuery(effectiveUserMsg, normalized.items);
+      var conceptRefined=maybeResolveBucketConceptDestinations(effectiveUserMsg, refined);
       if(conceptRefined.length)return {type:"destinations",items:conceptRefined};
-      if(bucketQueryNeedsSpecificChildren(userMsg)){
+      if(bucketQueryNeedsSpecificChildren(effectiveUserMsg)){
         var retrySys=sys+"\nAdditional rule: if the user asks for cities/places in a country or larger area, NEVER return just that parent country/area. Return 4-8 specific city, island, or region-level destinations inside it.";
         var retryData=await llmReq({max_tokens:700,messages:msgs,system:retrySys});
         var retryTxt=""; if(retryData&&retryData.content){ for(var rj=0;rj<retryData.content.length;rj++){ if(retryData.content[rj].type==="text")retryTxt+=retryData.content[rj].text; } }
         var retryParsed=parseJsonLoose(retryTxt);
         var retryNormalized=normalizeBucketLLMResult(retryParsed);
         if(retryNormalized&&retryNormalized.type==="destinations"){
-          var retryRefined=refineBucketItemsForQuery(userMsg, retryNormalized.items);
-          var retryConceptRefined=maybeResolveBucketConceptDestinations(userMsg, retryRefined);
+          var retryRefined=refineBucketItemsForQuery(effectiveUserMsg, retryNormalized.items);
+          var retryConceptRefined=maybeResolveBucketConceptDestinations(effectiveUserMsg, retryRefined);
           if(retryConceptRefined.length)return {type:"destinations",items:retryConceptRefined};
         }
-        var regionFallback=bucketRegionalFallbackItems(userMsg);
+        var regionFallback=bucketRegionalFallbackItems(effectiveUserMsg);
         if(regionFallback.length)return {type:"destinations",items:regionFallback};
-        return {type:"clarify",message:bucketClarifyMessage(userMsg)};
+        return {type:"clarify",message:bucketClarifyMessage(effectiveUserMsg)};
       }
     }
     if(normalized&&normalized.type==="clarify"&&shouldSuggest){
@@ -2485,10 +2550,10 @@ async function askLLM(userMsg, budget, history) {
       if(forcedAfterError)return forcedAfterError;
     }catch(e2){}
   }
-  var fb=await fallbackExtractDestinations(userMsg);
-  var refinedFallback=refineBucketItemsForQuery(userMsg, fb);
+  var fb=await fallbackExtractDestinations(effectiveUserMsg);
+  var refinedFallback=refineBucketItemsForQuery(effectiveUserMsg, fb);
   if(refinedFallback.length)return {type:"destinations",items:refinedFallback};
-  return {type: "clarify", message: bucketClarifyMessage(userMsg)};
+  return {type: "clarify", message: bucketClarifyMessage(effectiveUserMsg)};
 }
 
 function destinationTripKey(dest){
@@ -11602,4 +11667,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, buildBucketChatProposals, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketResolveContextualQuery, buildBucketChatProposals, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };

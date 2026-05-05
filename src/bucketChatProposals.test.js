@@ -1,6 +1,7 @@
 import {
   bucketClarifyMessage,
   bucketQueryShouldSuggestDestinations,
+  bucketResolveContextualQuery,
   buildBucketChatProposals,
 } from "./WanderPlanLLMFlow";
 
@@ -48,5 +49,18 @@ describe("bucket chat proposal normalization", () => {
   test("clarification message asks for a useful travel clue instead of giving up", () => {
     expect(bucketClarifyMessage("something fun")).toMatch(/region, country, season, or vibe/i);
     expect(bucketClarifyMessage("things in Chile")).toMatch(/culture, food, nature, beaches, or cities/i);
+  });
+
+  test("resolves one-word clarification replies against previous bucket context", () => {
+    const history = [
+      { from: "user", text: "experience chinese culture in china" },
+      {
+        from: "agent",
+        text: "I can turn that into bucket-list ideas. Which kind of places in China should I bias toward: culture, food, nature, beaches, or cities?",
+      },
+    ];
+
+    expect(bucketResolveContextualQuery("culture", history)).toBe("culture in china");
+    expect(bucketQueryShouldSuggestDestinations(bucketResolveContextualQuery("culture", history))).toBe(true);
   });
 });
