@@ -3194,8 +3194,8 @@ async def crew_invite_sms(request: CrewInviteSmsRequest, authorization: str | No
             f"You're invited to a WanderPlan trip! View the full itinerary here: {trip_link}",
         )
         sms_sent = True
-    except Exception as exc:
-        sms_error = str(exc)
+    except Exception:
+        sms_error = "SMS could not be delivered. Use the trip link to share manually."
 
     return {
         "ok": True,
@@ -3247,7 +3247,7 @@ async def get_trip_guest(sms_token: str):
     }
 
 
-
+async def _crew_respond_to_invite(token: str, action: str, user_id: str) -> dict[str, Any]:
     token = (token or "").strip()
     action = (action or "accept").strip().lower()
     if action in {"accepted"}:

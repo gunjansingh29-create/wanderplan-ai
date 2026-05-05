@@ -7108,7 +7108,7 @@ export default function WanderPlan(){
   {!guestTripLoad&&!guestTrip&&<p style={{color:C.red,fontSize:14}}>Trip not found or invite link is invalid.</p>}
   {!guestTripLoad&&guestTrip&&(<Fade delay={120}><div style={{maxWidth:560}}>
     <h2 style={{fontSize:24,fontWeight:700,marginBottom:6}}>{guestTrip.name||"Your Trip"}</h2>
-    <p style={{fontSize:13,color:C.tx3,marginBottom:20}}>{guestTrip.duration_days?guestTrip.duration_days+" day trip":""} &bull; <span style={{textTransform:"capitalize"}}>{guestTrip.status||"planning"}</span></p>
+    <p style={{fontSize:13,color:C.tx3,marginBottom:20}}>{guestTrip.duration_days?guestTrip.duration_days+(guestTrip.duration_days===1?" day trip":" days trip"):""} &bull; <span style={{textTransform:"capitalize"}}>{guestTrip.status||"planning"}</span></p>
     {Array.isArray(guestTrip.destinations)&&guestTrip.destinations.length>0&&(<div style={{marginBottom:20}}>
       <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:8}}>DESTINATIONS</p>
       {guestTrip.destinations.map(function(d,i){return(<div key={i} style={{padding:"10px 0",borderBottom:"1px solid "+C.border,display:"flex",gap:8}}><span style={{fontWeight:600}}>{d.name}</span>{d.country&&<span style={{color:C.tx3,fontSize:13}}>{d.country}</span>}</div>);})}
