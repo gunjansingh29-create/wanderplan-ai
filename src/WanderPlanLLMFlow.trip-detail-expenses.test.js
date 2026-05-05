@@ -33,14 +33,20 @@ describe("WanderPlanLLMFlow trip detail expenses", () => {
     expect(screen.getAllByText("Activities").length).toBeGreaterThan(0);
   });
 
-  test("B-09 deleting Hotel Maui recalculates running total", async () => {
+  test("B-09 deleting an expense recalculates running total", async () => {
     await openTripDetail();
 
-    expect(screen.getByText("$850.00")).toBeInTheDocument();
+    // Add an expense so there is something to delete
+    fireEvent.change(screen.getByLabelText("Expense name"), { target: { value: "Hotel Maui" } });
+    fireEvent.change(screen.getByLabelText("Expense category"), { target: { value: "Accommodation" } });
+    fireEvent.change(screen.getByLabelText("Expense amount"), { target: { value: "432" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Expense" }));
+
+    expect(screen.getByText("Hotel Maui")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Delete Hotel Maui expense"));
 
     expect(screen.queryByText("Hotel Maui")).not.toBeInTheDocument();
-    expect(screen.getByText("$418.00")).toBeInTheDocument();
+    expect(screen.getByText("$0.00")).toBeInTheDocument();
   });
 
   test("B-12 add 3 expenses computes exact total", async () => {
@@ -61,17 +67,26 @@ describe("WanderPlanLLMFlow trip detail expenses", () => {
     fireEvent.change(screen.getByLabelText("Expense amount"), { target: { value: "30" } });
     fireEvent.click(screen.getByRole("button", { name: "Add Expense" }));
 
-    expect(screen.getByText("$910.50")).toBeInTheDocument();
+    expect(screen.getByText("$60.50")).toBeInTheDocument();
   });
 
   test("B-14 transport filter shows only transport expenses", async () => {
     await openTripDetail();
 
+    // Add a transport expense and an accommodation expense to verify filtering
+    fireEvent.change(screen.getByLabelText("Expense name"), { target: { value: "Airport Shuttle" } });
+    fireEvent.change(screen.getByLabelText("Expense category"), { target: { value: "Transport" } });
+    fireEvent.change(screen.getByLabelText("Expense amount"), { target: { value: "42" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Expense" }));
+
+    fireEvent.change(screen.getByLabelText("Expense name"), { target: { value: "Hotel Maui" } });
+    fireEvent.change(screen.getByLabelText("Expense category"), { target: { value: "Accommodation" } });
+    fireEvent.change(screen.getByLabelText("Expense amount"), { target: { value: "220" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Expense" }));
+
     fireEvent.change(screen.getByLabelText("Filter expenses by category"), { target: { value: "transport" } });
 
     expect(screen.getByText("Airport Shuttle")).toBeInTheDocument();
     expect(screen.queryByText("Hotel Maui")).not.toBeInTheDocument();
-    expect(screen.queryByText("Sunset Dinner")).not.toBeInTheDocument();
-    expect(screen.queryByText("Boat Tour")).not.toBeInTheDocument();
   });
 });

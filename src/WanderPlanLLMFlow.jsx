@@ -584,19 +584,6 @@ function nextTripDetailExpenseId(){
   return "exp-local-"+tripDetailExpenseIdSeq;
 }
 
-function seedTripDetailExpenses(trip){
-  var budget=Number(trip&&trip.budget||0)||0;
-  var stayAmount=Math.max(180,Math.round(Math.min(Math.max(budget*0.12,180),480)));
-  var transportAmount=Math.max(40,Math.round(Math.min(Math.max(budget*0.03,40),160)));
-  var foodAmount=Math.max(45,Math.round(Math.min(Math.max(budget*0.04,45),140)));
-  var activityAmount=Math.max(35,Math.round(Math.min(Math.max(budget*0.05,35),170)));
-  return [
-    {id:"exp-transport-1",name:"Airport Shuttle",category:"Transport",amount:transportAmount},
-    {id:"exp-accommodation-1",name:"Hotel Maui",category:"Accommodation",amount:stayAmount},
-    {id:"exp-food-1",name:"Sunset Dinner",category:"Food",amount:foodAmount},
-    {id:"exp-activities-1",name:"Boat Tour",category:"Activities",amount:activityAmount}
-  ];
-}
 
 function readFileAsBase64(file){
   return new Promise(function(resolve,reject){
@@ -4627,7 +4614,7 @@ export default function WanderPlan(){
   },[sc,companionData,viewTrip,authToken,user,expensePaidBy,expenseSplitWith,manualExpensePaidBy,manualExpenseSplitWith]);
   useEffect(function(){
     if(sc!=="trip_detail"||!viewTrip)return;
-    setTripDetailExpenses(seedTripDetailExpenses(viewTrip));
+    setTripDetailExpenses([]);
     setTripDetailExpenseFilter("all");
     setTripDetailExpenseForm({name:"",category:"Transport",amount:""});
     setTripDetailExpenseEditingId("");
