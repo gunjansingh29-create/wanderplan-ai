@@ -10,7 +10,7 @@ export default function YesNoCard({
 }) {
   return (
     <div>
-      {question !== undefined && <p>{question}</p>}
+      {question !== undefined ? <p>{question}</p> : null}
       <button onClick={onYes} disabled={loading}>{yesLabel}</button>
       <button onClick={onNo} disabled={loading}>{noLabel}</button>
     </div>
