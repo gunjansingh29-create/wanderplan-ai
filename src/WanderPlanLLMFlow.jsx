@@ -516,6 +516,15 @@ function readInviteTokenFromUrl(){
   return "";
 }
 
+function readSmsTokenFromUrl(){
+  try{
+    var sp=new URLSearchParams(window.location.search||"");
+    var tok=(sp.get("sms_token")||"").trim();
+    if(tok)return tok;
+  }catch(e){}
+  return "";
+}
+
 function formatCompanionDate(raw){
   var text=String(raw||"").trim();
   if(!text)return "";
@@ -4616,6 +4625,10 @@ export default function WanderPlan(){
   var[blLoad,setBLL]=useState(false);
   var[bucketMsg,setBM]=useState("");
   var[invEmail,setIE]=useState("");
+  var[invPhone,setIP]=useState("");
+  var[smsInviteMsg,setSMIM]=useState("");
+  var[guestTrip,setGuestTrip]=useState(null);
+  var[guestTripLoad,setGuestTripLoad]=useState(false);
   var chatRef=useRef(null);
   var blInFlightRef=useRef(false);
   var inviteAcceptSeenRef=useRef({});
@@ -4791,6 +4804,20 @@ export default function WanderPlan(){
       inviteActionInUrl=readInviteActionFromUrl();
       if(inviteTokenInUrl)setPIT(inviteTokenInUrl);
       setPIA(inviteActionInUrl);
+    }catch(e){}
+    try{
+      var smsTok=readSmsTokenFromUrl();
+      if(smsTok){
+        setGuestTripLoad(true);
+        setSc("guest_trip");
+        try{
+          var gr=await apiJson("/trips/guest?sms_token="+encodeURIComponent(smsTok),{method:"GET"},null);
+          if(gr&&gr.trip)setGuestTrip(gr.trip);
+        }catch(e){}
+        setGuestTripLoad(false);
+        setLd(true);
+        return;
+      }
     }catch(e){}
     try{
       var tripIdInUrl=readJoinTripIdFromUrl();
@@ -6832,6 +6859,27 @@ export default function WanderPlan(){
     }
   }
 
+  async function sendCrewInviteSms(tripId){
+    var phone=String(invPhone||"").trim();
+    if(!phone){setSMIM("Enter a phone number.");return;}
+    var tid=String(tripId||currentTripId||"").trim();
+    if(!tid){setSMIM("No active trip. Start planning first.");return;}
+    if(!authToken){setSMIM("Sign in required to send SMS invites.");return;}
+    setSMIM("Sending SMS...");
+    try{
+      var r=await apiJson("/crew/invite-sms",{method:"POST",body:{tripId:tid,phone:phone}},authToken);
+      setIP("");
+      if(r&&r.sms_sent){
+        setSMIM("SMS invite sent!");
+      }else{
+        var link=r&&r.trip_link?String(r.trip_link).trim():"";
+        setSMIM(link?"SMS not sent. Share this link: "+link:"SMS not sent.");
+      }
+    }catch(e){
+      setSMIM("SMS invite failed: "+String(e&&e.message||"error"));
+    }
+  }
+
   async function removeCrewMember(member){
     var m=member||{};
     var email=String(m.email||"").trim().toLowerCase();
@@ -7053,6 +7101,24 @@ export default function WanderPlan(){
     <div style={{fontFamily:"system-ui,-apple-system,sans-serif",background:C.bg,color:"#fff",minHeight:"100vh",overflowX:"hidden"}}>
       <style>{CSS}</style>
       <div style={{opacity:fade?0:1,transition:"opacity .2s"}}>
+
+{sc==="guest_trip"&&(<div style={{minHeight:"100vh",background:C.bg,padding:"32px "+pagePad+"px"}}>
+  <Fade delay={80}><div style={{display:"flex",alignItems:"center",gap:10,marginBottom:24}}><div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>W</div><span style={{fontSize:15,fontWeight:700}}>WanderPlan</span></div></Fade>
+  {guestTripLoad&&<p style={{color:C.tx2,fontSize:14}}>Loading your trip...</p>}
+  {!guestTripLoad&&!guestTrip&&<p style={{color:C.red,fontSize:14}}>Trip not found or invite link is invalid.</p>}
+  {!guestTripLoad&&guestTrip&&(<Fade delay={120}><div style={{maxWidth:560}}>
+    <h2 style={{fontSize:24,fontWeight:700,marginBottom:6}}>{guestTrip.name||"Your Trip"}</h2>
+    <p style={{fontSize:13,color:C.tx3,marginBottom:20}}>{guestTrip.duration_days?guestTrip.duration_days+(guestTrip.duration_days===1?" day trip":" days trip"):""} &bull; <span style={{textTransform:"capitalize"}}>{guestTrip.status||"planning"}</span></p>
+    {Array.isArray(guestTrip.destinations)&&guestTrip.destinations.length>0&&(<div style={{marginBottom:20}}>
+      <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:8}}>DESTINATIONS</p>
+      {guestTrip.destinations.map(function(d,i){return(<div key={i} style={{padding:"10px 0",borderBottom:"1px solid "+C.border,display:"flex",gap:8}}><span style={{fontWeight:600}}>{d.name}</span>{d.country&&<span style={{color:C.tx3,fontSize:13}}>{d.country}</span>}</div>);})}
+    </div>)}
+    <div style={{padding:"16px",borderRadius:12,background:C.surface,border:"1px solid "+C.border,marginTop:8}}>
+      <p style={{fontSize:13,color:C.tx2,marginBottom:12}}>Want to collaborate on this trip? Create a free account to join the crew.</p>
+      <button onClick={function(){go("signup");}} style={{fontSize:14,fontWeight:600,color:C.bg,padding:"12px 28px",borderRadius:10,background:"linear-gradient(135deg,"+C.gold+","+C.goldT+")",border:"none",cursor:"pointer"}}>Join WanderPlan</button>
+    </div>
+  </div></Fade>)}
+</div>)}
 
 {sc==="landing"&&(<div style={{minHeight:"100vh",background:"radial-gradient(ellipse at 25% 45%,"+C.bg2+","+C.bg+" 55%)"}}>
   <Fade delay={80}><nav style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:(isPhone?"16px ":"22px ")+landingPadX+"px",gap:10}}><div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}><div style={{width:34,height:34,borderRadius:9,background:"linear-gradient(135deg,"+C.gold+","+C.coral+")",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,flexShrink:0}}>W</div><span style={{fontSize:isPhone?18:20,fontWeight:700,whiteSpace:"nowrap"}}>WanderPlan</span></div><button onClick={function(){go("signup");}} style={{fontSize:13.5,fontWeight:600,color:C.bg,background:C.gold,border:"none",borderRadius:9,padding:isPhone?"8px 14px":"9px 22px",cursor:"pointer",whiteSpace:"nowrap"}}>Get Started</button></nav></Fade>
@@ -9065,13 +9131,15 @@ export default function WanderPlan(){
     {wizStep===1&&(<div>
       {ab("Trip Coordinator",tm.length>0?"Selected members are invited to this specific trip. Waiting for at least 1 acceptance before continuing.":"No trip members selected yet. Select crew members below, or continue solo.")}
       <div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
-        <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:8}}>INVITE NEW CREW BY EMAIL</p>
+        <p style={{fontSize:12,fontWeight:700,color:C.tx3,marginBottom:8}}>INVITE NEW CREW BY SMS</p>
         <div style={{display:"flex",gap:8}}>
-          <input value={invEmail} onChange={function(e){setIE(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){sendCrewInvite({selectForTrip:true});}}} placeholder="friend@email.com" style={{flex:1,padding:"10px 12px",borderRadius:9,background:C.surface,border:"1.5px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <button onClick={function(){sendCrewInvite({selectForTrip:true});}} style={{padding:"9px 14px",borderRadius:9,border:"none",background:C.gold,color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>Invite by Email</button>
+          <div style={{display:"flex",alignItems:"center",flex:1,borderRadius:9,background:C.surface,border:"1.5px solid "+C.border,overflow:"hidden"}}>
+            <span style={{padding:"10px 8px 10px 12px",fontSize:13,color:C.tx3,whiteSpace:"nowrap",borderRight:"1px solid "+C.border}}>+1</span>
+            <input value={invPhone} onChange={function(e){setIP(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"){sendCrewInviteSms(currentTripId||resolveWizardTripId(currentTripId,newTrip,viewTrip));}}} placeholder="Phone number" type="tel" style={{flex:1,padding:"10px 12px",background:"transparent",border:"none",fontSize:13,color:"#fff",outline:"none"}}/>
+          </div>
+          <button onClick={function(){sendCrewInviteSms(currentTripId||resolveWizardTripId(currentTripId,newTrip,viewTrip));}} style={{padding:"9px 14px",borderRadius:9,border:"none",background:C.gold,color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Invite by SMS</button>
         </div>
-        {crewMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:8}}>{crewMsg}</p>}
-        {crewInviteLinkUI}
+        {smsInviteMsg&&<p style={{fontSize:12,color:C.tx2,marginTop:8}}>{smsInviteMsg}</p>}
       </div>
       <div style={{marginBottom:12,padding:"12px 14px",borderRadius:12,background:C.bg,border:"1px solid "+C.border}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8}}>
