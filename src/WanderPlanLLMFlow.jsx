@@ -46,6 +46,25 @@ function emptyUserState(){
   return {name:"",email:"",styles:[],interests:{},budget:"moderate",dietary:[]};
 }
 
+function profilePayloadForUserState(userState){
+  var u=Object.assign(emptyUserState(),userState||{});
+  return {
+    display_name:u.name||"",
+    travel_styles:u.styles||[],
+    interests:u.interests||{},
+    budget_tier:u.budget||"moderate",
+    dietary:u.dietary||[]
+  };
+}
+
+function profilePayloadSignatureFor(userState){
+  return JSON.stringify(profilePayloadForUserState(userState));
+}
+
+function shouldPersistProfile(lastSavedSignature,userState){
+  return profilePayloadSignatureFor(userState)!==String(lastSavedSignature||"");
+}
+
 function countEnabledInterests(interestsObj){
   var safeInterests=(interestsObj&&typeof interestsObj==="object")?interestsObj:{};
   return Object.keys(safeInterests).filter(function(interestKey){
@@ -4510,6 +4529,8 @@ export default function WanderPlan(){
   var poiAutoGenerateRef=useRef({});
   var durationDraftSaveTimerRef=useRef(null);
   var mealDraftSaveTimerRef=useRef(null);
+  var profilePersistTimerRef=useRef(null);
+  var lastProfilePersistSigRef=useRef("");
   var pendingWizardStepPersistRef=useRef(null);
   var wizardStepPersistRetryRef=useRef(null);
   var historyBootstrappedRef=useRef(false);
@@ -4750,12 +4771,28 @@ export default function WanderPlan(){
 
   useEffect(function(){
     if(!loaded||!authToken||!profileHydrated)return;
-    var t=setTimeout(function(){
-      var activeTripId=String(resolveWizardTripId(currentTripId,newTrip,viewTrip)||String(viewTrip&&viewTrip.id||"")).trim();
-      persistProfileNow(user,activeTripId).catch(function(){});
+    if(profilePersistTimerRef.current){
+      clearTimeout(profilePersistTimerRef.current);
+      profilePersistTimerRef.current=null;
+    }
+    var newTripId=String(newTrip&&newTrip.id||"").trim();
+    var viewTripId=String(viewTrip&&viewTrip.id||"").trim();
+    var activeTripId=String(currentTripId||newTripId||viewTripId||"").trim();
+    var nextProfileSig=profilePayloadSignatureFor(user);
+    if(nextProfileSig===String(lastProfilePersistSigRef.current||""))return;
+    profilePersistTimerRef.current=setTimeout(function(){
+      profilePersistTimerRef.current=null;
+      persistProfileNow(user,activeTripId).then(function(res){
+        if(res)lastProfilePersistSigRef.current=nextProfileSig;
+      }).catch(function(){});
     },700);
-    return function(){clearTimeout(t);};
-  },[user,authToken,loaded,profileHydrated,currentTripId,newTrip,viewTrip&&viewTrip.id]);
+    return function(){
+      if(profilePersistTimerRef.current){
+        clearTimeout(profilePersistTimerRef.current);
+        profilePersistTimerRef.current=null;
+      }
+    };
+  },[user,authToken,loaded,profileHydrated,currentTripId,newTrip&&newTrip.id,viewTrip&&viewTrip.id]);
 
   function go(s){setMobileNavOpen(false);setFade(true);setTimeout(function(){setHist(function(h){return h.concat([sc]);});setSc(s);setFade(false);},200);}  function deleteTripWithConfirmation(trip){
     if(!trip)return false;
@@ -5066,7 +5103,9 @@ export default function WanderPlan(){
       var prof=await apiJson("/me/profile",{method:"GET"},token);
       if(prof&&prof.profile){
         setProfileDebug(function(prev){return Object.assign({},prev||{},{lastGet:{profile:prof.profile,emailHint:emailHint,nameHint:nameHint}});});
-        setUser(mergeProfileIntoUser(seededUser,prof.profile,emailHint,nameHint));
+        var mergedUser=mergeProfileIntoUser(seededUser,prof.profile,emailHint,nameHint);
+        lastProfilePersistSigRef.current=profilePayloadSignatureFor(mergedUser);
+        setUser(mergedUser);
       }
     }catch(e){}
     try{
@@ -5766,20 +5805,10 @@ export default function WanderPlan(){
     if(!(authToken&&tid&&isUuidLike(tid)))return Promise.reject(new Error("Trip context missing"));
     return apiJson("/trips/"+tid+"/expenses",{method:"POST",body:{items:items}},authToken);
   }
-  function profilePayloadFor(userState){
-    var u=Object.assign(emptyUserState(),userState||{});
-    return {
-      display_name:u.name||"",
-      travel_styles:u.styles||[],
-      interests:u.interests||{},
-      budget_tier:u.budget||"moderate",
-      dietary:u.dietary||[]
-    };
-  }
   function persistProfileNow(nextUser,tripId){
     var tid=String(tripId||resolveWizardTripId(currentTripId,newTrip,viewTrip)).trim();
     if(!authToken)return Promise.resolve(null);
-    var payload=profilePayloadFor(nextUser);
+    var payload=profilePayloadForUserState(nextUser);
     setProfileDebug(function(prev){return Object.assign({},prev||{},{lastPut:{tripId:tid||"",payload:payload,user:Object.assign({},nextUser||{})}});});
     return apiJson("/me/profile",{method:"PUT",body:payload},authToken).then(function(r){
       setProfileDebug(function(prev){return Object.assign({},prev||{},{lastPutResult:r||{ok:false}});});
