@@ -776,7 +776,7 @@ function DetailPage({ trip, tab, setTab, members = MEMBERS }) {
       <div style={{ animation:"fadeIn .25s ease-out" }}>
         {tab==="overview" && <OverviewTab trip={trip}/>}
         {tab==="itinerary" && <ItineraryTab/>}
-        {tab==="budget" && <BudgetTab trip={trip}/>}
+        {tab==="budget" && <BudgetTab key={trip.id} trip={trip}/>}
         {tab==="members" && <MembersTab members={members}/>}
         {tab==="storyboard" && <StoryboardTab/>}
       </div>
@@ -885,12 +885,7 @@ function BudgetTab({ trip }) {
   const totalSpent = categories.reduce((s,c)=>s+c.spent,0);
   const totalBudget = categories.reduce((s,c)=>s+c.allocated,0);
   const expenseCategories = ["Transport", "Accommodation", "Food", "Activities"];
-  const [expenses, setExpenses] = useState([
-    { id:1, name:"Airport Shuttle", category:"Transport", amount:42 },
-    { id:2, name:"Hotel Maui", category:"Accommodation", amount:220 },
-    { id:3, name:"Sunset Dinner", category:"Food", amount:68 },
-    { id:4, name:"Boat Tour", category:"Activities", amount:95 },
-  ]);
+  const [expenses, setExpenses] = useState([]);
   const [expenseFilter, setExpenseFilter] = useState("All");
   const [expenseDraft, setExpenseDraft] = useState({ name:"", category:"Transport", amount:"" });
   const [editingExpenseId, setEditingExpenseId] = useState(null);

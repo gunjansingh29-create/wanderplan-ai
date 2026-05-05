@@ -1777,38 +1777,6 @@ export default function TripWizard({
             }
           }
         }
-        if (stageKey === "pois") {
-          const res = await apiJson(`/trips/${tripId}/pois?limit=20`, {
-            headers: { Authorization: `Bearer ${authToken}` },
-          });
-          if (!cancelled) {
-            setPoiRows(res?.pois || []);
-            const shortlisted = {};
-            (res?.pois || []).forEach((poi, idx) => {
-              if (poi?.shortlist_counts?.my_selected === true) shortlisted[idx] = true;
-              else if (poi?.shortlist_counts?.my_selected === false) shortlisted[idx] = false;
-            });
-            setPoiApproved(prev => ({ ...prev, ...shortlisted }));
-          }
-        }
-        if (stageKey === "poiVote") {
-          const res = await apiJson(`/trips/${tripId}/pois?limit=20&shortlisted=true`, {
-            headers: { Authorization: `Bearer ${authToken}` },
-          });
-          if (!cancelled) {
-            setPoiRows(res?.pois || []);
-            const counts = {};
-            const mine = {};
-            (res?.pois || []).forEach((poi) => {
-              if (poi.vote_counts) {
-                counts[poi.poi_id] = poi.vote_counts;
-                if (poi.vote_counts.my_vote) mine[poi.poi_id] = poi.vote_counts.my_vote;
-              }
-            });
-            setPoiVoteCounts(counts);
-            setPoiVoteSelections(mine);
-          }
-        }
         if (stageKey === "flights") {
           const flightPlan = buildFlightSearchPlan();
           const res = await apiJson(`/trips/${tripId}/flights/search`, {
@@ -1973,7 +1941,8 @@ export default function TripWizard({
         setPoiApproved(prev => ({ ...prev, ...mine }));
       } catch { /* ignore */ }
     }
-    const interval = setInterval(syncPoiShortlist, 30000);
+    syncPoiShortlist();
+    const interval = setInterval(syncPoiShortlist, 5000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
@@ -1999,7 +1968,8 @@ export default function TripWizard({
         setPoiVoteSelections(mine);
       } catch { /* ignore */ }
     }
-    const interval = setInterval(syncPoiVotes, 30000);
+    syncPoiVotes();
+    const interval = setInterval(syncPoiVotes, 5000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [stageKey, tripId, authToken, demoMode]);
 
