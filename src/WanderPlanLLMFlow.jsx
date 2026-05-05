@@ -1124,6 +1124,35 @@ function addIsoDays(startIso, dayCount){
   return new Date(startMs+(offset*86400000)).toISOString().slice(0,10);
 }
 
+function shiftIsoDate(startIso, dayCount){
+  var start=String(startIso||"").slice(0,10);
+  var startMs=Date.parse(start+"T00:00:00Z");
+  if(!start||!Number.isFinite(startMs))return "";
+  var offset=Number(dayCount)||0;
+  return new Date(startMs+(offset*86400000)).toISOString().slice(0,10);
+}
+
+function resolveManualFlightDateEdit(currentDates, key, value, tripDays){
+  var next=(currentDates&&typeof currentDates==="object")?Object.assign({},currentDates):{};
+  if(key!=="depart"&&key!=="ret"){
+    next[key]=value;
+    return next;
+  }
+  var iso=String(value||"").slice(0,10);
+  var requiredDays=Math.max(1,Number(tripDays)||inclusiveIsoDays(next.depart,next.ret)||1);
+  next[key]=iso;
+  if(key==="depart"){
+    if(iso&&(!next.ret||inclusiveIsoDays(iso,next.ret)!==requiredDays)){
+      next.ret=shiftIsoDate(iso,requiredDays-1);
+    }
+  }else if(key==="ret"){
+    if(iso&&(!next.depart||inclusiveIsoDays(next.depart,iso)!==requiredDays)){
+      next.depart=shiftIsoDate(iso,0-(requiredDays-1));
+    }
+  }
+  return next;
+}
+
 function flightRoutePlanSignature(plan){
   return JSON.stringify((Array.isArray(plan)?plan:[]).map(function(stop){
     return {
@@ -10081,6 +10110,8 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 
     {wizStep===14&&(function(){
       var lockedWindow=(availabilityData&&availabilityData.locked_window&&typeof availabilityData.locked_window==="object")?availabilityData.locked_window:null;
+      var hasLockedFlightWindow=!!(lockedWindow&&lockedWindow.start&&lockedWindow.end);
+      var requiredFlightTripDays=Math.max(1,Number(sharedDurationDays)||Number(tr.days)||inclusiveIsoDays(flightDates.depart,flightDates.ret)||10);
       var routePlan=normalizedFlightRoutePlan();
       var displayedRoutePlan=displayedRoundTripRoutePlan(routePlan);
       var resolvedFlightTripId=resolveWizardTripId(currentTripId,newTrip,viewTrip)||"(missing)";
@@ -10094,8 +10125,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
       },0);
       function updFlight(k,v,commit){
         setFD(function(p){
-          var n=Object.assign({},p);
-          n[k]=v;
+          var n=resolveManualFlightDateEdit(p,k,v,requiredFlightTripDays);
           if(k==="origin"&&!String(n.final_airport||"").trim())n.final_airport=v;
           if(commit){
             persistFlightRoute(n,routePlan);
@@ -10164,14 +10194,14 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         </div>)}
         {lockedWindow&&<div style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.teal+"10",border:"1px solid "+C.teal+"20"}}><p style={{fontSize:12,color:C.tealL}}>Locked trip dates: {lockedWindow.start} to {lockedWindow.end}</p></div>}
         <div style={{marginBottom:10,padding:"12px 14px",borderRadius:10,background:C.surface,border:"1px solid "+C.border}}>
-          <p style={{fontSize:12,color:C.tx2,marginBottom:6}}>Set the starting airport and final return airport. Destination cities are inserted underneath, auto-dated from the locked trip window, and can be reordered or overridden by any traveler.</p>
+          <p style={{fontSize:12,color:C.tx2,marginBottom:6}}>Set the starting airport and final return airport. Destination cities are inserted underneath, auto-dated from the trip window, and can be reordered or overridden by any traveler.</p>
           <p style={{fontSize:11,color:C.tx3}}>Round-trip routing automatically returns through Destination 1 before the final leg home.</p>
         </div>
         <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
           <input value={flightDates.origin||""} onChange={function(e){updFlight("origin",e.target.value,false);}} onBlur={function(e){updFlight("origin",e.target.value,true);}} placeholder="Starting city or airport (e.g. Detroit)" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
           <input value={flightDates.final_airport||""} onChange={function(e){updFlight("final_airport",e.target.value,false);}} onBlur={function(e){updFlight("final_airport",e.target.value,true);}} placeholder="Final return city or airport" style={{padding:"10px 12px",borderRadius:8,background:C.bg,border:"1px solid "+C.border,fontSize:13,color:"#fff"}}/>
-          <input value={flightDates.depart||""} readOnly type="date" style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:C.tx2}}/>
-          <input value={flightDates.ret||""} readOnly type="date" style={{padding:"10px 12px",borderRadius:8,background:C.surface,border:"1px solid "+C.border,fontSize:13,color:C.tx2}}/>
+          <input value={flightDates.depart||""} readOnly={hasLockedFlightWindow} onClick={hasLockedFlightWindow?undefined:tryShowDatePicker} onFocus={hasLockedFlightWindow?undefined:tryShowDatePicker} onChange={function(e){if(!hasLockedFlightWindow)updFlight("depart",e.target.value,false);}} onBlur={function(e){if(!hasLockedFlightWindow)updFlight("depart",e.target.value,true);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:hasLockedFlightWindow?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:hasLockedFlightWindow?C.tx2:"#fff"}}/>
+          <input value={flightDates.ret||""} readOnly={hasLockedFlightWindow} onClick={hasLockedFlightWindow?undefined:tryShowDatePicker} onFocus={hasLockedFlightWindow?undefined:tryShowDatePicker} onChange={function(e){if(!hasLockedFlightWindow)updFlight("ret",e.target.value,false);}} onBlur={function(e){if(!hasLockedFlightWindow)updFlight("ret",e.target.value,true);}} type="date" style={{padding:"10px 12px",borderRadius:8,background:hasLockedFlightWindow?C.surface:C.bg,border:"1px solid "+C.border,fontSize:13,color:hasLockedFlightWindow?C.tx2:"#fff"}}/>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:10}}>
           {displayedRoutePlan.map(function(stop,idx){
@@ -11674,4 +11704,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketResolveContextualQuery, buildBucketChatProposals, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketResolveContextualQuery, buildBucketChatProposals, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveManualFlightDateEdit, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
