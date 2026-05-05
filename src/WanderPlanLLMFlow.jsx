@@ -2365,9 +2365,9 @@ function bucketClarifyMessage(userMsg){
   var anchor=bucketQueryAnchorName(userMsg);
   if(anchor){
     var pretty=String(anchor||"").replace(/\b\w/g,function(ch){return ch.toUpperCase();});
-    return "I need specific cities, islands, or regions in "+pretty+". Try something like \"best cities in "+pretty+"\" or name a few places you want to compare.";
+    return "I can turn that into bucket-list ideas. Which kind of places in "+pretty+" should I bias toward: culture, food, nature, beaches, or cities?";
   }
-  return "Could you name specific cities, islands, or regions you want to explore?";
+  return "I can help with a broad idea. Add one clue like a region, country, season, or vibe, for example \"food cities in Japan\" or \"quiet beaches in Greece\".";
 }
 
 function bucketExtractionIsLLMBased(payload){
@@ -6916,8 +6916,11 @@ export default function WanderPlan(){
       }else{
         setBC(function(p){return p.concat([{from:"agent",text:(res&&res.message)||"Tell me more?"}]);});
       }
-    }).catch(function(){
-      setBC(function(p){return p.concat([{from:"agent",text:"I ran into an issue processing that request. Please try again."}]);});
+    }).catch(function(err){
+      if(typeof console!=="undefined"&&console.error){
+        console.error("Bucket List Agent failed",err);
+      }
+      setBC(function(p){return p.concat([{from:"agent",text:bucketClarifyMessage(msg)}]);});
     }).finally(function(){
       blInFlightRef.current=false;
       setBLL(false);

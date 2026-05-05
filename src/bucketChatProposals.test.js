@@ -1,4 +1,8 @@
-import { bucketQueryShouldSuggestDestinations, buildBucketChatProposals } from "./WanderPlanLLMFlow";
+import {
+  bucketClarifyMessage,
+  bucketQueryShouldSuggestDestinations,
+  buildBucketChatProposals,
+} from "./WanderPlanLLMFlow";
 
 describe("bucket chat proposal normalization", () => {
   test("builds LLM returned destinations without falling through to the generic error path", () => {
@@ -39,5 +43,10 @@ describe("bucket chat proposal normalization", () => {
     expect(bucketQueryShouldSuggestDestinations("experience chinese culture")).toBe(true);
     expect(bucketQueryShouldSuggestDestinations("want to experience chinese culture")).toBe(true);
     expect(bucketQueryShouldSuggestDestinations("places to watch penguins")).toBe(true);
+  });
+
+  test("clarification message asks for a useful travel clue instead of giving up", () => {
+    expect(bucketClarifyMessage("something fun")).toMatch(/region, country, season, or vibe/i);
+    expect(bucketClarifyMessage("things in Chile")).toMatch(/culture, food, nature, beaches, or cities/i);
   });
 });
