@@ -381,7 +381,7 @@ export default function TripWizard() {
         <div style={{ animation:"fadeUp .4s ease-out .5s both" }}>
           <label className="hd" style={{ fontSize:13,fontWeight:600,color:T.text2,display:"block",marginBottom:6 }}>Invite Members</label>
           <div style={{ display:"flex",gap:8 }}>
-            <input placeholder="friend@email.com" style={{ flex:1,padding:"11px 14px",borderRadius:10,
+            <input type="tel" placeholder="+1 555-000-1234" style={{ flex:1,padding:"11px 14px",borderRadius:10,
               border:`1.5px solid ${T.border}`,fontSize:14,background:T.surface,minHeight:44 }}/>
             <Btn>Send</Btn>
           </div>

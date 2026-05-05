@@ -174,6 +174,25 @@ export function findCrewMemberByEmail(members = [], email = "") {
   );
 }
 
+export function normalizePhone(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+export function isValidPhone(value) {
+  const digits = normalizePhone(value);
+  return digits.length >= 7 && digits.length <= 15;
+}
+
+export function findCrewMemberByPhone(members = [], phone = "") {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return null;
+  return members.find((m) => normalizePhone(m?.phone || "") === normalized) || null;
+}
+
+function phoneCrewKey(phone) {
+  return `phone:${normalizePhone(phone)}`;
+}
+
 function defaultNameFromEmail(email) {
   const localPart = normalizeEmail(email).split("@")[0] || "";
   if (!localPart) return "Traveler";
@@ -256,9 +275,25 @@ function loadCrewMembersForViewer(viewerEmail) {
   const profilesByEmail = readJsonStorage(LOCAL_PROFILE_BY_EMAIL_KEY);
   const authUsers = readJsonStorage(LOCAL_AUTH_USERS_KEY);
   const connected = Array.isArray(links[viewer]) ? links[viewer] : [];
-  const uniqueEmails = [...new Set(connected.map(normalizeEmail).filter(Boolean))];
+  const uniqueKeys = [...new Set(connected.filter(Boolean))];
 
-  return uniqueEmails.map((email) => {
+  return uniqueKeys.map((key) => {
+    if (String(key).startsWith("phone:")) {
+      const phone = key.slice("phone:".length);
+      return {
+        phone,
+        email: "",
+        name: "Guest",
+        initials: "G",
+        role: "Member",
+        interests: [],
+        diet: "Not shared yet",
+        fitness: "Not shared yet",
+        status: "Invited",
+        isGuest: true,
+      };
+    }
+    const email = normalizeEmail(key);
     const stored = profilesByEmail[email] || {};
     const name = String(stored?.name || "").trim() || defaultNameFromEmail(email);
     const interests =
@@ -266,6 +301,7 @@ function loadCrewMembersForViewer(viewerEmail) {
     const hasAccount = Boolean(authUsers[email]) || Boolean(profilesByEmail[email]);
     return {
       email,
+      phone: String(stored?.phone || "").trim() || "",
       name,
       initials: initialsFromName(name),
       role: "Member",
@@ -273,6 +309,7 @@ function loadCrewMembersForViewer(viewerEmail) {
       diet: String(stored?.dietary || "").trim() || "Not shared yet",
       fitness: String(stored?.fitness || "").trim() || "Not shared yet",
       status: hasAccount ? "Joined" : "Invited",
+      isGuest: false,
     };
   });
 }
@@ -350,6 +387,72 @@ async function connectCrewMembers(ownerEmail, invitedEmail, ownerName = "Travele
   }
 }
 
+async function sendCrewInviteSms(ownerEmail, ownerName, inviteePhone) {
+  const response = await fetch(`${API_BASE}/crew/invite-sms`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      inviter_email: ownerEmail,
+      inviter_name: ownerName,
+      invitee_phone: inviteePhone,
+    }),
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { message: text || "" };
+  }
+  if (!response.ok) {
+    const detail = payload?.detail || payload?.message || `HTTP ${response.status}`;
+    throw new Error(String(detail || "Invite SMS failed"));
+  }
+  return payload;
+}
+
+async function connectCrewMembersByPhone(ownerEmail, inviteePhone, ownerName = "Traveler") {
+  const owner = normalizeEmail(ownerEmail);
+  if (!owner) {
+    return { ok: false, error: "You must be signed in to invite crew." };
+  }
+  if (!isValidPhone(inviteePhone)) {
+    return { ok: false, error: "Enter a valid phone number." };
+  }
+  const inviteeKey = phoneCrewKey(inviteePhone);
+  const links = readJsonStorage(LOCAL_CREW_LINKS_KEY);
+  const ownerLinks = new Set(Array.isArray(links[owner]) ? links[owner] : []);
+  if (ownerLinks.has(inviteeKey)) {
+    return { ok: false, error: "This person is already invited." };
+  }
+  ownerLinks.add(inviteeKey);
+  const inviteeLinks = new Set(Array.isArray(links[inviteeKey]) ? links[inviteeKey] : []);
+  inviteeLinks.add(owner);
+  links[owner] = [...ownerLinks];
+  links[inviteeKey] = [...inviteeLinks];
+  writeJsonStorage(LOCAL_CREW_LINKS_KEY, links);
+  try {
+    const inviteResp = await sendCrewInviteSms(owner, ownerName, inviteePhone);
+    const currentOriginLink = typeof window !== "undefined" ? `${window.location.origin}/?entry=home` : "";
+    const fallbackLink = currentOriginLink || inviteResp?.invite_link || "";
+    return {
+      ok: true,
+      smsSent: Boolean(inviteResp?.sms_sent),
+      smsError: inviteResp?.sms_error || "",
+      deliveryMode: String(inviteResp?.delivery_mode || "").trim().toLowerCase() || "link_only",
+      inviteLink: fallbackLink,
+    };
+  } catch (error) {
+    return {
+      ok: true,
+      smsSent: false,
+      smsError: error?.message || "Invite saved but SMS could not be sent.",
+      deliveryMode: "link_only",
+      inviteLink: typeof window !== "undefined" ? `${window.location.origin}/?entry=home` : "",
+    };
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -413,8 +516,8 @@ export default function Dashboard({ onOpenFlow = () => {} }) {
     setCrewMembers(loadCrewMembersForViewer(nextViewer.email));
   };
 
-  const handleInviteMember = async (email) => {
-    const result = await connectCrewMembers(viewer.email, email, viewer.name || "Traveler");
+  const handleInviteMember = async (phone) => {
+    const result = await connectCrewMembersByPhone(viewer.email, phone, viewer.name || "Traveler");
     if (result.ok) {
       setCrewMembers(loadCrewMembersForViewer(viewer.email));
     }
@@ -1391,7 +1494,7 @@ function ProfilePage({ viewer, onSaveProfile = () => {} }) {
 }
 
 function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, error:"Invite failed." }) }) {
-  const [inviteEmail, setInviteEmail] = useState("");
+  const [invitePhone, setInvitePhone] = useState("");
   const [inviteFeedback, setInviteFeedback] = useState(null);
   const [manualInviteLink, setManualInviteLink] = useState("");
   const [copyFeedback, setCopyFeedback] = useState("");
@@ -1414,7 +1517,7 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
 
   const submitInvite = async () => {
     setCopyFeedback("");
-    const existingMember = findCrewMemberByEmail(members, inviteEmail);
+    const existingMember = findCrewMemberByPhone(members, invitePhone);
     if (existingMember) {
       setManualInviteLink("");
       setInviteFeedback({
@@ -1423,52 +1526,53 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
       });
       return;
     }
-    const result = await onInviteMember(inviteEmail);
+    const result = await onInviteMember(invitePhone);
     if (result?.ok) {
       const link = result?.inviteLink || "";
       const deliveryMode = String(result?.deliveryMode || "").trim().toLowerCase();
       setManualInviteLink(link);
 
-      if (result.emailSent) {
-        setInviteFeedback({ type:"success", message:"Invite linked and email sent." });
+      if (result.smsSent) {
+        setInviteFeedback({ type:"success", message:"Invite link sent via SMS." });
       } else if (deliveryMode === "link_only") {
         setInviteFeedback({
           type:"info",
-          message:"Invite linked. Copy and share the invite link manually.",
-          detail: result.emailError || "",
+          message:"Invite saved. Copy and share the link below.",
+          detail: result.smsError || "",
         });
-      } else if (result.emailError) {
+      } else if (result.smsError) {
         setInviteFeedback({
           type:"info",
-          message:"Invite linked. Email was not delivered, so share the invite link manually.",
-          detail: result.emailError,
+          message:"Invite saved. SMS was not delivered — share the link manually.",
+          detail: result.smsError,
         });
       } else {
-        setInviteFeedback({ type:"info", message:"Invite linked. Copy and share the invite link manually." });
+        setInviteFeedback({ type:"info", message:"Invite saved. Copy and share the link below." });
       }
-      setInviteEmail("");
+      setInvitePhone("");
       return;
     }
     setManualInviteLink("");
-    setInviteFeedback({ type:"error", message: result?.error || "Could not invite this email." });
+    setInviteFeedback({ type:"error", message: result?.error || "Could not invite this number." });
   };
 
   return (
     <div style={{ maxWidth:640,animation:"fadeUp .4s ease-out" }}>
       <p style={{ fontSize:14,color:T.text2,marginBottom:14,lineHeight:1.6 }}>
-        Invite crew by email. Once they sign up and complete preferences, both of you can see each other.
+        Invite crew by phone. They'll get a link to join as a guest — no sign-up required.
       </p>
       <p style={{ fontSize:13,color:T.text3,marginBottom:18,lineHeight:1.5 }}>
         Privacy: your crew links are one-to-one. Members you invite can see you, but cannot see each other.
       </p>
 
       <div style={{ background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:14,padding:14,marginBottom:14 }}>
-        <label style={{ fontSize:12.5,fontWeight:700,color:T.text2,display:"block",marginBottom:8 }}>Invite Member (email)</label>
+        <label style={{ fontSize:12.5,fontWeight:700,color:T.text2,display:"block",marginBottom:8 }}>Invite Member (phone)</label>
         <div style={{ display:"flex",gap:8,alignItems:"center" }}>
           <input
-            value={inviteEmail}
-            onChange={(event) => setInviteEmail(event?.target?.value ?? "")}
-            placeholder="friend@example.com"
+            type="tel"
+            value={invitePhone}
+            onChange={(event) => setInvitePhone(event?.target?.value ?? "")}
+            placeholder="+1 555-000-1234"
             style={{ flex:1,minHeight:42,padding:"10px 12px",borderRadius:10,border:`1.5px solid ${T.border}`,fontSize:14,background:T.bg,color:T.text }}
           />
           <button
@@ -1551,12 +1655,12 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
 
       {members.length === 0 ? (
         <div style={{ background:T.surface,border:`1px solid ${T.borderLight}`,borderRadius:14,padding:18,color:T.text3,fontSize:13 }}>
-          No crew members yet. Invite someone by email to start sharing trip preferences.
+          No crew members yet. Invite someone by phone to start sharing trip preferences.
         </div>
       ) : (
         <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
           {members.map((m,i) => (
-            <div key={`${m.email}-${i}`} style={{ background:T.surface,borderRadius:14,padding:"16px 20px",border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,display:"flex",alignItems:"center",gap:14,animation:`fadeUp .35s ease-out ${i*.05}s both` }}>
+            <div key={m.phone || m.email || String(i)} style={{ background:T.surface,borderRadius:14,padding:"16px 20px",border:`1px solid ${T.borderLight}`,boxShadow:sh.sm,display:"flex",alignItems:"center",gap:14,animation:`fadeUp .35s ease-out ${i*.05}s both` }}>
               <div style={{ width:44,height:44,borderRadius:999,background:`linear-gradient(135deg,${T.primary},${T.accent})`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:15,fontWeight:700 }} className="hd">{m.initials}</div>
               <div style={{ flex:1 }}>
                 <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
@@ -1565,8 +1669,11 @@ function CrewPage({ viewer, members = [], onInviteMember = () => ({ ok:false, er
                   <span style={{ fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:999,background:m.status === "Joined" ? T.successBg : T.warningBg,color:m.status === "Joined" ? T.success : T.warning }}>
                     {m.status}
                   </span>
+                  {m.isGuest && (
+                    <span style={{ fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:999,background:T.bg,color:T.text3 }}>Guest</span>
+                  )}
                 </div>
-                <p style={{ fontSize:12,color:T.text3,marginTop:4 }}>{m.email}</p>
+                <p style={{ fontSize:12,color:T.text3,marginTop:4 }}>{m.phone || m.email || ""}</p>
                 <div style={{ display:"flex",gap:4,marginTop:6,flexWrap:"wrap" }}>
                   {(m.interests || []).length > 0 ? (m.interests || []).map((tag) => (
                     <span key={tag} style={{ fontSize:11,color:T.text3,background:T.bg,padding:"1px 8px",borderRadius:999 }}>{tag}</span>
