@@ -2186,6 +2186,8 @@ function bucketFollowupPreference(userMsg){
     music:"music"
   };
   if(map[q])return map[q];
+  var interested=q.match(/^(?:interested\s+in\s+|want\s+|wanting\s+|prefer(?:ring)?\s+|lean(?:ing)?\s+)?(culture|cultural|heritage|history|historic|food|cuisine|nature|wildlife|beach|beaches|hiking|adventure|cities|city|nightlife|wellness|photography|shopping|wine|art|music)$/);
+  if(interested&&interested[1])return map[interested[1]]||interested[1];
   var m=q.match(/^(culture|cultural|heritage|history|historic|food|cuisine|nature|wildlife|beach|beaches|hiking|adventure|cities|city|nightlife|wellness|photography|shopping|wine|art|music)\s+(places|spots|destinations|cities|areas|regions)?$/);
   return m?map[m[1]]||m[1]:"";
 }
@@ -2227,7 +2229,12 @@ function bucketQueryAnchorName(userMsg){
   var match,last="";
   while((match=re.exec(raw))){ last=String(match[1]||"").trim(); }
   last=last.replace(/^.*\b(?:in|within|around|across|for)\s+/i,"").trim();
-  return canonicalTripDestinationName(last);
+  var key=canonicalTripDestinationName(last);
+  if(!key)return "";
+  if(/^(culture|cultural|heritage|history|historic|food|cuisine|wildlife|nature|beach|beaches|hiking|wine|nightlife|wellness|photography|shopping|adventure|architecture|art|music|cities|city)$/.test(key)){
+    return "";
+  }
+  return key;
 }
 
 var BUCKET_DESTINATION_OVERRIDES={

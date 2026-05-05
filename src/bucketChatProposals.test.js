@@ -63,4 +63,17 @@ describe("bucket chat proposal normalization", () => {
     expect(bucketResolveContextualQuery("culture", history)).toBe("culture in china");
     expect(bucketQueryShouldSuggestDestinations(bucketResolveContextualQuery("culture", history))).toBe(true);
   });
+
+  test("resolves phrased preference replies without treating the preference as a region", () => {
+    const history = [
+      { from: "user", text: "experience chinese culture in China" },
+      {
+        from: "agent",
+        text: "I can turn that into bucket-list ideas. Which kind of places in China should I bias toward: culture, food, nature, beaches, or cities?",
+      },
+    ];
+
+    expect(bucketResolveContextualQuery("interested in culture", history)).toBe("culture in china");
+    expect(bucketClarifyMessage("interested in culture")).toMatch(/region, country, season, or vibe/i);
+  });
 });
