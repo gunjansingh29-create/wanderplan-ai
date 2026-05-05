@@ -1,4 +1,4 @@
-import { buildBucketChatProposals } from "./WanderPlanLLMFlow";
+import { bucketQueryShouldSuggestDestinations, buildBucketChatProposals } from "./WanderPlanLLMFlow";
 
 describe("bucket chat proposal normalization", () => {
   test("builds LLM returned destinations without falling through to the generic error path", () => {
@@ -33,5 +33,11 @@ describe("bucket chat proposal normalization", () => {
       expect.objectContaining({ name: "Punta Arenas", country: "Chile" }),
       expect.objectContaining({ name: "Boulders Beach", country: "South Africa" }),
     ]);
+  });
+
+  test("treats culture and experience prompts as destination-suggestion requests", () => {
+    expect(bucketQueryShouldSuggestDestinations("experience chinese culture")).toBe(true);
+    expect(bucketQueryShouldSuggestDestinations("want to experience chinese culture")).toBe(true);
+    expect(bucketQueryShouldSuggestDestinations("places to watch penguins")).toBe(true);
   });
 });
