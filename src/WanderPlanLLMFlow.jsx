@@ -6868,6 +6868,26 @@ export default function WanderPlan(){
     setSMIM("Sending SMS...");
     try{
       var r=await apiJson("/crew/invite-sms",{method:"POST",body:{tripId:tid,phone:phone}},authToken);
+      setNT(function(prev){
+        var current=prev&&typeof prev==="object"?prev:{};
+        var members=Array.isArray(current.members)?current.members:[];
+        var normalizedPhone=String(phone||"").trim();
+        var inviteeId="sms:"+normalizedPhone;
+        var found=false;
+        var nextMembers=members.map(function(item){
+          var itemPhone=String(item&&item.phone||"").trim();
+          var itemId=String(item&&item.id||"").trim();
+          if(itemPhone===normalizedPhone||itemId===inviteeId){
+            found=true;
+            return Object.assign({},item,{id:inviteeId,phone:normalizedPhone,pending:true});
+          }
+          return item;
+        });
+        if(!found){
+          nextMembers=nextMembers.concat([{id:inviteeId,phone:normalizedPhone,pending:true}]);
+        }
+        return Object.assign({},current,{members:nextMembers});
+      });
       setIP("");
       if(r&&r.sms_sent){
         setSMIM("SMS invite sent!");
