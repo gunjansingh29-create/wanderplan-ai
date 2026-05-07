@@ -110,6 +110,10 @@ import {
   trimRouteErrorDetail,
   tripDestinationNamesFromValues,
   upsertBucketItemList,  wizardSyncIntervalMs,
+  dedupeBucketSuggestionsForExisting,
+  isUuidLike,
+  normalizeBucketDestinationItem,
+  updateUserInterestSelection,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
 
@@ -4161,119 +4165,6 @@ describe("WanderPlanLLMFlow mobile nav", () => {
     expect(screen.queryByText("+ Trip")).not.toBeNull();
   });
 });
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import {
-  accountCacheKey,
-  activeTripTravelerCount,
-  availabilityWindowMatchesTripDays,
-  addTripDestinationValue,
-  buildTransitItem,
-  buildCurrentVoteActor,
-  buildDestinationFallbackPois,
-  buildDurationPlanSignature,
-  buildFallbackItinerary,
-  buildFlightRoutePlan,
-  buildItinerarySavePayload,
-  buildPOIGroupPrefsFromCrew,
-  buildPoiRequestSignature,
-  groundPoiRowsWithRoutePlan,
-  shouldReplaceWithGroundedNearbyPois,
-  buildRoutePlanSignature,
-  buildDiningRowsFromSuggestions,
-  classifyPoiFailureReason,
-  chooseBestItineraryRows,
-  buildTripShareLink,
-  buildTripShareSummary,
-  buildTripWhatsAppText,
-  buildWhatsAppShareUrl,
-  bucketClarifyMessage,
-  bucketPreferenceSeedDestinations,
-  bucketQueryAnchorName,
-  bucketQueryNeedsSpecificChildren,
-  canEditVoteForMember,
-  canonicalDestinationVoteKeyFromStoredKey,
-  canonicalMealVoteKey,
-  canonicalPoiVoteKeyFromStoredKey,
-  canonicalStayVoteKey,
-  companionCheckinMeta,
-  dedupeBucketSuggestionsForExisting,  dedupeVoteVoters,
-  destinationsNeedingPoiCoverage,
-  emptyUserState,
-  estimateTransitMinutes,
-  findDuplicatePoiKeys,
-  fillMissingDurationPerDestination,
-  formatMoney,
-  historyStateForScreen,
-  inclusiveIsoDays,
-  isUuidLike,
-  itineraryRowsScore,
-  isCurrentVoteVoter,
-  isLikelyBucketDestinationName,
-  makeVoteUserId,
-  materializeItineraryDates,
-  maybeResolveBucketConceptDestinations,
-  mergeAvailabilityDraft,
-  mergeBucketItemDetails,
-  mergeProfileIntoUser,
-  mergeSharedFlightDates,
-  mergeVoteRows,
-  moveFlightRouteStop,
-  normalizeBucketDestinationItem,
-  normalizeDestinationVoteState,
-  normalizeDiningPlan,
-  normalizePoiStateMap,
-  normalizeRoutePlan,
-  normalizeStays,
-  normalizePersonalBucketItems,
-  normalizeTripDestinationValue,
-  normalizeWizardStepIndex,
-  orderDestinationsByRoutePlan,
-  POI_LLM_TIMEOUT_MS,
-  ROUTE_LLM_TIMEOUT_MS,
-  poiListNeedsRefresh,
-  readDestinationVoteRow,
-  readMealVoteRow,
-  readPoiVoteRow,
-  readStayVoteRow,
-  voteKeyAliasesFor,
-  readVoteForVoter,
-  receiptItemsTotal,
-  refineBucketItemsForQuery,
-  resolveAvailabilityDraftWindow,
-  resolveBudgetTier,
-  resolveTripBudgetTier,
-  resolveWizardTripId,
-  roundTripFlightRoutePlan,
-  routePlanDurationMap,
-  screenFromHistoryState,
-  isManufacturedPoiName,
-  isPlausibleBucketDestinationName,
-  resolvePoiVotingDecision,
-  sanitizeAvailabilityOverlapData,
-  sanitizeAvailabilityWindow,
-  sanitizeCrewMembers,
-  sanitizeFlightDatesForTrip,
-  shouldAutoGeneratePois,
-  shouldSkipPoiAutoGenerate,
-  shouldResetTravelPlanForDurationChange,
-  shouldTreatBucketItemsAsSameDestination,
-  summarizeDestinationVotes,
-  summarizeActiveInterests,
-  summarizeInterestConsensus,
-  summarizeMealVotes,
-  summarizePoiVotes,
-  summarizeStayVotes,
-  stayPreviewLink,
-  tripExpenseLineItems,
-  tripExpenseLineItemsTotal,
-  trimPoiErrorDetail,
-  trimRouteErrorDetail,
-  tripDestinationNamesFromValues,
-  updateUserInterestSelection,
-  wizardSyncIntervalMs,
-} from "./WanderPlanLLMFlow";
-import WanderPlan from "./WanderPlanLLMFlow";
-
 describe("WanderPlanLLMFlow account persistence helpers", () => {
   test("countEnabledInterests counts only active interest values", () => {
     expect(
@@ -4341,7 +4232,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       normalizePersonalBucketItems([
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
-    ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+    ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto", country: "", bestMonths: [], costPerDay: 0, tags: [], bestTimeDesc: "", costNote: "" }]);
   });
 
   test("shouldTreatBucketItemsAsSameDestination matches same city even when one side misses country", () => {
@@ -6970,7 +6861,6 @@ describe("WanderPlanLLMFlow analytics stats", () => {
   });
 });
 
-=======
 describe("WanderPlanLLMFlow crew management", () => {
   const originalFetch = global.fetch;
 
