@@ -10510,17 +10510,16 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         });
         setStayPick(nextStayPick);
         setSFC(resolvedChoiceMap);
+        advanceWizardStep();
+        submitStageConsensusDecision("stays","approve",tr).catch(function(){});
         if(!(authToken&&activeStayTripId&&isUuidLike(activeStayTripId))){
-          adv();
           return;
         }
         persistPlanningStateStrict({trip_id:activeStayTripId,state:{
           stay_votes:(stayVotes&&typeof stayVotes==="object")?Object.assign({},stayVotes):{},
           stay_final_choices:resolvedChoiceMap
-        }}).then(function(){
-          adv();
-        }).catch(function(){
-          setCSM("Could not persist stay selections. Please retry.");
+        }}).catch(function(){
+          setCSM("Stays are selected locally, but could not sync yet. Reopen this step and retry if they do not appear in the itinerary.");
         });
       }
       async function runStayLLM(){
@@ -10790,25 +10789,18 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         });
       }
       function confirmMealPlanAndContinue(){
-        function proceedAfterMealConfirm(){
-          setCSM("");
-          advanceWizardStep();
-        }
         var mealSnapshot=normalizeDiningPlan(meals);
         var voteSnapshot=(mealVotes&&typeof mealVotes==="object")?Object.assign({},mealVotes):{};
+        setMeals(mealSnapshot);
+        setMealVotes(voteSnapshot);
+        setMD(mealSnapshot.length>0);
+        advanceWizardStep();
+        submitStageConsensusDecision("dining","approve",tr).catch(function(){});
         if(!(authToken&&activeDiningTripId&&isUuidLike(activeDiningTripId))){
-          // Allow local wizard progression even when backend trip context is unavailable.
-          setMeals(mealSnapshot);
-          setMealVotes(voteSnapshot);
-          setMD(mealSnapshot.length>0);
-          setCSM("Meal plan confirmed locally.");
-          proceedAfterMealConfirm();
           return;
         }
-        persistPlanningStateStrict({trip_id:activeDiningTripId,state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).then(function(){
-          proceedAfterMealConfirm();
-        }).catch(function(){
-          setCSM("Could not save meal plan right now. Please retry.");
+        persistPlanningStateStrict({trip_id:activeDiningTripId,state:{meal_plan:mealSnapshot,meal_votes:voteSnapshot}}).catch(function(){
+          setCSM("Meal plan is confirmed locally, but could not sync yet. Reopen this step and retry if meals do not appear in the itinerary.");
         });
       }
 
