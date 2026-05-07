@@ -77,6 +77,16 @@ app.post('/amadeus/v2/shopping/flight-offers', (req, res) => {
 // GOOGLE PLACES — POI Search
 // ─────────────────────────────────────────────────────────────────────────────
 
+app.get('/nominatim/search', (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const fixtures = {
+    'ayia napa': [{ lat: '34.9920', lon: '34.0147', display_name: 'Ayia Napa, Cyprus' }],
+    'limassol': [{ lat: '34.7071', lon: '33.0226', display_name: 'Limassol, Cyprus' }],
+    'nicosia': [{ lat: '35.1856', lon: '33.3823', display_name: 'Nicosia, Cyprus' }],
+  };
+  res.json(fixtures[q] || []);
+});
+
 const POI_FIXTURE_DB = {
   culture:   [
     { place_id: 'GP-C1', name: 'Senso-ji Temple',    tags: ['temple','history','culture'],    rating: 4.7, cost: 0  },

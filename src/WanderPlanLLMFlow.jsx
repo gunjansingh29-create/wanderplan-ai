@@ -1190,22 +1190,7 @@ function flightRoutePlanSignature(plan){
   }));
 }
 
-var DEST_AIRPORT_ALIAS_ROWS=[
-  {keys:["ayia napa","agia napa","nicosia","limassol","larnaca","cyprus"],code:"LCA"},
-  {keys:["paphos","pafos"],code:"PFO"},
-  {keys:["chengdu","sichuan"],code:"TFU"},
-  {keys:["grishneshwar","aurangabad"],code:"BOM"},
-  {keys:["kedarnath","guptkashi","haridwar","rishikesh"],code:"DED"},
-  {keys:["mahakaleshwar","ujjain"],code:"IDR"},
-  {keys:["mallikarjuna","srisailam"],code:"HYD"},
-  {keys:["nageshwar","dwarka"],code:"JGA"},
-  {keys:["omkareshwar"],code:"IDR"},
-  {keys:["rameswaram"],code:"IXM"},
-  {keys:["shrikhand kailash","shrikhand"],code:"IXC"},
-  {keys:["somnath","veraval"],code:"DIU"},
-  {keys:["trimbakeshwar","nashik"],code:"ISK"},
-  {keys:["vaidyanath","deoghar"],code:"DGH"}
-];
+var DEST_AIRPORT_ALIAS_ROWS=[];
 
 function normAirportCode(value){
   return String(value||"").replace(/[^A-Za-z]/g,"").toUpperCase().slice(0,3);

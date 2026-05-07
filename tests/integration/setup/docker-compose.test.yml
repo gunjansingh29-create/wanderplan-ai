@@ -34,6 +34,7 @@ x-agent-common: &agent-common
     JWT_SECRET: integration-test-jwt-secret-do-not-use-in-prod
     # External APIs stubbed via mock server
     AMADEUS_BASE_URL: http://mock-apis:4000/amadeus
+    OSM_NOMINATIM_BASE_URL: http://mock-apis:4000/nominatim/search
     GOOGLE_PLACES_BASE_URL: http://mock-apis:4000/google-places
     CALENDAR_API_BASE_URL: http://mock-apis:4000/calendar
 

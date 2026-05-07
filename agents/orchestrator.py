@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import smtplib
@@ -5921,7 +5922,7 @@ async def get_trip_expenses(trip_id: str, user_id: str = Depends(get_current_use
     }
 
 
-_AIRPORT_STATIC: list[dict[str, str]] = [
+_AIRPORT_STATIC: list[dict[str, Any]] = [
     {"iata": "ATL", "name": "Hartsfield-Jackson Atlanta International", "city": "Atlanta", "country": "US"},
     {"iata": "LAX", "name": "Los Angeles International", "city": "Los Angeles", "country": "US"},
     {"iata": "ORD", "name": "O'Hare International", "city": "Chicago", "country": "US"},
@@ -5970,8 +5971,8 @@ _AIRPORT_STATIC: list[dict[str, str]] = [
     {"iata": "JTR", "name": "Santorini (Thira) National Airport", "city": "Santorini", "country": "GR"},
     {"iata": "HER", "name": "Heraklion International Airport", "city": "Crete / Heraklion", "country": "GR"},
     {"iata": "SKG", "name": "Thessaloniki International Airport", "city": "Thessaloniki", "country": "GR"},
-    {"iata": "LCA", "name": "Larnaca International Airport", "city": "Larnaca / Ayia Napa / Limassol / Nicosia", "country": "CY"},
-    {"iata": "PFO", "name": "Paphos International Airport", "city": "Paphos / Cyprus", "country": "CY"},
+    {"iata": "LCA", "name": "Larnaca International Airport", "city": "Larnaca", "country": "CY", "lat": 34.8751, "lon": 33.6249},
+    {"iata": "PFO", "name": "Paphos International Airport", "city": "Paphos", "country": "CY", "lat": 34.7180, "lon": 32.4857},
     {"iata": "DXB", "name": "Dubai International Airport", "city": "Dubai", "country": "AE"},
     {"iata": "AUH", "name": "Abu Dhabi International Airport", "city": "Abu Dhabi", "country": "AE"},
     {"iata": "SIN", "name": "Singapore Changi Airport", "city": "Singapore", "country": "SG"},
@@ -5982,8 +5983,8 @@ _AIRPORT_STATIC: list[dict[str, str]] = [
     {"iata": "PKX", "name": "Beijing Daxing International Airport", "city": "Beijing", "country": "CN"},
     {"iata": "PVG", "name": "Shanghai Pudong International Airport", "city": "Shanghai", "country": "CN"},
     {"iata": "SHA", "name": "Shanghai Hongqiao International Airport", "city": "Shanghai", "country": "CN"},
-    {"iata": "TFU", "name": "Chengdu Tianfu International Airport", "city": "Chengdu / Sichuan", "country": "CN"},
-    {"iata": "CTU", "name": "Chengdu Shuangliu International Airport", "city": "Chengdu", "country": "CN"},
+    {"iata": "TFU", "name": "Chengdu Tianfu International Airport", "city": "Chengdu", "country": "CN", "lat": 30.3190, "lon": 104.4450},
+    {"iata": "CTU", "name": "Chengdu Shuangliu International Airport", "city": "Chengdu", "country": "CN", "lat": 30.5785, "lon": 103.9471},
     {"iata": "ICN", "name": "Incheon International Airport", "city": "Seoul", "country": "KR"},
     {"iata": "GMP", "name": "Gimpo International Airport", "city": "Seoul", "country": "KR"},
     {"iata": "SYD", "name": "Sydney Kingsford Smith Airport", "city": "Sydney", "country": "AU"},
@@ -6037,47 +6038,183 @@ _AIRPORT_STATIC: list[dict[str, str]] = [
 ]
 
 
+def _airport_public_row(row: dict[str, Any], distance_km: float | None = None) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "iata": str(row.get("iata") or "").upper().strip(),
+        "name": str(row.get("name") or row.get("iata") or "").strip(),
+        "city": str(row.get("city") or "").strip(),
+        "country": str(row.get("country") or "").upper().strip(),
+    }
+    if distance_km is not None:
+        item["distance_km"] = round(distance_km, 1)
+    return item
+
+
+def _airport_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    radius_km = 6371.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+    a = (math.sin(d_phi / 2) ** 2) + math.cos(phi1) * math.cos(phi2) * (math.sin(d_lambda / 2) ** 2)
+    return radius_km * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _amadeus_airport_rows_from_locations(data: dict[str, Any]) -> list[dict[str, Any]]:
+    airports: list[dict[str, Any]] = []
+    for item in data.get("data", []):
+        iata = str(item.get("iataCode") or "").upper().strip()
+        if len(iata) != 3:
+            continue
+        address = item.get("address") or {}
+        geo = item.get("geoCode") or {}
+        row: dict[str, Any] = {
+            "iata": iata,
+            "name": str(item.get("name") or iata).title(),
+            "city": str(address.get("cityName") or item.get("name") or iata).title(),
+            "country": str(address.get("countryCode") or "").upper(),
+        }
+        lat = _airport_float(geo.get("latitude"))
+        lon = _airport_float(geo.get("longitude"))
+        if lat is not None and lon is not None:
+            row["lat"] = lat
+            row["lon"] = lon
+        distance = _airport_float(item.get("distance", {}).get("value") if isinstance(item.get("distance"), dict) else None)
+        airports.append(_airport_public_row(row, distance))
+    return airports
+
+
+def _amadeus_place_coordinates(keyword: str) -> tuple[float, float] | None:
+    if not _amadeus_credentials_configured():
+        return None
+    try:
+        data = _amadeus_request_json(
+            "/v1/reference-data/locations",
+            {"subType": "CITY", "keyword": keyword, "page[limit]": "3", "view": "LIGHT"},
+        )
+    except Exception:
+        return None
+    for item in data.get("data", []):
+        geo = item.get("geoCode") or {}
+        lat = _airport_float(geo.get("latitude"))
+        lon = _airport_float(geo.get("longitude"))
+        if lat is not None and lon is not None:
+            return lat, lon
+    return None
+
+
+def _nominatim_place_coordinates(keyword: str) -> tuple[float, float] | None:
+    base_url = os.getenv("OSM_NOMINATIM_BASE_URL", "https://nominatim.openstreetmap.org/search").strip()
+    nominatim_url = base_url + ("&" if "?" in base_url else "?") + urlencode(
+        {"q": keyword, "format": "json", "limit": "1"}
+    )
+    try:
+        req = urllib_request.Request(
+            nominatim_url,
+            headers={"User-Agent": "WanderPlanAI/1.0 (+https://wanderplan-ai.onrender.com)"},
+        )
+        timeout = max(2.0, min(float(os.getenv("OSM_NOMINATIM_TIMEOUT_SECONDS", "4.0") or 4.0), 12.0))
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if not isinstance(payload, list) or not payload:
+            return None
+        lat = _airport_float(payload[0].get("lat"))
+        lon = _airport_float(payload[0].get("lon"))
+        if lat is None or lon is None:
+            return None
+        return lat, lon
+    except Exception:
+        return None
+
+
+def _place_coordinates(keyword: str) -> tuple[float, float] | None:
+    return _amadeus_place_coordinates(keyword) or _nominatim_place_coordinates(keyword)
+
+
+def _amadeus_nearby_airports(lat: float, lon: float) -> list[dict[str, Any]]:
+    if not _amadeus_credentials_configured():
+        return []
+    try:
+        data = _amadeus_request_json(
+            "/v1/reference-data/locations/airports",
+            {
+                "latitude": f"{lat:.6f}",
+                "longitude": f"{lon:.6f}",
+                "radius": "300",
+                "page[limit]": "10",
+            },
+        )
+    except Exception:
+        return []
+    return _amadeus_airport_rows_from_locations(data)
+
+
+def _static_nearby_airports(lat: float, lon: float, max_km: float = 300.0) -> list[dict[str, Any]]:
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for airport in _AIRPORT_STATIC:
+        airport_lat = _airport_float(airport.get("lat"))
+        airport_lon = _airport_float(airport.get("lon"))
+        if airport_lat is None or airport_lon is None:
+            continue
+        distance = _haversine_km(lat, lon, airport_lat, airport_lon)
+        if distance <= max_km:
+            ranked.append((distance, _airport_public_row(airport, distance)))
+    ranked.sort(key=lambda item: item[0])
+    return [airport for _, airport in ranked]
+
+
 @app.get("/airports/search")
 async def search_airports(
     q: str,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Search for airports by city name or keyword, returning IATA code options."""
+    """Search for airports by city, airport, or nearby destination place."""
     keyword = str(q or "").strip()
     if len(keyword) < 2:
         return {"airports": [], "source": "none"}
 
-    # Try Amadeus locations API first
+    # Direct airport/city airport lookup first.
     if _amadeus_credentials_configured():
         try:
             data = _amadeus_request_json(
                 "/v1/reference-data/locations",
                 {"subType": "AIRPORT", "keyword": keyword, "page[limit]": "10", "view": "LIGHT"},
             )
-            airports: list[dict[str, str]] = []
-            for item in data.get("data", []):
-                iata = str(item.get("iataCode") or "").upper().strip()
-                if len(iata) != 3:
-                    continue
-                name = str(item.get("name") or iata).title()
-                address = item.get("address") or {}
-                city = str(address.get("cityName") or name).title()
-                country = str(address.get("countryCode") or "").upper()
-                airports.append({"iata": iata, "name": name, "city": city, "country": country})
+            airports = _amadeus_airport_rows_from_locations(data)
             if airports:
                 return {"airports": airports[:8], "source": "amadeus"}
         except Exception:
             pass  # fall through to static list
 
-    # Static fallback: fuzzy match on city, name, or IATA code
+    # Static airport fallback: exact/fuzzy match only against airport facts.
     kw = keyword.lower()
     matches = [
         a for a in _AIRPORT_STATIC
-        if kw in a["city"].lower() or kw in a["name"].lower() or kw == a["iata"].lower()
+        if kw in str(a["city"]).lower() or kw in str(a["name"]).lower() or kw == str(a["iata"]).lower()
     ]
-    # Prioritise exact IATA match at the top
-    matches.sort(key=lambda a: (0 if kw == a["iata"].lower() else 1, a["city"]))
-    return {"airports": matches[:8], "source": "static"}
+    matches.sort(key=lambda a: (0 if kw == str(a["iata"]).lower() else 1, str(a["city"])))
+    if matches:
+        return {"airports": [_airport_public_row(a) for a in matches[:8]], "source": "static"}
+
+    # Generic destination fallback: geocode the place, then ask for nearby airports.
+    coords = _place_coordinates(keyword)
+    if coords:
+        lat, lon = coords
+        nearby = _amadeus_nearby_airports(lat, lon)
+        if nearby:
+            return {"airports": nearby[:8], "source": "amadeus_nearby"}
+        static_nearby = _static_nearby_airports(lat, lon)
+        if static_nearby:
+            return {"airports": static_nearby[:8], "source": "static_nearby"}
+
+    return {"airports": [], "source": "none"}
 
 
 @app.post("/trips/{trip_id}/flights/search")

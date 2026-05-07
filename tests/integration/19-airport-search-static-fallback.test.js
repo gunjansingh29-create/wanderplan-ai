@@ -1,7 +1,7 @@
 /**
  * @fileoverview
- * Verifies static airport fallback covers destination cities used by the
- * multi-city flight flow even when live airport lookup is unavailable.
+ * Verifies airport search covers destination cities used by the multi-city
+ * flight flow even when the typed destination is not itself an airport city.
  */
 
 'use strict';
@@ -51,7 +51,7 @@ describe('19 - airport search static fallback', () => {
     );
   });
 
-  test('GET /airports/search resolves Cyprus stops to nearby airports from static fallback', async () => {
+  test('GET /airports/search resolves Cyprus stops to nearby airports by place distance', async () => {
     const ayiaNapa = await request(API_V1)
       .get('/airports/search')
       .set('Authorization', `Bearer ${token}`)
