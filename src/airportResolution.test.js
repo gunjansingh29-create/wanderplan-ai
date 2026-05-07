@@ -5,4 +5,11 @@ describe("destination airport resolution", () => {
     expect(airportAliasFallbackCode("Chengdu")).toBe("TFU");
     expect(airportAliasFallbackCode("Chengdu, Sichuan")).toBe("TFU");
   });
+
+  test("resolves Cyprus resort and city stops to nearby flight airports", () => {
+    expect(airportAliasFallbackCode("Ayia Napa")).toBe("LCA");
+    expect(airportAliasFallbackCode("Limassol")).toBe("LCA");
+    expect(airportAliasFallbackCode("Nicosia")).toBe("LCA");
+    expect(airportAliasFallbackCode("Paphos")).toBe("PFO");
+  });
 });

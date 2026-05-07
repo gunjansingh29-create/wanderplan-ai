@@ -1191,6 +1191,8 @@ function flightRoutePlanSignature(plan){
 }
 
 var DEST_AIRPORT_ALIAS_ROWS=[
+  {keys:["ayia napa","agia napa","nicosia","limassol","larnaca","cyprus"],code:"LCA"},
+  {keys:["paphos","pafos"],code:"PFO"},
   {keys:["chengdu","sichuan"],code:"TFU"},
   {keys:["grishneshwar","aurangabad"],code:"BOM"},
   {keys:["kedarnath","guptkashi","haridwar","rishikesh"],code:"DED"},

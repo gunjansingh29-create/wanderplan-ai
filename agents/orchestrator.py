@@ -5970,6 +5970,8 @@ _AIRPORT_STATIC: list[dict[str, str]] = [
     {"iata": "JTR", "name": "Santorini (Thira) National Airport", "city": "Santorini", "country": "GR"},
     {"iata": "HER", "name": "Heraklion International Airport", "city": "Crete / Heraklion", "country": "GR"},
     {"iata": "SKG", "name": "Thessaloniki International Airport", "city": "Thessaloniki", "country": "GR"},
+    {"iata": "LCA", "name": "Larnaca International Airport", "city": "Larnaca / Ayia Napa / Limassol / Nicosia", "country": "CY"},
+    {"iata": "PFO", "name": "Paphos International Airport", "city": "Paphos / Cyprus", "country": "CY"},
     {"iata": "DXB", "name": "Dubai International Airport", "city": "Dubai", "country": "AE"},
     {"iata": "AUH", "name": "Abu Dhabi International Airport", "city": "Abu Dhabi", "country": "AE"},
     {"iata": "SIN", "name": "Singapore Changi Airport", "city": "Singapore", "country": "SG"},
