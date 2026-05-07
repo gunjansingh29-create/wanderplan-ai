@@ -1023,6 +1023,23 @@ function normalizeWizardStepIndex(stepNum, orderVersion){
   return Math.min(Math.max(0,step),maxStep);
 }
 
+function consensusStageKeyForStep(stepNum, soloMode){
+  var map={
+    3:"interests",
+    4:"health",
+    6:"activities",
+    7:"poi_voting",
+    8:"budget",
+    10:"stays",
+    11:"dining",
+    12:"itinerary",
+    13:"dates"
+  };
+  var stage=map[Number(stepNum)]||"";
+  if(soloMode&&(stage==="stays"||stage==="dining"))return "";
+  return stage;
+}
+
 function inclusiveIsoDays(startIso, endIso){
   var start=String(startIso||"").slice(0,10);
   var end=String(endIso||"").slice(0,10);
@@ -5951,20 +5968,6 @@ export default function WanderPlan(){
     updateLocalWizardStepState(n,tid);
     persistWizardStepWithRetry(n,tid,1);
   }
-  function consensusStageKeyForStep(stepNum){
-    var map={
-      3:"interests",
-      4:"health",
-      6:"activities",
-      7:"poi_voting",
-      8:"budget",
-      10:"stays",
-      11:"dining",
-      12:"itinerary",
-      13:"dates"
-    };
-    return map[Number(stepNum)]||"";
-  }
   function isWizardOrganizer(tripCtx){
     var tr=tripCtx||newTrip||{};
     var tid=resolveWizardTripId(currentTripId,newTrip,tr);
@@ -8486,7 +8489,7 @@ export default function WanderPlan(){
     function adv(){
       logWizAction("approve_step",{step:wizStep});
       setCSM("");
-      var stageKey=consensusStageKeyForStep(wizStep);
+      var stageKey=consensusStageKeyForStep(wizStep,soloTripMode);
       if(!stageKey){advanceWizardStep();return;}
       submitStageConsensusDecision(stageKey,"approve",tr).then(function(out){
         if(out&&out.mode==="server"&&out.organizer===false){
@@ -8503,7 +8506,7 @@ export default function WanderPlan(){
     function revise(){
       logWizAction("revise_step",{step:wizStep-1});
       setCSM("");
-      var stageKey=consensusStageKeyForStep(wizStep);
+      var stageKey=consensusStageKeyForStep(wizStep,soloTripMode);
       if(!stageKey){
         if(wizStep>0)setWizardStepShared(wizStep-1);
         return;
@@ -10511,7 +10514,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         setStayPick(nextStayPick);
         setSFC(resolvedChoiceMap);
         advanceWizardStep();
-        submitStageConsensusDecision("stays","approve",tr).catch(function(){});
+        if(!soloTripMode)submitStageConsensusDecision("stays","approve",tr).catch(function(){});
         if(!(authToken&&activeStayTripId&&isUuidLike(activeStayTripId))){
           return;
         }
@@ -10795,7 +10798,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         setMealVotes(voteSnapshot);
         setMD(mealSnapshot.length>0);
         advanceWizardStep();
-        submitStageConsensusDecision("dining","approve",tr).catch(function(){});
+        if(!soloTripMode)submitStageConsensusDecision("dining","approve",tr).catch(function(){});
         if(!(authToken&&activeDiningTripId&&isUuidLike(activeDiningTripId))){
           return;
         }
@@ -11801,4 +11804,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketResolveContextualQuery, buildBucketChatProposals, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveManualFlightDateEdit, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketResolveContextualQuery, buildBucketChatProposals, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, consensusStageKeyForStep, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveManualFlightDateEdit, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, wizardSyncIntervalMs };
