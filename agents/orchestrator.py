@@ -5980,6 +5980,8 @@ _AIRPORT_STATIC: list[dict[str, str]] = [
     {"iata": "PKX", "name": "Beijing Daxing International Airport", "city": "Beijing", "country": "CN"},
     {"iata": "PVG", "name": "Shanghai Pudong International Airport", "city": "Shanghai", "country": "CN"},
     {"iata": "SHA", "name": "Shanghai Hongqiao International Airport", "city": "Shanghai", "country": "CN"},
+    {"iata": "TFU", "name": "Chengdu Tianfu International Airport", "city": "Chengdu / Sichuan", "country": "CN"},
+    {"iata": "CTU", "name": "Chengdu Shuangliu International Airport", "city": "Chengdu", "country": "CN"},
     {"iata": "ICN", "name": "Incheon International Airport", "city": "Seoul", "country": "KR"},
     {"iata": "GMP", "name": "Gimpo International Airport", "city": "Seoul", "country": "KR"},
     {"iata": "SYD", "name": "Sydney Kingsford Smith Airport", "city": "Sydney", "country": "AU"},

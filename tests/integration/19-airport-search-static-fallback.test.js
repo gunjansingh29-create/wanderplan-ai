@@ -33,4 +33,21 @@ describe('19 - airport search static fallback', () => {
       ])
     );
   });
+
+  test('GET /airports/search resolves Chengdu to nearby airports from static fallback', async () => {
+    const res = await request(API_V1)
+      .get('/airports/search')
+      .set('Authorization', `Bearer ${token}`)
+      .query({ q: 'Chengdu' })
+      .expect(200);
+
+    const airports = Array.isArray(res.body?.airports) ? res.body.airports : [];
+    expect(airports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          iata: 'TFU',
+        }),
+      ])
+    );
+  });
 });
