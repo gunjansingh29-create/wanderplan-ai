@@ -28,6 +28,63 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
  * Returns 3 deterministic flight options.
  * Price is driven by the `maxPrice` query param so budget tests can control it.
  */
+app.post('/amadeus/v1/security/oauth2/token', (_req, res) => {
+  res.json({ access_token: 'mock-amadeus-token', token_type: 'Bearer', expires_in: 1799 });
+});
+
+app.get('/amadeus/v1/reference-data/locations', (req, res) => {
+  const subtype = String(req.query.subType || '').toUpperCase();
+  const keyword = String(req.query.keyword || '').trim().toLowerCase();
+  if (subtype === 'AIRPORT') {
+    return res.json({ data: [] });
+  }
+  const cityFixtures = {
+    'ayia napa': { name: 'Ayia Napa', latitude: 34.9920, longitude: 34.0147 },
+    'limassol': { name: 'Limassol', latitude: 34.7071, longitude: 33.0226 },
+    'nicosia': { name: 'Nicosia', latitude: 35.1856, longitude: 33.3823 },
+  };
+  const fixture = cityFixtures[keyword];
+  if (!fixture || subtype !== 'CITY') {
+    return res.json({ data: [] });
+  }
+  res.json({
+    data: [{
+      type: 'location',
+      subType: 'CITY',
+      name: fixture.name,
+      geoCode: { latitude: fixture.latitude, longitude: fixture.longitude },
+      address: { cityName: fixture.name, countryCode: 'CY' },
+    }],
+  });
+});
+
+app.get('/amadeus/v1/reference-data/locations/airports', (req, res) => {
+  const lat = Number(req.query.latitude);
+  const lon = Number(req.query.longitude);
+  if (Number.isFinite(lat) && Number.isFinite(lon) && lat > 34 && lat < 36 && lon > 32 && lon < 35) {
+    return res.json({
+      data: [{
+        type: 'location',
+        subType: 'AIRPORT',
+        name: 'Larnaca International Airport',
+        iataCode: 'LCA',
+        geoCode: { latitude: 34.8751, longitude: 33.6249 },
+        address: { cityName: 'Larnaca', countryCode: 'CY' },
+        distance: { value: 38, unit: 'KM' },
+      }, {
+        type: 'location',
+        subType: 'AIRPORT',
+        name: 'Paphos International Airport',
+        iataCode: 'PFO',
+        geoCode: { latitude: 34.7180, longitude: 32.4857 },
+        address: { cityName: 'Paphos', countryCode: 'CY' },
+        distance: { value: 145, unit: 'KM' },
+      }],
+    });
+  }
+  res.json({ data: [] });
+});
+
 app.post('/amadeus/v2/shopping/flight-offers', (req, res) => {
   const maxPrice = parseFloat(req.query.maxPrice || req.body?.maxPrice || 9999);
 

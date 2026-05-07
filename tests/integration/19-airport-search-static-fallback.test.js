@@ -58,10 +58,12 @@ describe('19 - airport search static fallback', () => {
       .query({ q: 'Ayia Napa' })
       .expect(200);
 
+    expect(ayiaNapa.body?.source).toBe('amadeus_nearby');
     expect(Array.isArray(ayiaNapa.body?.airports) ? ayiaNapa.body.airports : []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           iata: 'LCA',
+          distance_km: expect.any(Number),
         }),
       ])
     );
