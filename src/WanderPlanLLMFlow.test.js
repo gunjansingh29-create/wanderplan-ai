@@ -115,6 +115,10 @@ import {
   tripDestinationNamesFromValues,
   updateUserInterestSelection,
   upsertBucketItemList,  wizardSyncIntervalMs,
+  dedupeBucketSuggestionsForExisting,
+  isUuidLike,
+  normalizeBucketDestinationItem,
+  updateUserInterestSelection,
 } from "./WanderPlanLLMFlow";
 import WanderPlan from "./WanderPlanLLMFlow";
 
@@ -4234,7 +4238,7 @@ describe("WanderPlanLLMFlow account persistence helpers", () => {
       normalizePersonalBucketItems([
         { id: "bucket-1", destination: "Kyoto", name: "Kyoto" },
       ])
-    ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto" }]);
+    ).toEqual([{ id: "bucket-1", destination: "Kyoto", name: "Kyoto", country: "", bestMonths: [], costPerDay: 0, tags: [], bestTimeDesc: "", costNote: "" }]);
   });
 
   test("shouldTreatBucketItemsAsSameDestination matches same city even when one side misses country", () => {
