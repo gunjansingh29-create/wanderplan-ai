@@ -118,12 +118,19 @@ function mergeProfileIntoUser(baseUser,profile,emailHint,nameHint){
 }
 
 function normalizePersonalBucketItems(items){
+  var seenCanonical={};
   return (Array.isArray(items)?items:[]).map(function(it){
     if(!it||typeof it!=="object")return null;
     var name=normalizeTripDestinationValue(it.name||it.destination||it.city||"");
     if(!isValidBucketDestinationName(name))return null;
     return Object.assign({id:it.id},it,{name:name});
-  }).filter(Boolean);
+  }).filter(function(it){
+    if(!it)return false;
+    var key=canonicalTripDestinationName(it.name);
+    if(!key||seenCanonical[key])return false;
+    seenCanonical[key]=true;
+    return true;
+  });
 }
 
 var BLOCKED_BUCKET_DESTINATION_NAMES={
@@ -2651,6 +2658,11 @@ function destinationTripKey(dest){
   return nm+"|"+ct;
 }
 
+function isTempBucketId(id){
+  var s=String(id||"").trim();
+  return !s||/^d\d+-\d+$/.test(s)||s.indexOf("tmp-")===0||s.indexOf("trip-ai-dest-")===0;
+}
+
 function upsertBucketItemList(list,newItem){
   var incoming=(newItem&&typeof newItem==="object")?newItem:null;
   if(!incoming)return Array.isArray(list)?list.slice():[];
@@ -2664,7 +2676,11 @@ function upsertBucketItemList(list,newItem){
     if(!sameId&&!sameDestination)return item;
     exists=true;
     var merged=Object.assign({},item,incoming);
-    if(itemId)merged.id=itemId;
+    var itemIsPersisted=!!itemId&&!isTempBucketId(itemId);
+    var incomingIsPersisted=!!incomingId&&!isTempBucketId(incomingId);
+    if(itemIsPersisted)merged.id=itemId;
+    else if(incomingIsPersisted)merged.id=incomingId;
+    else if(itemId)merged.id=itemId;
     else if(incomingId)merged.id=incomingId;
     return merged;
   });
@@ -6786,7 +6802,7 @@ export default function WanderPlan(){
   function isPersistedBucketItem(dest){
     var id=String(dest&&dest.id||"").trim();
     if(!id)return false;
-    return !/^d\d+/.test(id)&&id.indexOf("tmp-")!==0;
+    return !isTempBucketId(id);
   }
 
   async function saveBucketDestination(dest){
@@ -11845,4 +11861,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, airportAliasFallbackCode, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketPreferenceSeedDestinations, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketRegionalFallbackItems, bucketResolveContextualQuery, buildBucketChatProposals, buildBucketFallbackDestinations, buildBucketSuggestionAdditions, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, consensusStageKeyForStep, countEnabledInterests, dedupeBucketSuggestionsForExisting, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isLikelyBucketDestinationName, isManufacturedPoiName, isPlausibleBucketDestinationName, isSameBucketDestination, isUuidLike, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, maybeResolveBucketConceptDestinations, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeBucketDestinationItem, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, profilePayloadSignatureFor, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveBucketKeywordDestinations, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveFlightDatesAfterRouteStopEdit, resolveManualFlightDateEdit, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldContinueAfterFlightPlanningSaveError, shouldPersistProfile, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, tripExpenseLineItems, tripExpenseLineItemsTotal, trimPoiErrorDetail, trimRouteErrorDetail, updateUserInterestSelection, upsertBucketItemList, voteKeyAliasesFor, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, airportAliasFallbackCode, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketPreferenceSeedDestinations, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketRegionalFallbackItems, bucketResolveContextualQuery, buildBucketChatProposals, buildBucketFallbackDestinations, buildBucketSuggestionAdditions, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, consensusStageKeyForStep, countEnabledInterests, dedupeBucketSuggestionsForExisting, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isLikelyBucketDestinationName, isManufacturedPoiName, isPlausibleBucketDestinationName, isSameBucketDestination, isTempBucketId, isUuidLike, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, maybeResolveBucketConceptDestinations, mergeAvailabilityDraft, mergeBucketItemDetails, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeBucketDestinationItem, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, profilePayloadSignatureFor, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveBucketKeywordDestinations, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveFlightDatesAfterRouteStopEdit, resolveManualFlightDateEdit, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeCrewMembers, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldContinueAfterFlightPlanningSaveError, shouldPersistProfile, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, tripExpenseLineItems, tripExpenseLineItemsTotal, trimPoiErrorDetail, trimRouteErrorDetail, updateUserInterestSelection, upsertBucketItemList, voteKeyAliasesFor, wizardSyncIntervalMs };
