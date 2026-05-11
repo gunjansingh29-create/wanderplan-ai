@@ -118,12 +118,34 @@ function mergeProfileIntoUser(baseUser,profile,emailHint,nameHint){
 }
 
 function normalizePersonalBucketItems(items){
+  var seenCanonical={};
   return (Array.isArray(items)?items:[]).map(function(it){
     if(!it||typeof it!=="object")return null;
     var name=normalizeTripDestinationValue(it.name||it.destination||it.city||"");
     if(!isValidBucketDestinationName(name))return null;
-    return Object.assign({id:it.id},it,{name:name});
-  }).filter(Boolean);
+    var country=String(it.country||"").trim();
+    var bestMonths=Array.isArray(it.bestMonths)?it.bestMonths:(Array.isArray(it.best_months)?it.best_months:[]);
+    var costPerDay=Number(it.costPerDay||it.cost_per_day||0)||0;
+    var tags=Array.isArray(it.tags)?it.tags:[];
+    var bestTimeDesc=String(it.bestTimeDesc||it.best_time_desc||"").trim();
+    var costNote=String(it.costNote||it.cost_note||"").trim();
+    return Object.assign({},it,{
+      id:it.id,
+      name:name,
+      country:country,
+      bestMonths:bestMonths,
+      costPerDay:costPerDay,
+      tags:tags,
+      bestTimeDesc:bestTimeDesc,
+      costNote:costNote
+    });
+  }).filter(function(it){
+    if(!it)return false;
+    var key=canonicalTripDestinationName(it.name);
+    if(!key||seenCanonical[key])return false;
+    seenCanonical[key]=true;
+    return true;
+  });
 }
 
 var BLOCKED_BUCKET_DESTINATION_NAMES={
@@ -151,6 +173,31 @@ function isValidBucketDestinationName(value){
   var normalized=canonicalTripDestinationName(value);
   if(!normalized)return false;
   return !BLOCKED_BUCKET_DESTINATION_NAMES[normalized];
+}
+
+function isLikelyBucketDestinationName(name){
+  var str=String(name||"").trim();
+  if(!str||str.length<2)return false;
+  if(str.length>MAX_BUCKET_DESTINATION_NAME_LENGTH)return false;
+  if(BUCKET_DESTINATION_DIGIT_RUN_RE.test(str))return false;
+  if(BUCKET_DESTINATION_ALLOWED_CHARS_RE.test(str))return false;
+  var lettersOnly=str.replace(BUCKET_DESTINATION_LETTERS_ONLY_RE,"");
+  if(!lettersOnly||!BUCKET_DESTINATION_VOWEL_RE.test(lettersOnly))return false;
+  var normalized=canonicalTripDestinationName(str);
+  if(BLOCKED_BUCKET_DESTINATION_NAMES[normalized])return false;
+  return true;
+}
+
+function isPlausibleBucketDestinationName(name){
+  var str=String(name||"").trim();
+  if(!str||str.length<2)return false;
+  if(str.length>MAX_BUCKET_DESTINATION_NAME_LENGTH)return false;
+  if(BUCKET_DESTINATION_DIGIT_RUN_RE.test(str))return false;
+  var lettersOnly=str.replace(BUCKET_DESTINATION_LETTERS_ONLY_RE,"");
+  if(!lettersOnly)return false;
+  var normalized=canonicalTripDestinationName(str);
+  if(BLOCKED_BUCKET_DESTINATION_NAMES[normalized])return false;
+  return true;
 }
 
 function chooseBucketStringValue(primary,fallback){
@@ -2370,6 +2417,7 @@ function normalizeBucketDestinationItem(row){
   var parsed=splitBucketDestinationNameCountry(row.name||row.destination||row.city||"",row.country||"");
   var name=String(parsed.name||"").trim();
   if(!name)return null;
+  if(!isLikelyBucketDestinationName(name))return null;
   var override=bucketDestinationOverrideForName(name);
   var bestMonths=Array.isArray(row.bestMonths)?row.bestMonths:[];
   var tags=Array.isArray(row.tags)?row.tags:[];
@@ -2660,6 +2708,11 @@ function destinationTripKey(dest){
   return nm+"|"+ct;
 }
 
+function isTempBucketId(id){
+  var s=String(id||"").trim();
+  return !s||/^d\d+-\d+$/.test(s)||s.indexOf("tmp-")===0||s.indexOf("trip-ai-dest-")===0;
+}
+
 function upsertBucketItemList(list,newItem){
   var incoming=(newItem&&typeof newItem==="object")?newItem:null;
   if(!incoming)return Array.isArray(list)?list.slice():[];
@@ -2673,7 +2726,11 @@ function upsertBucketItemList(list,newItem){
     if(!sameId&&!sameDestination)return item;
     exists=true;
     var merged=Object.assign({},item,incoming);
-    if(itemId)merged.id=itemId;
+    var itemIsPersisted=!!itemId&&!isTempBucketId(itemId);
+    var incomingIsPersisted=!!incomingId&&!isTempBucketId(incomingId);
+    if(itemIsPersisted)merged.id=itemId;
+    else if(incomingIsPersisted)merged.id=incomingId;
+    else if(itemId)merged.id=itemId;
     else if(incomingId)merged.id=incomingId;
     return merged;
   });
@@ -2710,6 +2767,18 @@ function buildBucketChatProposals(items, existingBucket){
     proposed.push(existingMatch0?mergeBucketItemDetails(existingMatch0,normalizedItem0):normalizedItem0);
   }
   return proposed;
+}
+
+function buildBucketFallbackDestinations(items,existingBucket){
+  return buildBucketChatProposals(Array.isArray(items)?items:[],existingBucket);
+}
+
+function bucketPreferenceSeedDestinations(){
+  return [];
+}
+
+function resolveBucketKeywordDestinations(keyword){
+  return bucketConceptDestinationsForQuery(String(keyword||""));
 }
 
 function buildPoiRequestSignature(destinations, interests, budgetTier, dietary, groupPrefs, routePlanSignature){
@@ -6783,7 +6852,7 @@ export default function WanderPlan(){
   function isPersistedBucketItem(dest){
     var id=String(dest&&dest.id||"").trim();
     if(!id)return false;
-    return !/^d\d+/.test(id)&&id.indexOf("tmp-")!==0;
+    return !isTempBucketId(id);
   }
 
   async function saveBucketDestination(dest){
@@ -8268,7 +8337,7 @@ export default function WanderPlan(){
       </div>
       <p style={{fontSize:13,color:C.tx2,marginBottom:8}}>{d.country}</p>
       {d.tags&&d.tags.length>0&&(<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8}}>{d.tags.map(function(t){return <span key={t} style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"rgba(255,255,255,.04)",color:C.tx2}}>{t}</span>;})}</div>)}
-      <div style={{display:"flex",gap:2,marginBottom:8}}>{MO.map(function(m,mi){var g=(d.bestMonths||[]).indexOf(mi+1)>=0;return <div key={mi} style={{width:20,height:15,borderRadius:2,background:g?C.grn+"22":"rgba(255,255,255,.03)",color:g?C.grn:C.tx3,fontSize:8,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center"}}>{m}</div>;})}</div>
+      <div style={{display:"flex",gap:2,marginBottom:8}}>{MO.map(function(m,mi){var g=(d.bestMonths||[]).indexOf(mi+1)>=0;return <div key={mi} style={{width:20,height:15,borderRadius:2,background:g?C.grn:"rgba(255,255,255,.06)",color:g?"#fff":C.tx3,fontSize:8,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center"}}>{m}</div>;})}</div>
       <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:C.tealL}}>{d.bestTimeDesc||""}</span><span style={{fontSize:13,fontWeight:600,color:C.goldT}}>~${d.costPerDay||0}/day</span></div>
       {d.costNote&&<p style={{fontSize:11,color:C.tx3,marginTop:4}}>{d.costNote}</p>}
       <div style={{display:"flex",gap:8,marginTop:10}}>
