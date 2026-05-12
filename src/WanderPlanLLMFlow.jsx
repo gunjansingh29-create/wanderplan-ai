@@ -1566,6 +1566,16 @@ function normalizePoiDecisionStateMap(statusMap, poiList, sharedPool){
   return out;
 }
 
+function readPoiDecisionStatus(statusMap, poi, idx){
+  var src=(statusMap&&typeof statusMap==="object")?statusMap:{};
+  var canonical=canonicalPoiVoteKey(poi,idx);
+  var raw=src[canonical];
+  if(raw===undefined)raw=src[idx];
+  if(raw===undefined)raw=src[String(idx)];
+  var v=String(raw||"").trim().toLowerCase();
+  return (v==="yes"||v==="no")?v:"";
+}
+
 function readPoiSelectionRow(selectionMap,poi,idx){
   var map=(selectionMap&&typeof selectionMap==="object")?selectionMap:{};
   var key=canonicalPoiVoteKey(poi,idx);
@@ -9621,7 +9631,7 @@ export default function WanderPlan(){
       var poiRows=mergePoiListsByCanonical(pois,poiOptionPool);
       function hasAnyCrewYesForIdx(idx){
         var rowMeta=readPoiSelectionRow(poiMemberChoices,poiRows[idx],idx);
-        return hasAnyYesInPoiSelectionRow(rowMeta.row)||poiStatus[idx]==="yes";
+        return hasAnyYesInPoiSelectionRow(rowMeta.row)||readPoiDecisionStatus(poiStatus,poiRows[idx],idx)==="yes";
       }
       function setPoiDecisionForCurrentUser(idx,decision){
         if(!(decision==="yes"||decision==="no"))return;
@@ -9643,9 +9653,9 @@ export default function WanderPlan(){
           return next;
         });
       }
-      var accepted=poiRows.filter(function(p,i){return poiStatus[i]==="yes";});
-      var rejected=poiRows.filter(function(p,i){return poiStatus[i]==="no";});
-      var pending=poiRows.filter(function(p,i){return !poiStatus[i];});
+      var accepted=poiRows.filter(function(p,i){return readPoiDecisionStatus(poiStatus,p,i)==="yes";});
+      var rejected=poiRows.filter(function(p,i){return readPoiDecisionStatus(poiStatus,p,i)==="no";});
+      var pending=poiRows.filter(function(p,i){return !readPoiDecisionStatus(poiStatus,p,i);});
       var combinedAccepted=poiRows.filter(function(_,i){return hasAnyCrewYesForIdx(i);});
       var allDecided=poiDone&&poiRows.length>0&&pending.length===0&&!poiContextStale;
       function revisePOISelection(){
@@ -9826,7 +9836,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
         {(!poiDone||poiContextStale)&&!poiLoad&&(<div><p style={{fontSize:14,color:C.tx2,marginBottom:12}}>{poiContextStale?"Destinations, budget, or traveler profiles changed. Refresh the activity list so it matches the current trip.":("The agent searches "+dests.length+" destination"+(dests.length>1?"s":"")+" based on group interests and budget.")}</p><button onClick={runPoiSearch} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"linear-gradient(135deg,"+C.teal+","+C.sky+")",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>{poiContextStale?"Refresh Activities for Updated Trip":"Find Activities"}</button></div>)}
         {poiLoad&&(<div style={{textAlign:"center",padding:"30px 0"}}><div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:12}}><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite 0s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .16s"}}/><div style={{width:8,height:8,borderRadius:999,background:C.tealL,animation:"dotPulse 1.2s infinite .32s"}}/></div><p style={{fontSize:14,color:C.tx2,marginBottom:8}}>{poiGenStatus.phase==="syncing"?"Saving generated POIs to the trip...":("Searching across "+dests.map(function(d){return d.name;}).join(", ")+"...")}</p>{poiGenStatus.currentBatch>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>Destination {poiGenStatus.currentBatch} of {poiGenStatus.batchCount||1}{Array.isArray(poiGenStatus.activeDestinations)&&poiGenStatus.activeDestinations.length?": "+poiGenStatus.activeDestinations.join(", "):""}</p>}{Array.isArray(poiGenStatus.completedDestinations)&&poiGenStatus.completedDestinations.length>0&&<p style={{fontSize:12,color:C.grn,marginBottom:6}}>Completed: {poiGenStatus.completedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.timedOutDestinations)&&poiGenStatus.timedOutDestinations.length>0&&<p style={{fontSize:12,color:C.wrn,marginBottom:6}}>Anthropic timed out for: {poiGenStatus.timedOutDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.failedDestinations)&&poiGenStatus.failedDestinations.length>0&&<p style={{fontSize:12,color:C.red,marginBottom:6}}>Provider errors for: {poiGenStatus.failedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.parseFailedDestinations)&&poiGenStatus.parseFailedDestinations.length>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>Responses could not be parsed for: {poiGenStatus.parseFailedDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.emptyDestinations)&&poiGenStatus.emptyDestinations.length>0&&<p style={{fontSize:12,color:C.tx3,marginBottom:6}}>No usable POIs yet for: {poiGenStatus.emptyDestinations.join(", ")}</p>}{Array.isArray(poiGenStatus.fallbackDestinations)&&poiGenStatus.fallbackDestinations.length>0&&<p style={{fontSize:12,color:C.sky,marginBottom:6}}>Fallback POIs used for: {poiGenStatus.fallbackDestinations.join(", ")}</p>}{poiGenStatus.destinationErrors&&Object.keys(poiGenStatus.destinationErrors).length>0&&<div style={{marginTop:8,padding:"10px 12px",borderRadius:10,background:C.surface,border:"1px solid "+C.border,textAlign:"left"}}><p style={{fontSize:11,color:C.tx3,marginBottom:6}}>Provider details</p>{Object.keys(poiGenStatus.destinationErrors).map(function(dest){return <p key={dest} style={{fontSize:11,color:C.tx2,marginBottom:4}}><span style={{color:"#fff"}}>{dest}:</span> {poiGenStatus.destinationErrors[dest]}</p>;})}</div>}</div>)}
         {poiDone&&poiRows.length>0&&!poiContextStale&&(<div>
-          {poiRows.map(function(p,i){var st=poiStatus[i];var cc=p.category==="Nature"?C.grn:p.category==="Food"?C.teal:p.category==="Culture"?C.wrn:p.category==="Adventure"?C.coral:p.category==="Wellness"?C.purp:C.tealL;
+          {poiRows.map(function(p,i){var st=readPoiDecisionStatus(poiStatus,p,i);var cc=p.category==="Nature"?C.grn:p.category==="Food"?C.teal:p.category==="Culture"?C.wrn:p.category==="Adventure"?C.coral:p.category==="Wellness"?C.purp:C.tealL;
             return(<div key={i} style={{padding:"12px 0",borderBottom:i<poiRows.length-1?"1px solid "+C.border:"none",opacity:st==="no"?.72:1,transition:"opacity .2s"}}>
               <div style={{display:"flex",gap:6,marginBottom:4,alignItems:"center"}}><span style={{fontSize:10,padding:"1px 8px",borderRadius:999,background:cc+"18",color:cc,fontWeight:600}}>{p.category}</span><span style={{fontSize:11,color:C.wrn}}>{"*"+(p.rating||4.5)}</span><span style={{fontSize:11,color:C.tx3,marginLeft:"auto"}}>{p.destination}</span></div>
               <p style={{fontSize:14,fontWeight:600,marginBottom:2,textDecoration:st==="no"?"line-through":"none"}}>{p.name}</p>
@@ -11665,7 +11675,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 
     {wizStep===12&&(function(){
       var accPois=resolveItineraryPoiRows(
-        pois.filter(function(p,i){return poiStatus[i]==="yes";}),
+        pois.filter(function(p,i){return readPoiDecisionStatus(poiStatus,p,i)==="yes";}),
         1
       );
       var grpSize=(jc||0)+1;
@@ -11782,7 +11792,7 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
 
     {wizStep===15&&(function(){
       var accPois=resolveItineraryPoiRows(
-        pois.filter(function(p,i){return poiStatus[i]==="yes";}),
+        pois.filter(function(p,i){return readPoiDecisionStatus(poiStatus,p,i)==="yes";}),
         1
       );
       var grpSize=(jc||0)+1;
@@ -11907,4 +11917,4 @@ Destinations: ${destStr}. Use a real, recognizable activity when possible. ONLY 
   );
 }
 
-export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, acceptedPoiRowsForDuration, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, airportAliasFallbackCode, applyPoiVoteToState, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketResolveContextualQuery, buildBucketChatProposals, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, consensusStageKeyForStep, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveFlightDatesAfterRouteStopEdit, resolveManualFlightDateEdit, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldContinueAfterFlightPlanningSaveError, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, withPersistedWizardStep, wizardSyncIntervalMs };
+export { POI_LLM_TIMEOUT_MS, ROUTE_LLM_TIMEOUT_MS, acceptedPoiRowsForDuration, accountCacheKey, activeTripTravelerCount, addClockMinutes, addIsoDays, addTripDestinationValue, airportAliasFallbackCode, applyPoiVoteToState, availabilityWindowMatchesTripDays, bucketClarifyMessage, bucketQueryAnchorName, bucketQueryNeedsSpecificChildren, bucketQueryShouldSuggestDestinations, bucketResolveContextualQuery, buildBucketChatProposals, buildCurrentVoteActor, buildDestinationFallbackPois, buildDurationPlanSignature, buildFallbackItinerary, buildFlightRoutePlan, buildItinerarySavePayload, buildPOIGroupPrefsFromCrew, buildPoiRequestSignature, buildRoutePlanSignature, buildTransitItem, buildTripShareLink, buildTripShareSummary, buildTripWhatsAppText, buildWhatsAppShareUrl, canEditVoteForMember, canonicalDestinationVoteKeyFromStoredKey, canonicalMealVoteKey, canonicalPoiVoteKeyFromStoredKey, canonicalStayVoteKey, chooseBestItineraryRows, classifyPoiFailureReason, companionCheckinMeta, consensusStageKeyForStep, dedupeVoteVoters, destinationsNeedingPoiCoverage, emptyUserState, estimateTransitMinutes, exactAvailabilityWindows, fillMissingDurationPerDestination, findDuplicatePoiKeys, flightRoutePlanSignature, formatMoney, groundPoiRowsWithRoutePlan, hasAnyNoInPoiSelectionRow, inclusiveIsoDays, isManufacturedPoiName, itineraryRowsScore, isCurrentVoteVoter, makeVoteUserId, materializeItineraryDates, mergeAvailabilityDraft, mergeProfileIntoUser, mergeSharedFlightDates, mergeVoteRows, moveFlightRouteStop, normalizeDestinationVoteState, normalizePersonalBucketItems, normalizePoiStateMap, normalizeRoutePlan, normalizeStays, normalizeTripDestinationValue, normalizeWizardStepIndex, orderDestinationsByRoutePlan, poiListNeedsRefresh, readDestinationVoteRow, readMealVoteRow, readPoiDecisionStatus, readPoiVoteRow, readStayVoteRow, readVoteForVoter, receiptItemsTotal, refineBucketItemsForQuery, removeTripDestinationValue, resolveAvailabilityDraftWindow, resolveBudgetTier, resolveFlightDatesAfterRouteStopEdit, resolveManualFlightDateEdit, resolvePoiVotingDecision, resolveTripBudgetTier, resolveWizardTripId, roundTripFlightRoutePlan, routePlanDurationMap, sanitizeAvailabilityOverlapData, sanitizeAvailabilityWindow, sanitizeFlightDatesForTrip, shouldAutoGeneratePois, shouldContinueAfterFlightPlanningSaveError, shouldReplaceWithGroundedNearbyPois, shouldSkipPoiAutoGenerate, shouldResetTravelPlanForDurationChange, shouldTreatBucketItemsAsSameDestination, summarizeActiveInterests, summarizeDestinationVotes, summarizeInterestConsensus, summarizeMealVotes, summarizePoiVotes, summarizeStayVotes, tripDestinationNamesFromValues, trimPoiErrorDetail, trimRouteErrorDetail, voteKeyAliasesFor, withPersistedWizardStep, wizardSyncIntervalMs };
