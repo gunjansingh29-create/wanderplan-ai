@@ -52,6 +52,7 @@ Useful VS Code tasks (Run Tasks...):
 
 More
 - See `docs/DEPLOYMENT.md` for architecture diagrams, CI/CD, monitoring, and backup/DR details.
+- See `docs/IOS_WINDOWS_GUIDE.md` for building and distributing the iOS app from a Windows machine (Capacitor + GitHub Actions + TestFlight).
 - If you plan to run on Windows without WSL/Git Bash, open a WSL shell or Git Bash to run the setup script as-is.
 
 If you'd like, I can:
