@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB"
+          version="3.0"
+          toolsVersion="32700.99.1234"
+          targetRuntime="AppleCocoa"
+          propertyAccessControl="none"
+          useAutolayout="YES"
+          launchScreen="YES"
+          useTraitCollections="YES"
+          useSafeAreas="YES"
+          colorMatched="YES"
+          initialViewController="01J-lp-oVM">
+    <device id="retina6_12" orientation="portrait" appearance="light"/>
+    <dependencies>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="22685"/>
+        <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+    </dependencies>
+    <scenes>
+        <!--View Controller-->
+        <scene sceneID="EHf-IW-A2E">
+            <objects>
+                <viewController id="01J-lp-oVM" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
+                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <!-- Background -->
+                            <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="bg-view">
+                                <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+                                <color key="backgroundColor" red="0.051" green="0.451" blue="0.467" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                            </view>
+                            <!-- App icon placeholder label -->
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left"
+                                   horizontalHuggingPriority="251" verticalHuggingPriority="251"
+                                   text="✈" textAlignment="center"
+                                   translatesAutoresizingMaskIntoConstraints="NO" id="icon-label">
+                                <rect key="frame" x="146.5" y="366" width="100" height="80"/>
+                                <fontDescription key="fontDescription" type="system" pointSize="64"/>
+                                <nil key="textColor"/>
+                                <nil key="highlightedColor"/>
+                            </label>
+                            <!-- App name label -->
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left"
+                                   horizontalHuggingPriority="251" verticalHuggingPriority="251"
+                                   text="WanderPlan AI" textAlignment="center"
+                                   translatesAutoresizingMaskIntoConstraints="NO" id="app-name-label">
+                                <rect key="frame" x="66.5" y="462" width="260" height="40"/>
+                                <fontDescription key="fontDescription" type="boldSystem" pointSize="28"/>
+                                <color key="textColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                <nil key="highlightedColor"/>
+                            </label>
+                        </subviews>
+                        <viewLayoutGuide key="safeAreaLayoutGuide" id="Bcu-3y-fUS"/>
+                        <color key="backgroundColor" red="0.051" green="0.451" blue="0.467" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        <constraints>
+                            <!-- bg-view fills entire superview -->
+                            <constraint firstItem="bg-view" firstAttribute="top" secondItem="Ze5-6b-2t3" secondAttribute="top" id="c1"/>
+                            <constraint firstItem="bg-view" firstAttribute="bottom" secondItem="Ze5-6b-2t3" secondAttribute="bottom" id="c2"/>
+                            <constraint firstItem="bg-view" firstAttribute="leading" secondItem="Ze5-6b-2t3" secondAttribute="leading" id="c3"/>
+                            <constraint firstItem="bg-view" firstAttribute="trailing" secondItem="Ze5-6b-2t3" secondAttribute="trailing" id="c4"/>
+                            <!-- Centre icon horizontally, placed above middle -->
+                            <constraint firstItem="icon-label" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="c5"/>
+                            <constraint firstItem="icon-label" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" constant="-40" id="c6"/>
+                            <!-- Name label below icon -->
+                            <constraint firstItem="app-name-label" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="c7"/>
+                            <constraint firstItem="app-name-label" firstAttribute="top" secondItem="icon-label" secondAttribute="bottom" constant="16" id="c8"/>
+                        </constraints>
+                    </view>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="53" y="375"/>
+        </scene>
+    </scenes>
+</document>

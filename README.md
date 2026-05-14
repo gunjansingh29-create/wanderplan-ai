@@ -54,7 +54,20 @@ More
 - See `docs/DEPLOYMENT.md` for architecture diagrams, CI/CD, monitoring, and backup/DR details.
 - If you plan to run on Windows without WSL/Git Bash, open a WSL shell or Git Bash to run the setup script as-is.
 
-If you'd like, I can:
-- initialize a `package.json` or other project manifest
-- add a `.env.example` derived from the setup script
-- create workspace launch configs for debugging specific services
+## iOS App (TestFlight beta)
+
+The `mobile/` directory contains the **WanderPlan AI native iOS app** built with React Native 0.74.
+
+Quick start (requires macOS + Xcode 15):
+
+```bash
+cd mobile
+npm install
+cd ios && pod install && cd ..
+npm start          # Metro bundler (keep running)
+npm run ios        # launch in iOS Simulator
+```
+
+See `docs/IOS_TESTFLIGHT.md` for the full guide on code signing, building an `.ipa`, and distributing via TestFlight.
+
+The CI workflow `.github/workflows/ios-testflight.yml` automatically builds and uploads a new beta build to TestFlight on every push to `main` that modifies files under `mobile/`.

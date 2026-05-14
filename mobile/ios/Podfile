@@ -1,0 +1,39 @@
+# WanderPlan AI – iOS Podfile
+# React Native 0.74 + CocoaPods dependency manifest
+#
+# Run `cd ios && pod install` after cloning the repo and running `npm install`
+# in the /mobile directory.
+
+require Pod::Executable.execute_command('node', ['-e',
+  'process.stdout.write(require("react-native/package.json").version)',
+]).strip
+
+platform :ios, min_ios_version_supported
+prepare_react_native_project!
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Explicitly set framework linkage to #{linkage}"
+  use_frameworks! :linkage => linkage.to_sym
+end
+
+target 'WanderPlanAI' do
+  config = use_native_modules!
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    # Hermes is the recommended JS engine for React Native 0.74.
+    :hermes_enabled => true,
+    # An absolute path so Xcode knows where the packager executable is.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false
+    )
+  end
+end

@@ -1,0 +1,31 @@
+# WanderPlan AI – iOS (React Native)
+
+node_modules/
+.bundle/
+.yarn/
+
+# iOS build artifacts
+ios/build/
+ios/Pods/
+ios/*.xcworkspace
+
+# Android build artifacts
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+
+# Xcode user data
+ios/*.xcuserstate
+ios/xcuserdata/
+
+# Coverage
+coverage/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+*.swp
